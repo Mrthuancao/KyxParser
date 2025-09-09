@@ -1,0 +1,583 @@
+ArchiveEntry "LFCPS Tutorial/1 Bouncing ball"
+Description "Acrophobic Bouncing Ball".
+
+Definitions       /* function symbols cannot change their value */
+  Real H;         /* initial height */
+  Real g;         /* gravity */
+  Real c;         /* damping coefficient */
+End.
+
+ProgramVariables  /* program variables may change their value over time */
+  Real x, v;      /* height and vertical velocity */
+End.
+
+Problem
+  x>=0 & x=H
+  & v=0 & g>0 & 1>=c&c>=0
+ ->
+  [
+    {
+      {x'=v,v'=-g&x>=0}
+      if (x=0) {v:=-c*v;}
+    }* @invariant(2*g*x<=2*g*H-v^2 & x>=0)
+  ] (x>=0 & x<=H)
+End.
+
+Tactic "Bouncing Ball: Clever Proof"
+implyR(1) ; loop("2*g*x<=2*g*H-v^2&x>=0", 1) ; <(
+  QE,
+  QE,
+  composeb(1) ; dC("2*g*x<=2*g*H-v^2", 1) ; <(
+    dW(1) ; choiceb(1) ; andR(1) ; <(
+      composeb(1) ; testb(1) ; implyR(1) ; assignb(1) ; QE,
+      testb(1) ; prop ; done
+      ),
+    dI(1)
+    )
+  )
+End.
+
+Tactic "Bouncing Ball: automatic"
+  useSolver("Mathematica");
+  master
+End.
+
+Illustration "https://lfcps.org/info/fig-bouncing-ball-dark-trace.png".
+End.
+ArchiveEntry "LFCPS Tutorial/2 Coasting Car"
+Description "Coasting cars can stop".
+
+Definitions       /* function symbols cannot change their value */
+  Real b;         /* braking capabilities */
+  Real ep;        /* reaction time */
+End.
+
+ProgramVariables  /* program variables may change their value over time */
+  Real x;         /* position of the car */
+  Real v;         /* velocity of the car */
+  Real a;         /* acceleration of the car */
+  Real m;         /* stop sign position */
+  Real t;         /* clock variable */
+End.
+
+Problem           /* differential dynamic logic formula */
+    v^2<=2*b*(m-x) & v>=0  & b>0
+ -> [
+      {
+        {a:=-b; ++ ?v^2<=2*b*(m-x-ep*v); a:=0;}
+        t := 0;
+        {x'=v, v'=a, t'=1 & v>=0 & t<=ep}
+      }*@invariant(v^2<=2*b*(m-x))
+    ] x <= m
+End.
+Tactic "Coasting Car: Interactive Proof"
+implyR(1) ; loop("v^2<=2*b*(m-x)", 1) ; <(
+  prop,
+  QE,
+  composeb(1) ; composeb(1.1) ; choiceb(1) ; andR(1) ; <(
+    assignb(1) ; assignb(1) ; solve(1) ; QE,
+    composeb(1) ; testb(1) ; implyR(1) ; assignb(1) ; assignb(1) ; solve(1) ; QE
+    )
+  )
+End.
+
+Tactic "Coasting Car: Automatic Proof"
+  master
+End.
+
+End.ArchiveEntry "LFCPS Tutorial/3 Exercise: Accelerating Car"
+Description "Cars need invariants and control constraints to stop before m".
+
+Definitions       /* function symbols cannot change their value */
+  Real b;         /* braking capabilities */
+  Real A;         /* maximum acceleration */
+  Real ep;        /* reaction time */
+End.
+
+ProgramVariables  /* program variables may change their value over time */
+  Real x;         /* position of the car */
+  Real v;         /* velocity of the car */
+  Real a;         /* acceleration of the car */
+  Real m;         /* stop sign position */
+  Real t;         /* clock variable */
+End.
+
+Problem           /* differential dynamic logic formula */
+    v^2<=2*b*(m-x) & v>=0  & A>=0 & b>0
+ -> [
+      {
+        {a:=-b; ++ ?__________; a:=A;}
+        t := 0;
+        {x'=v, v'=a, t'=1 & v>=0 & t<=ep}
+      }* @invariant(__________)
+    ] x <= m
+End.
+
+End.ArchiveEntry "LFCPS Tutorial/3 Solution: Accelerating Car"
+Description "Cars don't run stop signs".
+
+Definitions       /* function symbols cannot change their value */
+  Real b;         /* braking capabilities */
+  Real A;         /* maximum acceleration */
+  Real ep;        /* reaction time */
+End.
+
+ProgramVariables  /* program variables may change their value over time */
+  Real x;         /* position of the car */
+  Real v;         /* velocity of the car */
+  Real a;         /* acceleration of the car */
+  Real m;         /* stop sign position */
+  Real t;         /* clock variable */
+End.
+
+Problem           /* differential dynamic logic formula */
+    v^2<=2*b*(m-x) & v>=0  & A>=0 & b>0
+ -> [
+      {
+        {a:=-b; ++ ?(2*b*(m-x) >= v^2+(A+b)*(A*ep^2+2*ep*v)); a:=A;}
+        t := 0;
+        {x'=v, v'=a, t'=1 & v>=0 & t<=ep}
+      }*@invariant(v^2<=2*b*(m-x))
+    ] x <= m
+End.
+
+Tactic "Safety of time-triggered car: Clever Proof"
+implyR(1) ; loop("v^2<=2*b*(m-x)", 1) ; <(
+  id,
+  QE,
+  composeb(1) ; choiceb(1) ; andR(1) ; <(
+    assignb(1) ; composeb(1) ; assignb(1) ; dI(1)
+    ,
+    composeb(1) ; testb(1) ; implyR(1) ; assignb(1) ; composeb(1) ; assignb(1) ; dC("2*b*(m-x)>=v^2+(A+b)*(A*(ep-t)^2+2*(ep-t)*v)", 1) ; <(
+      dW(1) ; QE,
+      dI(1)
+      )
+    )
+  )
+End.
+
+Tactic "Safety of time-triggered car: Interactive Proof"
+  implyR(1) ; loop("v^2<=2*b*(m-x)", 1) ; <(
+  QE,
+  QE,
+  composeb(1) ; choiceb(1) ; andR(1) ; <(
+    assignb(1) ; composeb(1) ; assignb(1) ; solveEnd(1) ; QE
+    ,
+    composeb(1) ; testb(1) ; implyR(1) ; assignb(1) ; composeb(1) ; assignb(1) ; solveEnd(1) ; QE
+    )
+  )
+End.
+       
+Tactic "Safety of time-triggered car: Automatic"
+  master
+End.
+
+End.
+Exercise "LFCPS Tutorial/4 Exercise: Runaround Robot"
+Description "CurveBot: run a robot round the bend".
+
+ProgramVariables
+  Real x, y;    /* robot x/y position */
+  Real v, w;    /* robot orientation in x/y direction */
+  Real om;      /* robot rotational velocity */
+  Real ox, oy;  /* x/y position summary of obstacle */
+End.
+
+Definitions
+  Bool Q(Real om, Real x, Real y, Real ox, Real oy, Real v, Real w) <-> 
+    (__________);
+  Bool Qline(Real x, Real y, Real ox, Real oy, Real v, Real w) <-> 
+    (__________);
+End.
+    
+Problem
+  x!=ox | y!=oy ->
+  [{
+    {?Q(-1,x,y,ox,oy,v,w); om:=-1;
+    ++ ?Q(1,x,y,ox,oy,v,w); om:=1;
+    ++ ?Qline(x,y,ox,oy,v,w); om:=0;}
+    {x'=v,y'=w,v'=om*w,w'=-om*v}
+   }*
+  ] !(x=ox & y=oy)
+End.
+
+Illustration "https://lfcps.org/info/fig-Dubins-path-robotesque-1.png".
+End.
+/* Exported from KeYmaera X v4.7.4 */
+
+ArchiveEntry "LFCPS Tutorial/4 Solution: Runaround Robot"
+Description "CurveBot: run a robot round the bend".
+
+ProgramVariables
+  Real x, y;    /* robot x/y position */
+  Real v, w;    /* robot orientation in x/y direction */
+  Real om;      /* robot rotational velocity */
+  Real ox, oy;  /* x/y position summary of obstacle */
+End.
+
+Definitions
+  Bool Q(Real om, Real x, Real y, Real ox, Real oy, Real v, Real w) <-> 
+    ((x+w/om-ox)^2+(y-v/om-oy)^2 != v^2+w^2);
+  Bool Qline(Real x, Real y, Real ox, Real oy, Real v, Real w) <-> 
+    ((ox-x)*w != (oy-y)*v);
+End.
+    
+Problem
+  x!=ox | y!=oy ->
+  [{
+    {?Q(-1,x,y,ox,oy,v,w); om:=-1;
+    ++ ?Q(1,x,y,ox,oy,v,w); om:=1;
+    ++ ?Qline(x,y,ox,oy,v,w); om:=0;}
+    {x'=v,y'=w,v'=om*w,w'=-om*v}
+   }* @invariant(!(x=ox & y=oy))
+  ] !(x=ox & y=oy)
+End.
+
+
+Tactic "4 Solution: Runaround Robot: Proof"
+implyR(1) ; loop("!(x=ox&y=oy)", 1) ; <(
+  QE,
+  id,
+  composeb(1) ; choiceb(1) ; andR(1) ; <(
+    unfold ; expand("Q"); ODE(1),
+    unfold ; <(
+      expand("Q"); ODE(1),
+      expand("Qline"); ODE(1)
+      )
+    )
+  )
+End.
+
+
+Tactic "4 Solution: Runaround Robot: Manual Proof"
+  implyR(1) ; loop("!(x=ox&y=oy)", 1) ; <(
+  QE,
+  id,
+  composeb(1) ; choiceb(1) ; andR(1) ; <(
+    composeb(1) ; testb(1) ; implyR(1) ; assignb(1) ; dC("v=-1*(y-old(y-v/-1))&w=1*(x-old(x+w/-1))", 1) ; <(
+      dC("(x+w/-1-ox)^2+(y-v/-1-oy)^2!=v^2+w^2", 1) ; <(
+        dW(1) ; QE,
+        dI(1)
+        ),
+      dI(1)
+      ),
+    choiceb(1) ; andR(1) ; <(
+      composeb(1) ; testb(1) ; implyR(1) ; assignb(1) ; dC("v=1*(y-old(y-v/1))&w=-1*(x-old(x+w/1))", 1) ; <(
+        dC("(x+w/1-ox)^2+(y-v/1-oy)^2!=v^2+w^2", 1) ; <(
+          dW(1) ; QE,
+          dI(1)
+          ),
+        dI(1)
+        ),
+      composeb(1) ; testb(1) ; implyR(1) ; assignb(1) ; dG("t'=1", "!(x=ox&y=oy)", 1) ; existsR("0", 1) ; dC("v=old(v)&w=old(w)&x=old(x)+v*t&y=old(y)+w*t", 1) ; <(
+        dW(1) ; QE,
+        dI(1)
+        )
+      )
+    )
+  )
+End.
+
+Tactic "4 Solution: Runaround Robot: automatic"
+  autoClose
+End.
+
+Tactic "4 Solution: Runaround Robot: unfold"
+unfold ; loop("!(x=ox&y=oy)", 1) ; <(
+  QE,
+  QE,
+  unfold ; doall(ODE(1))
+  )
+End.
+
+
+Illustration "https://lfcps.org/info/fig-Dubins-path-robotesque-1.png".
+
+End.Exercise "LFCPS Tutorial/5 Exercise: Modeling two cars"
+Description "Control one car to safely follow another".
+
+Definitions
+  Real A;   /* Acceleration constant */
+  Real B;   /* Braking constant */
+  Real T;   /* Maximum reaction time constant */
+End.
+
+ProgramVariables
+  Real posLead, velLead, accLead;  /* position/velocity/acceleration of lead car */
+  Real pos, vel, acc;        /* position/velocity/acceleration of controlled car */
+  Real t;                    /* clock variable */
+End.
+
+Problem
+  /* INITIAL CONDITIONS */
+  (__________)
+  ->
+  [
+    {
+      /* CONTROL */
+      {
+        __________ /* assign a safe accel to ctrl. */
+        __________ /* safely assign acceleration or braking to lead */
+      }
+      /* CONTINUOUS DYNAMICS */
+      t := 0;
+      {
+        {__________ &
+          __________ & t <= T} /* evolution domain and time-trigger */
+      }
+    }*@invariant(__________) /* loop invariant */
+  ]
+  (__________) /* safety condition */
+
+End.
+End.ArchiveEntry "LFCPS Tutorial/6 Damped oscillator"
+Description "Damped oscillators stay in ellipses".
+
+Definitions        /* function symbols cannot change their value */
+  Real w;          /* undamped angular frequency */
+  Real c;          /* level of ellipse */
+  Real d;          /* constant damping ratio */
+End.
+
+ProgramVariables  /* program variables may change their value over time */
+  Real x;         /* position of spring/mass system */
+  Real y;         /* velocity */
+End.
+
+Problem
+    w^2*x^2 + y^2 <= c^2
+->
+  [{x'=y, y'=-w^2*x-2*d*w*y & w>=0 & d>=0}]w^2*x^2 + y^2 <= c^2
+End.
+
+Tactic "Damped Oscillator: Differential invariant proof"
+  implyR(1) ; dI(1)
+End.
+
+Tactic "Damped Oscillator: automatic"
+  master
+End.
+
+Illustration "https://lfcps.org/info/fig-damposc-evo2t-region.png".
+End.
+
+
+ArchiveEntry "LFCPS Tutorial/6 Increasingly damped oscillator"
+Description "Increasingly damped oscillators stay in ellipses".
+
+Definitions
+  Real w;    /* undamped angular frequency */
+  Real c;    /* level of ellipse */
+End.
+
+ProgramVariables
+  Real x;    /* position of spring/mass system */
+  Real y;    /* velocity */
+  Real d;    /* damping ratio */
+End.
+
+Problem
+    w^2*x^2 + y^2 <= c^2
+  & d>=0
+->
+  [{x'=y, y'=-w^2*x-2*d*w*y, d'=7 & w>=0}]w^2*x^2 + y^2 <= c^2
+End.
+
+Tactic "Increasingly Damped Oscillator: Differential cut proof"
+  implyR(1) ; dC("d>=0", 1) ; <(
+    dI(1), 
+    dI(1)
+  )
+End.
+
+Tactic "Increasingly Damped Oscillator: automatic"
+  master
+End.
+
+Illustration "https://lfcps.org/info/fig-damped-damped-osc-field-region.png".
+End.
+ArchiveEntry "LFCPS Tutorial/7 Swirl invariant"
+Description "LICS'18 hourglass swirl".
+
+ProgramVariables
+  Real u;
+  Real v;
+End.
+
+Problem
+  u^2<=v^2+9/2 -> [{u'=-v+u/4*(1-u^2-v^2),v'=u+v/4*(1-u^2-v^2)}]u^2<=v^2+9/2
+End.
+Tactic "Swirl invariant: Proof"
+master
+End.
+
+Illustration "https://lfcps.org/info/fig-invariant-swirl-example.png".
+End.
+
+ArchiveEntry "LFCPS Tutorial/7 Swirl invariant circle"
+Description "LICS'18 circle swirl".
+
+ProgramVariables
+  Real u;
+  Real v;
+End.
+
+Problem
+  u^2+v^2=1 -> [{u'=-v+u/4*(1-u^2-v^2),v'=u+v/4*(1-u^2-v^2)}]u^2+v^2=1
+End.
+Tactic "Swirl invariant circle: Proof"
+master
+End.
+Illustration "https://lfcps.org/info/fig-invariant-swirl-example.png".
+End.
+
+ArchiveEntry "LFCPS Tutorial/7 Swirl invariant disc"
+Description "LICS'18 disc swirl".
+
+ProgramVariables
+  Real u;
+  Real v;
+End.
+
+Problem
+  1-u^2-v^2>0 -> [{u'=-v+u/4*(1-u^2-v^2),v'=u+v/4*(1-u^2-v^2)}]1-u^2-v^2>0
+End.
+Tactic "Swirl invariant disc: Proof"
+master
+End.
+Illustration "https://lfcps.org/info/fig-invariant-swirl-example.png".
+End.
+ArchiveEntry "LFCPS Tutorial/8 Parachute simplified"
+Description "Simplified parachute with air drag only for parachute".
+
+Definitions
+  Real g = 9;    /* gravity */
+  Real p = 1;    /* parachute drag coefficient */
+  Real a = 0;    /* skydiver air drag coefficient: SIMPLIFIED to 0 */
+  Real m;        /* impact velocity */
+  Real T;        /* skydiver reaction time */
+End.
+
+ProgramVariables
+  Real x;        /* skydiver altitude */
+  Real v;        /* skydiver speed (< 0, so lower is faster) */
+  Real r;        /* skydiver current drag coefficient (depends on parachute open/closed) */
+  Real t;        /* time */
+End.
+
+Problem
+  g>0 & p>a & T>0 & m< -(g/p)^(1/2) &
+  x>=0 & v<0 & v> -(g/p)^(1/2) & r=a
+->
+[ {
+    {
+      ?(v - g*T > -(g/p)^(1/2) & r = a);
+      ++
+      r := p;
+    }
+    t := 0;
+    {{x'=v, v'=-g+r*v^2, t'=1 & t<=T & x>=0 & v<0}
+     @invariant((v'=-g+a*v^2 -> v-g*(T-t)>-(g/p)^(1/2)),
+                (v'=-g+p*v^2 -> v>=old(v)-g*t))
+    }
+  }* @invariant((x>=0 & v<0) & v>-(g/p)^(1/2))
+](x=0 -> v>=m)
+End.
+
+Tactic "Parachute nonaerodynamic: Proof 1"
+  implyR(1) ; loop("(x>=0&v < 0)&v>-(g/p)^(1/2)", 1) ; <(
+  QE,
+  QE,
+  boxAnd(1) ; andR(1) ; <(
+    master,
+    unfold ; <(
+      dC("v>=old(v)-g*t", 1) ; <(
+        dW(1) ; QE,
+        dI(1)
+        ),
+      dG("y'=(-1/2*p*(v-(g/p)^(1/2)))*y", "y^2*(v+(g/p)^(1/2))=1", 1) ; dI(1.0) ; QE
+      )
+    )
+  )
+End.
+
+Tactic "Parachute nonaerodynamic: Invariants+Automation"
+useSolver("Mathematica");
+implyR(1) ; loop("(x>=0&v < 0)&v>-(g/p)^(1/2)", 1) ; <(
+  QE,
+  QE,
+  composeb(1) ; choiceb(1) ; andR(1) ; <(
+    testb(1) ; implyR(1) ; andL(-6) ; composeb(1) ; assignb(1) ; dC("v-g*(T-t)>-(g/p)^(1/2)", 1) ; <(
+      ODE(1),
+      ODE(1)
+      ),
+    assignb(1) ; composeb(1) ; assignb(1) ; ODE(1)
+    )
+  )
+End.
+
+Tactic "Parachute nonaerodynamic: Automatic"
+  useSolver("Mathematica");
+  autoClose
+End.
+
+Illustration "https://lfcps.org/info/fig-parachute.png".
+End.
+       ArchiveEntry "LFCPS Tutorial/9 Kepler two body"
+Description "Two planets in gravitational force field with one planet as origin, mathematically normalized constants".
+Citation "Ernst Hairer. Geometric Numerical Integration. TU Munich 2010".
+
+Definitions
+  Real ec;       /* eccentricity */
+  Real E;        /* generalized energy level */
+End.
+
+ProgramVariables
+  Real x,y;      /* x/y coordinates of the planet */
+  Real v,w;      /* x/y velocities of the planet */
+End.
+
+Problem
+  /* 0<=ec&ec<1 &
+  x=1-ec&v=0 & y=0&w=((1+ec)/(1-ec))^(1/2) & */
+  (v^2+w^2)/2-1/(x^2+y^2)^(1/2) = E ->
+   [{x'=v,v'=-x/(x^2+y^2)^(3/2),
+     y'=w,w'=-y/(x^2+y^2)^(3/2)&(x!=0|y!=0)}] (v^2+w^2)/2-1/(x^2+y^2)^(1/2) = E
+End.
+
+Tactic "Kepler two body: Proof"
+useSolver("Mathematica");
+implyR(1) ; dI(1)
+End.
+
+Tactic "Kepler two body: Proof"
+useSolver("Mathematica");
+autoClose
+End.
+
+Illustration "https://lfcps.org/info/Kepler.png".
+End.
+Exercise "LFCPS Tutorial/9 Exercise: Moon around Earth"
+Description "Moon of mass m flying in gravitational force field around Earth of mass M at origin".
+
+Definitions
+  Real G;        /* gravitational constant */
+  Real M;        /* mass of the Earth */
+  Real m;        /* mass of the moon */
+  Real E;        /* generalized energy level */
+End.
+
+ProgramVariables
+  Real x,y;      /* x/y coordinates of the moon */
+  Real v,w;      /* x/y velocities of the moon */
+End.
+
+Problem
+  G>0&M>0 &
+  __________ ->
+   [{x'=v,v'=-G*M*x/(x^2+y^2)^(3/2),
+     y'=w,w'=-G*M*y/(x^2+y^2)^(3/2)&(x!=0|y!=0)}] __________
+End.
+
+Illustration "https://lfcps.org/info/Moon.png".
+End.

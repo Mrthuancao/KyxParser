@@ -1,0 +1,50 @@
+HP syntax
+
+/* precondition */
+Bool precondition(Real v, Real m, Real x) <-> speedConstraint(v, m, x) &  v >= 0 & b > 0;
+
+Bool speedConstraint(Real v, Real m, Real x) <-> v^2<=2*b*(m-x);
+
+/* controller */
+HP controller ::= {a:=-b; ++ ?v^2<=2*b*(m-x-ep*v); a:=0;};
+
+/* step */
+HP stepFunction ::= {x'=v, v'=a, t'=1 & v>=0 & t<=ep};
+
+/* done */
+Bool doneCondition(Real x, Real m) <-> x <= m;
+
+Python syntax
+
+def precondition(float v, float m, float x): 
+    return speedConstraint(v, m, x) & v >= 0 & b > 0;
+
+def speedConstraint():
+    return v^2<=2*b*(m-x);
+
+def controller(self, action): 
+    if action == 0:
+        self.a = -self.b
+    elif action == 1:
+        self.a = 0
+
+    self.stepFunction()
+
+    /* reward functionality here */
+
+def stepFunction(self):
+    # Assignment
+    self.x += V
+    self.v += A
+    self.t += 1
+
+    # Restriction
+    if self.v < 0:
+        self.v = 0
+    
+    if self.t > ep:
+        self.t = ep
+
+
+def doneCondition(float x, float m):
+    return x <= m;

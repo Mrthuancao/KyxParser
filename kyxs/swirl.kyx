@@ -1,0 +1,51 @@
+﻿ArchiveEntry "Swirl invariant"
+Description "LICS'18 hourglass swirl".
+
+ProgramVariables
+  Real u;
+  Real v;
+End.
+
+Problem
+  u^2<=v^2+9/2 -> [{u'=-v+u/4*(1-u^2-v^2),v'=u+v/4*(1-u^2-v^2)}]u^2<=v^2+9/2
+End.
+Tactic "Swirl invariant: Proof"
+master
+End.
+
+Illustration "https://lfcps.org/info/fig-invariant-swirl-example.png".
+End.
+
+ArchiveEntry "Swirl invariant circle"
+Description "LICS'18 circle swirl".
+
+ProgramVariables
+  Real u;
+  Real v;
+End.
+
+Problem
+  u^2+v^2=1 -> [{u'=-v+u/4*(1-u^2-v^2),v'=u+v/4*(1-u^2-v^2)}]u^2+v^2=1
+End.
+Tactic "Swirl invariant circle: Proof"
+master
+End.
+Illustration "https://lfcps.org/info/fig-invariant-swirl-example.png".
+End.
+
+ArchiveEntry "Swirl invariant disc"
+Description "LICS'18 disc swirl".
+
+ProgramVariables
+  Real u;
+  Real v;
+End.
+
+Problem
+  1-u^2-v^2>0 -> [{u'=-v+u/4*(1-u^2-v^2),v'=u+v/4*(1-u^2-v^2)}]1-u^2-v^2>0
+End.
+Tactic "Swirl invariant disc: Proof"
+master
+End.
+Illustration "https://lfcps.org/info/fig-invariant-swirl-example.png".
+End.
