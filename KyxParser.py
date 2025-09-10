@@ -1,4 +1,5 @@
 import re
+from declaration import VariableDeclaration, HybridProgramDeclaration, PredicateDeclaration
 
 class KyxParser:
     def __init__(self):
@@ -6,7 +7,10 @@ class KyxParser:
         self.definitions_regex = r"Definitions\s*(?:\/\*.*?\*\/\s*)?(.*?)(?=\s*End\.)"
         self.variables_regex = r"ProgramVariables\s*(?:\/\*.*?\*\/\s*)?(.*?)(?=\s*End\.)"
         self.problem_regex = r"Problem\s*(?:\/\*.*?\*\/\s*)?(.*?)(?=\s*End\.)"
-        self.predicate_regex = r"(Bool|HP|Real)\s+(\w+)\(([\w\s,]+)\)\s*(<->|::=)\s*({?[^;}]*(;[^;}]*)*}?|;)"
+        # self.predicate_regex = r"(?P<return_type>\w+)\s+(?P<name>\w+)\((?P<params>.*?)\)\s*<->\s*(?P<body>.*?);"
+        # self.hybrid_program_regex = r"HP\s+(?P<name>\w+)\s*::=\s*(?P<body>.*?);"
+        self.predicate_regex = r"(?P<return_type>\w+)\s+(?P<name>\w+)\((?P<params>[^)]*)\)\s*<->\s*(?P<body>[^;]*?(?:;[^;]*?)*);"
+        self.hybrid_program_regex = r"HP\s+(?P<name>\w+)\s*::=\s*(?P<body>\{[^}]*\}|[^;]*?(?:;[^;]*?)*);"
         self.problem_pattern = r"""
             ^\s*(?P<precondition>.*?)\s*->\s*\[
             \s*(?P<model>\{.*?\})\s*
@@ -23,7 +27,14 @@ class KyxParser:
         if sections is None:
             return None  # Parsing failed
 
-        return self._parse_sections(sections)
+        res = self._parse_sections(sections)
+        
+        print('res: ', res)
+        for item in res['Definitions']:
+            # print(item.getDescription())
+            print(item.toPython())
+        
+        return res
 
     def _extract_sections(self, kyx_content):
         """Extracts Definitions, ProgramVariables, and Problem sections."""
@@ -54,31 +65,130 @@ class KyxParser:
 
         return parsed_spec
 
+    # def _parse_declarations(self, declarations_string):
+    #   """Parses declaration strings (Definitions, ProgramVariables) into dictionaries."""
+    #   declarations = {}
+    #   for line in declarations_string.splitlines():
+    #       line = line.strip()
+    #       #print("line: ", line)
+    #       if line:
+    #           match = re.match(self.predicate_regex, line)
+    #           if match:
+    #               index = re.search(r"(::=|=|<->)", line).start()
+    #               declarations[line[:index]] = line[index:]
+    #           else:
+    #             parts = line.split(';')
+    #             for part in parts:
+    #                 part = part.strip()
+    #                 if part:
+    #                     try:
+    #                         var_type, var_name = part.split()
+    #                         declarations[var_name] = var_type
+    #                     except ValueError:
+    #                         print(f"Warning: Invalid declaration format: {part}")
+
+    #   print("declarations: ", declarations)
+
+    #   return declarations
+    
+    # def _parse_declarations(self, declarations_string):
+    #   """Parses declaration strings (Definitions, ProgramVariables) into dictionaries."""
+    #   declarations = []
+    #   for line in declarations_string.splitlines():
+    #       line = line.strip()
+    #       #print("line: ", line)
+    #       if line:
+            
+    #         match = re.match(self.predicate_regex, line)
+    #         if match:
+    #             name = match.group("name")
+    #             params = match.group("params")
+    #             body = match.group("body")
+    #             return_type = match.group("return_type")
+                
+    #             declarations.append(PredicateDeclaration(name, return_type, params, body))
+    #         else:
+    #             match = re.match(self.hybrid_program_regex, line)
+    #             if match:
+    #                 name = match.group("name")
+    #                 body = match.group("body")
+                    
+    #                 declarations.append(HybridProgramDeclaration(name, body))
+    #             else: 
+    #                 parts = line.split(';')
+    #                 for part in parts: 
+    #                     part = part.strip()
+    #                     if part:
+    #                         try:
+    #                             var_type, var_name = part.split()
+    #                             declaration = VariableDeclaration(var_name, var_type)
+    #                             declarations.append(declaration)
+    #                         except ValueError:
+    #                             print(f"Warning: Invalid declaration format: {part}")
+
+    #   print("declarations: ", declarations)
+
+    #   return declarations
+  
     def _parse_declarations(self, declarations_string):
-      """Parses declaration strings (Definitions, ProgramVariables) into dictionaries."""
-      declarations = {}
-      for line in declarations_string.splitlines():
-          line = line.strip()
-          #print("line: ", line)
-          if line:
-              match = re.match(self.predicate_regex, line)
-              if match:
-                  index = re.search(r"(::=|=|<->)", line).start()
-                  declarations[line[:index]] = line[index:]
-              else:
-                parts = line.split(';')
-                for part in parts:
-                    part = part.strip()
-                    if part:
-                        try:
-                            var_type, var_name = part.split()
-                            declarations[var_name] = var_type
-                        except ValueError:
-                            print(f"Warning: Invalid declaration format: {part}")
+        """Parses declaration strings (Definitions, ProgramVariables) into dictionaries."""
+        
+        def _parse_predicate_declaration(line, regex):
+            """Parses a single line containing a predicate declaration."""
+            match = re.match(regex, line)
+            if match:
+                name = match.group("name")
+                params = match.group("params")
+                body = match.group("body")
+                return_type = match.group("return_type")
+                return PredicateDeclaration(name, return_type, params, body)
+            return None
 
-      print("declarations: ", declarations)
 
-      return declarations
+        def _parse_hybrid_program_declaration(line, regex):
+            """Parses a single line containing a hybrid program declaration."""
+            match = re.match(regex, line)
+            if match:
+                name = match.group("name")
+                body = match.group("body")
+                return HybridProgramDeclaration(name, body)
+            return None
+
+
+        def _parse_variable_declaration(line):
+            """Parses a single line containing a variable declaration."""
+            parts = line.split(';')
+            for part in parts:
+                part = part.strip()
+                if part:
+                    try:
+                        var_type, var_name = part.split()
+                        return VariableDeclaration(var_name, var_type)
+                    except ValueError:
+                        print(f"Warning: Invalid variable declaration format: '{part}'. Expected 'type name'.")
+            return None
+    
+        declarations = []
+        regexes = {
+            "predicate": self.predicate_regex,
+            "hybrid": self.hybrid_program_regex,
+        }
+
+        for line in declarations_string.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+
+            declaration = (
+                _parse_hybrid_program_declaration(line, regexes["hybrid"])
+                or _parse_predicate_declaration(line, regexes["predicate"])
+                or _parse_variable_declaration(line)
+            )
+
+            if declaration:
+                declarations.append(declaration)
+
+        return declarations
 
 
     def _parse_problem(self, problem_string):
