@@ -19,7 +19,7 @@ Python syntax
 def precondition(float v, float m, float x): 
     return speedConstraint(v, m, x) & v >= 0 & b > 0;
 
-def speedConstraint():
+def speedConstraint(float v, float m, float x):
     return v^2<=2*b*(m-x);
 
 def controller(self, action): 
