@@ -34,8 +34,8 @@ def controller(self, action):
 
 def stepFunction(self):
     # Assignment
-    self.x += V
-    self.v += A
+    self.x += self.v
+    self.v += self.A
     self.t += 1
 
     # Restriction

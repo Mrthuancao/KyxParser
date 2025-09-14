@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+import re
 
 class Declaration(ABC):
     """Abstract base class for declarations."""    
@@ -102,6 +103,8 @@ class HybridProgramDeclaration(Declaration):
     def __init__(self, name, program):
         self.name = name
         self.program = program
+        
+        self.assignments, self.guards = HybridProgramDeclaration.parse_hybrid_system_step(program)
 
     def getDescription(self):
         return f"Hybrid Program Declaration: HP {self.name} ::= {self.program}"
@@ -111,3 +114,60 @@ class HybridProgramDeclaration(Declaration):
             return {self.program}'''
         
         return result_string
+    
+    @staticmethod
+    def parse_hybrid_system_step(step_string):
+        """Parses a hybrid system step specification string into a Python function.
+
+        Args:
+            step_string: The input string (e.g., "{x'=v, v'=a, t'=1 & v>=0 & t<=ep}").
+
+        Returns:
+            A Python function representing the step, or None if parsing fails.  Prints an error message if parsing fails.
+        """
+        try:
+            # Regular expression to extract equations and guards
+            match = re.match(r'\{(.*?)\s*\&\s*(.*?)\}', step_string)
+            if not match:
+                print("Error: Invalid step function format.")
+                return {}, {}
+
+            equations_str, guards_str = match.groups()
+            equations = equations_str.split(',')
+            guards = guards_str.split('&')
+
+            # Extract variable assignments from equations
+            assignments = {}
+            for eq in equations:
+                var, expr = eq.strip().split('=')
+                assignments[var.strip().replace("'", "")] = expr.strip()
+            
+            return assignments, guards
+
+        except (AttributeError, ValueError, re.error) as e:
+            print(f"Error parsing step function: {e}")
+            return {}, {}
+        
+    def toPython(self):
+        # Generate Python code
+        python_code = f"""
+def {self.name}(self):
+    # Assignment
+"""
+        for var, expr in self.assignments.items():
+            python_code += f"    self.{var} += self.{expr}\n"
+
+        python_code += """
+    # Restriction
+"""
+        for guard in self.guards:
+            guard = guard.strip()
+            var, op, val = re.match(r'(\w+)(>=|<=|>|<|=)(.*)', guard).groups()
+            python_code += f"""
+    if self.{var} {op} {val}:
+        self.{var} = {val}
+"""
+
+        # Execute the generated Python code
+        print(python_code)
+        return python_code
