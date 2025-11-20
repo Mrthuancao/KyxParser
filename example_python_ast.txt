@@ -1,0 +1,133 @@
+[GymEnvironmentAST]
+  [EnvironmentName]: AutonomousVehicleCollisionAvoidanceEnv
+  [Description]:
+    "A reinforcement learning environment simulating an autonomous vehicle's
+    collision avoidance behavior. Derived from KeYmaera X's 'IJRR17/Theorem 1: Static safety'
+    specification. The agent controls the vehicle's acceleration and angular velocity
+    to avoid colliding with a static obstacle, while adhering to physical constraints."
+
+  [StateSpace]
+    [Type]: gym.spaces.Box (Continuous values)
+    [Shape]: (10,)  (Number of observable state variables)
+    [Variables]:
+      [Variable]: x (Real) - Vehicle's x-coordinate
+      [Variable]: y (Real) - Vehicle's y-coordinate
+      [Variable]: v (Real) - Vehicle's speed (magnitude of velocity)
+      [Variable]: dx (Real) - Vehicle's x-component of direction vector
+      [Variable]: dy (Real) - Vehicle's y-component of direction vector
+      [Variable]: w (Real) - Vehicle's angular velocity (rate of change of direction)
+      [Variable]: r (Real) - Radius of turn (derived from v, w, or a large value for straight motion)
+      [Variable]: xo (Real) - Static obstacle's x-coordinate
+      [Variable]: yo (Real) - Static obstacle's y-coordinate
+      [Variable]: t (Real) - Time elapsed within the current continuous evolution step (resets each step)
+    [Constraints/Invariants]:
+      [Constraint]: dx^2 + dy^2 = 1 (isWellformedDir) - Must be maintained by dynamics.
+      [Constraint]: v >= 0 - Velocity must be non-negative.
+      [Constraint]: -W <= w <= W - Angular velocity is bounded.
+
+  [ActionSpace]
+    [Type]: gym.spaces.Discrete(3)  (Representing the three choices in KeYmaera X's 'controlFunc')
+    [Actions]:
+      [ActionID]: 0
+        [Name]: Decelerate
+        [KyX_Origin]: 'a := -b;'
+        [Effect]: Sets vehicle's acceleration 'a' to '-b'.
+        [Parameters]: None (b is an environment constant)
+      [ActionID]: 1
+        [Name]: StopIfZeroVelocity
+        [KyX_Origin]: '?v = 0; a := 0; w := 0;'
+        [Effect]: If current velocity 'v' is approximately zero, sets 'a := 0' and 'w := 0'.
+                  (In RL, if v != 0, this action might have no effect on 'a' and 'w', or a penalty.)
+        [Parameters]: None
+      [ActionID]: 2
+        [Name]: AccelerateAndTurn
+        [KyX_Origin]: 'a := A; w := *; ?-W<=w & w<=W; ...'
+        [Effect]: Sets vehicle's acceleration 'a' to 'A'.
+                  Requires an additional continuous parameter for 'w'.
+        [Parameters]:
+          [Parameter]: w_control (Real) - Angular velocity input from agent.
+            [Type]: gym.spaces.Box (Continuous)
+            [Range]: [-W, W] (where W is an environment constant)
+            [Note]: This implies a parameterized action space, where the agent chooses discrete action 2
+                    and then provides a continuous value for 'w'. This is often implemented by having
+                    the agent output both the discrete choice and the continuous parameter,
+                    and ignoring the continuous parameter if the discrete choice doesn't use it.
+
+  [EnvironmentParameters]
+    [Source]: KeYmaera X 'DEF' block and problem context.
+    [Parameter]: ep (Real) - Maximum duration for continuous evolution per step.
+    [Parameter]: b (Real) - Deceleration constant (b > 0).
+    [Parameter]: A (Real) - Acceleration constant (A >= 0).
+    [Parameter]: W (Real) - Maximum absolute angular velocity (W > 0).
+    [Parameter]: initial_assumptions (Function/Predicate) - Defines valid initial ranges for x, y, v, dx, dy, xo, yo.
+    [Parameter]: loopinv (Function/Predicate) - General loop invariant (specific content not provided, but would be a safety property).
+
+  [InternalDefinitions] (Helper functions used in dynamics, reward, termination)
+    [Source]: KeYmaera X 'DEF' block.
+    [Definition]: stopDist(v) = v^2 / (2*b)
+    [Definition]: accelComp(v) = (A/b + 1) * (A/2 * ep^2 + ep*v)
+    [Definition]: admissibleSeparation(v) = stopDist(v) + accelComp(v)
+    [Definition]: isWellformedDir(dx, dy) = (dx^2 + dy^2 == 1)
+
+  [ResetFunction] (Corresponds to `env.reset()`)
+    [Description]: Initializes the environment to a starting state for a new episode.
+    [StateInitialization]:
+      [Source]: KeYmaera X 'Precondition (P): assumptions(x, y, v, dx, dy, xo, yo)'.
+      [Details]:
+        1.  Sample initial values for `x, y, v, dx, dy, xo, yo` from distributions defined by `initial_assumptions`.
+        2.  Ensure `isWellformedDir(dx, dy)` holds for sampled `dx, dy`.
+        3.  Initialize internal state variables: `a=0`, `w=0`, `r` (derived or default), `t=0`.
+        4.  Return the initial observation (state).
+
+  [StepFunction] (Corresponds to `env.step(action)`)
+    [Description]: Advances the environment by one time step based on the agent's action.
+    [Input]: `action` (Discrete choice, potentially with a continuous `w_control` parameter).
+    [Process]:
+      1.  **Apply Discrete Control (`controlFunc` logic):**
+          *   Based on `action.ActionID`:
+              *   If 0: Set `a = -b`.
+              *   If 1: If `v` is near zero, set `a = 0`, `w = 0`. Else, `a` and `w` remain unchanged or default.
+              *   If 2: Set `a = A`. Use `action.w_control` to set `w`.
+          *   Calculate `r`: From KyX `?r!=0 & r*w = v`, implies `r = v/w` if `w != 0`. If `w == 0`, `r` is effectively infinite (straight motion). Handle division by zero.
+      2.  **Continuous Evolution (`stepFunction` integration):**
+          *   Integrate the following Ordinary Differential Equations (ODEs) for a duration of `ep` (or until a termination condition is met within the step):
+              *   `dx/dt = v * dx`
+              *   `dy/dt = v * dy`
+              *   `dv/dt = a`
+              *   `ddx/dt = -w * dy`
+              *   `ddy/dt = w * dx`
+              *   `dw/dt = a/r` (handle `r=0` or `w=0` cases)
+              *   `dt_internal/dt = 1` (internal time for the step)
+          *   During integration, enforce evolution domain constraints: `dt_internal <= ep` and `v >= 0`. If `v` drops below zero, clamp it to zero.
+      3.  **Update State:** The integrated values become the `next_state`.
+      4.  **Calculate Reward:** See `RewardFunction` below.
+      5.  **Check Termination:** See `TerminationConditions` below.
+      6.  **Return:** `next_state`, `reward`, `done`, `info` (optional dictionary for debugging).
+
+  [RewardFunction]
+    [Description]: Calculates the reward for the current state transition.
+    [PrimaryObjective]: Avoid collision.
+    [RewardComponents]:
+      [CollisionPenalty]:
+        [Condition]: `(x - xo)^2 + (y - yo)^2 == 0` (Violation of KeYmaera X 'Postcondition (Q)').
+        [Reward]: -100 (Large negative reward).
+      [SurvivalReward]:
+        [Condition]: No collision occurred in the current step.
+        [Reward]: +1 (Small positive reward for each step the vehicle survives).
+      [OptionalPenalties/Shaping]:
+        [Penalty]: For violating `admissibleSeparation(v)` (near-miss, even if not a full collision).
+        [Penalty]: For excessive acceleration (`a`) or angular velocity (`w`) to encourage smooth control.
+        [Penalty]: For `v < 0` (violation of physical constraint).
+        [Penalty]: For violating `loopinv` (if `loopinv` represents an intermediate unsafe state).
+
+  [TerminationConditions] (Corresponds to `done = True`)
+    [Condition 1]: Collision
+      [Condition]: `(x - xo)^2 + (y - yo)^2 == 0` (Vehicle's position matches obstacle's position).
+      [Source]: KeYmaera X 'Postcondition (Q)' violation.
+    [Condition 2]: Episode Time Limit
+      [Condition]: Maximum number of environment steps or total simulation time reached.
+    [Condition 3]: Velocity Constraint Violation
+      [Condition]: `v < 0` (Vehicle's speed becomes negative).
+      [Source]: KeYmaera X 'EvolutionDomain' constraint `v >= 0` violation.
+    [Condition 4]: (Optional) Loop Invariant Violation
+      [Condition]: `loopinv(x, y, v, dx, dy, xo, yo)` becomes false, if it represents a critical safety property.
