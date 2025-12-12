@@ -1,0 +1,78 @@
+[KeYmaeraXSpecification]
+  [TheoremName]: IJRR17/Corollary 1.1: Velocity-controlled passive safety
+  [DefinitionsBlock]
+    [DEF] Real ep
+    [DEF] Real W
+    [DEF] Real V
+    [DEF] Real stopDist = 0
+      [Parameters]: Real v
+    [DEF] Real accelComp = ep*(v+V)
+      [Parameters]: Real v
+    [DEF] Real admissibleSeparation = stopDist(v) + accelComp(v)
+      [Parameters]: Real v
+    [DEF] Bool isWellformedDir = dx^2 + dy^2 = 1
+      [Parameters]: Real dx, Real dy
+    [DEF] Bool bounds = ep > 0 & V >= 0
+    [DEF] Bool initialState = v = 0 & (x-xo)^2 + (y-yo)^2 > 0 & isWellformedDir(dx,dy)
+      [Parameters]: Real x, Real y, Real v, Real dx, Real dy, Real xo, Real yo
+    [DEF] Bool assumptions = bounds() & initialState(x,y,v,dx,dy,xo,yo)
+      [Parameters]: Real x, Real y, Real v, Real dx, Real dy, Real xo, Real yo
+    [DEF] Bool loopinv = v >= 0 & isWellformedDir(dx,dy) & (v>0 -> abs(x-xo) > stopDist(v) | abs(y-yo) > stopDist(v))
+      [Parameters]: Real x, Real y, Real v, Real dx, Real dy, Real xo, Real yo
+    [HP]: controlFunc
+      [HP]:
+        [Statement]: vxo := *
+        [Statement]: vyo := *
+        [Statement]: ?vxo^2+vyo^2<=V^2
+      [ChoiceOperator (++)]
+        [Choice 1]
+          [Statement]: v := 0
+          [Statement]: w := 0
+        [Choice 2]
+          [Statement]: v := *
+          [Statement]: ?0<=v
+          [Statement]: w := *
+          [Statement]: ?-W<=w & w<=W
+          [Statement]: r := *
+          [Statement]: xo := *
+          [Statement]: yo := *
+          [Statement]: ?r!=0 & r*w = v
+          [Statement]: ? abs(x-xo) > admissibleSeparation(v) | abs(y-yo) > admissibleSeparation(v)
+    [HP]: stepFunc
+      [OrdinaryDifferentialEquations]
+        [ODE]: x' = v * dx
+        [ODE]: y' = v * dy
+        [ODE]: dx' = -w * dy
+        [ODE]: dy' = w * dx
+        [ODE]: xo' = vxo
+        [ODE]: yo' = vyo
+        [ODE]: t' = 1
+      [EvolutionDomain]
+        [Constraint]: t <= ep
+        [Constraint]: v >= 0
+  [ProgramVariablesBlock]
+    [VAR] Real x
+    [VAR] Real y
+    [VAR] Real v
+    [VAR] Real a
+    [VAR] Real dx
+    [VAR] Real dy
+    [VAR] Real w
+    [VAR] Real r
+    [VAR] Real xo
+    [VAR] Real yo
+    [VAR] Real vxo
+    [VAR] Real vyo
+    [VAR] Real t
+  [PROBLEM]
+    [Precondition (P)]: assumptions(x, y, v, dx, dy, xo, yo)
+    [LoopExecution]
+      [HP]:
+        [HP]:  
+          [Statement]: controlFunc
+          [Statement]: t := 0
+        [HP]:
+          [Statement]: stepFunc
+          [Invariant]: t>=0, isWellformedDir(dx,dy), (-t*V <= xo - old(xo) & xo - old(xo) <= t*V), (-t*V <= yo - old(yo) & yo - old(yo) <= t*V), (x'=0*dx -> x = old(x)), (x'=0*dx -> y = old(y)), (x'=v*dx -> -t * v <= x - old(x) & x - old(x) <= t * v), (x'=v*dx -> -t * v <= y - old(y) & y - old(y) <= t * v)
+      [Invariant]: loopinv(x, y, v, dx, dy, xo, yo)
+    [Postcondition (Q)]: (v>0 -> (x - xo)^2 + (y - yo)^2 > 0)

@@ -1,0 +1,109 @@
+Theorem "IJRR17/Corollary 1.2: Static safety with margin for imperfect trajectories"
+
+Definitions
+    Real ep;      /* time limit for control decisions */
+    Real b;       /* minimum braking capability of the robot */
+    Real A;       /* maximum acceleration -b <= a <= A */
+    Real W;       /* maximum steering */
+    Real Ud;      /* direction uncertainty */
+
+    Real stopDist(Real v) = ((1+Ud) * v^2 / (2*b));     /* The straight-line stopping distance from brake start to full stop. */
+    Real accelComp(Real v) = ((1+Ud) * (A/b + 1) * (A/2 * ep^2 + ep*v)); /* Straight-line distance to compensate acceleration */
+    Real admissibleSeparation(Real v) = stopDist(v) + accelComp(v);     /* Separation that allows accelerating on a new curve */
+
+    /* The orientation of the robot is approximately a unit vector. */
+    Bool isWellformedDir(Real dx, Real dy) <-> (1-Ud <= dx^2+dy^2 & dx^2 + dy^2 <= 1+Ud);
+
+    Bool bounds() <-> (                                                                  /* Bounds for global constants */
+        A >= 0                                                                                        /* Working engine */
+        & b > 0                                                                                         /* Working brakes */
+        & ep > 0                                                                              /* Controller reaction time */
+        & 0<=Ud & Ud <= 1
+    );
+
+    /* Stopped somewhere safe initially */
+    Bool initialState(Real x, Real y, Real v, Real dx, Real dy, Real xo, Real yo) <-> (
+        v = 0
+        & (x-xo)^2 + (y-yo)^2 > 0
+        & isWellformedDir(dx,dy)
+    );
+
+    /* Under these assumptions we guarantee safety */
+    Bool assumptions(Real x, Real y, Real v, Real dx, Real dy, Real xo, Real yo) <->
+        bounds() & initialState(x, y, v, dx, dy, xo, yo);
+
+    /* Conditions that are true on each loop iteration */
+    Bool loopinv(Real x, Real y, Real v, Real dx, Real dy, Real xo, Real yo) <-> (
+        v >= 0
+        & isWellformedDir(dx,dy)
+        & (abs(x-xo) > stopDist(v) | abs(y-yo) > stopDist(v))
+    );
+
+    HP controlFunc ::= {
+        /* brake on current curve or remain stopped */
+        { a := -b; }
+        ++
+        { ?v = 0; a := 0; w := 0; }
+        ++
+        /* or choose a new safe curve */
+        { a := A;
+        w := *; ?-W<=w & w<=W;       /* choose steering */
+        r := *;
+        xo := *; yo := *;            /* measure closest obstacle on the curve */
+
+        /* admissible curve */
+        ?r!=0 & r*w = v;
+
+        /* use that curve, if it is a safe one (admissible velocities) */
+        ? abs(x-xo) > admissibleSeparation(v)
+        | abs(y-yo) > admissibleSeparation(v);
+        }
+    };
+
+    HP stepFunction ::= { 
+        x' = v * dx, y' = v * dy, v' = a,        /* accelerate/decelerate and move */
+        dx' = -w * dy, dy' = w * dx, w' = a/r,   /* follow curve */
+        t' = 1 & t <= ep & v >= 0
+    };
+End.
+
+ProgramVariables
+  Real x;    /* robot position: x */
+  Real y;    /* robot position: y */
+  Real v;    /* robot translational velocity */
+  Real a;    /* robot translational acceleration */
+  Real dx;   /* robot orientation: x */
+  Real dy;   /* robot orientation: y */
+  Real w;    /* robot rotational velocity */
+  Real r;    /* robot curve radius */
+  Real xo;   /* position of closest obstacle on curve */
+  Real yo;
+  Real t;    /* time */
+End.
+
+Problem
+assumptions(x, y, v, dx, dy, xo, yo) ->
+  [
+    {
+      {
+        controlFunc;
+        t := 0;
+      }
+
+      /* dynamics */
+      {
+        stepFunction;@invariant(t>=0, isWellformedDir(dx,dy),
+         (v'=-b -> v <= old(v) - b*t),
+         (v'=-b -> (-t * (old(v) - b/2*t) * (1+Ud) <= x - old(x) & x - old(x) <= t * (old(v) - b/2*t) * (1+Ud))),
+         (v'=-b -> (-t * (old(v) - b/2*t) * (1+Ud) <= y - old(y) & y - old(y) <= t * (old(v) - b/2*t) * (1+Ud))),
+         (v'=0 -> v = old(v)),
+         (v'=0 -> x = old(x)),
+         (v'=0 -> y = old(y)),
+         (v'=A -> v <= old(v) + A*t),
+         (v'=A -> (-t * (old(v) + A/2*t) * (1+Ud) <= x - old(x) & x - old(x) <= t * (old(v) + A/2*t) * (1+Ud))),
+         (v'=A -> (-t * (old(v) + A/2*t) * (1+Ud) <= y - old(y) & y - old(y) <= t * (old(v) + A/2*t) * (1+Ud)))
+       )
+      }
+    }*@invariant(loopinv(x, y, v, dx, dy, xo, yo))
+  ](x - xo)^2 + (y - yo)^2 > 0
+End.

@@ -1,0 +1,71 @@
+[KeYmaeraXSpecification]
+  [TheoremName]: IJRR17/Theorem 1: Static safety
+  [DefinitionsBlock]
+    [HP] controlFunc
+      Body (raw): { a := -b; } ++ { ?v = 0; a := 0; w := 0; } ++ { a := A; w := *; ?-W<=w & w<=W; ...
+      [ChoiceOperator (++)]
+        [Choice 1]
+          [Statement]: a := -b
+        [Choice 2]
+          [Statement]: ?v = 0
+          [Statement]: a := 0
+          [Statement]: w := 0
+        [Choice 3]
+          [Statement]: a := A
+          [Statement]: w := *
+          [Statement]: ?-W<=w & w<=W
+          [Statement]: r := *
+          [Statement]: xo := *
+          [Statement]: yo := *
+          [Statement]: ?r!=0 & r*w = v
+          [Statement]: ? abs(x-xo) > admissibleSeparation(v) | abs(y-yo) > admissibleSeparation(v)
+    [HP] stepFunction
+      Body (raw): x' = v * dx, y' = v * dy, v' = a, dx' = -w * dy, dy' = w * dx, w' = a/r, t' = 1 ...
+      [OrdinaryDifferentialEquations]
+        [ODE]: x' = v * dx
+        [ODE]: y' = v * dy
+        [ODE]: v' = a
+        [ODE]: dx' = -w * dy
+        [ODE]: dy' = w * dx
+        [ODE]: w' = a/r
+        [ODE]: t' = 1
+      [EvolutionDomain]
+        [Constraint]: t <= ep
+        [Constraint]: v >= 0
+    [DEF] Real ep
+    [DEF] Real b
+    [DEF] Real A
+    [DEF] Real W
+    [DEF] Real stopDist = v^2 / (2*b)
+      [Parameters]: Real v
+    [DEF] Real accelComp = (A/b + 1) * (A/2 * ep^2 + ep*v)
+      [Parameters]: Real v
+    [DEF] Real admissibleSeparation = stopDist(v) + accelComp(v)
+      [Parameters]: Real v
+    [DEF] Bool isWellformedDir = dx^2 + dy^2 = 1
+      [Parameters]: Real dx, Real dy
+    [DEF] Bool bounds = A >= 0 & b > 0 & ep > 0
+  [ProgramVariablesBlock]
+    [VAR] Real x
+    [VAR] Real y
+    [VAR] Real v
+    [VAR] Real a
+    [VAR] Real dx
+    [VAR] Real dy
+    [VAR] Real w
+    [VAR] Real r
+    [VAR] Real xo
+    [VAR] Real yo
+    [VAR] Real t
+  [PROBLEM]
+    [Precondition (P)]: assumptions(x, y, v, dx, dy, xo, yo)
+    [LoopExecution]
+      [HP]:
+        [HP]:
+          [Statement]: controlFunc
+          [Statement]: t := 0
+        [HP]:
+          [Statement]: stepFunction
+          [Invariant]: t>=0, isWellformedDir(dx, dy)
+      [Invariant]: loopinv(x, y, v, dx, dy, xo, yo)
+    [Postcondition (Q)]: (x - xo)^2 + (y - yo)^2 > 0
