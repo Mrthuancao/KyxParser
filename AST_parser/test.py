@@ -85,11 +85,11 @@ class TestKeYmaeraXParser(unittest.TestCase):
         ast_root = parser.parse()
         actual_ast_str = ast_root.__repr__().strip()
 
-        print("\n--- Actual Output ---")
-        print(actual_ast_str)
-        print("\n--- Expected Output ---")
-        print(expected_ast_str)
-        print("---------------------\n")
+        # print("\n--- Actual Output ---")
+        # print(actual_ast_str)
+        # print("\n--- Expected Output ---")
+        # print(expected_ast_str)
+        # print("---------------------\n")
 
         if actual_ast_str != expected_ast_str:
             print("--- DETAILED DIFFERENCES FOUND ---")

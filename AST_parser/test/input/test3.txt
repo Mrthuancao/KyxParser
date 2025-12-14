@@ -60,7 +60,7 @@ Definitions
         }
     };
 
-    HP stepFunction ::= { 
+    HP stepFunc ::= { 
         x' = v * dx, y' = v * dy, v' = a,        /* accelerate/decelerate and move */
         dx' = -w * dy, dy' = w * dx, w' = a/r,   /* follow curve */
         t' = 1 & t <= ep & v >= 0
@@ -92,7 +92,7 @@ assumptions(x, y, v, dx, dy, xo, yo) ->
 
       /* dynamics */
       {
-        stepFunction;@invariant(t>=0, isWellformedDir(dx,dy),
+        stepFunc;@invariant(t>=0, isWellformedDir(dx,dy),
          (v'=-b -> v <= old(v) - b*t),
          (v'=-b -> (-t * (old(v) - b/2*t) * (1+Ud) <= x - old(x) & x - old(x) <= t * (old(v) - b/2*t) * (1+Ud))),
          (v'=-b -> (-t * (old(v) - b/2*t) * (1+Ud) <= y - old(y) & y - old(y) <= t * (old(v) - b/2*t) * (1+Ud))),

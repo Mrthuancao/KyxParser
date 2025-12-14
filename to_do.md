@@ -15,5 +15,11 @@ Problem
 Next step:
 - Create a demo Python AST 
 - Building test cases with other kyx file
+    - Fix test case 3 with step and control func
+    - Debug each test case
+
 - Refractor code
+
+Note have to add ++ control function for nested choice
+
 

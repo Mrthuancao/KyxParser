@@ -1,4 +1,4 @@
-# keymaerax_parser.py
+from __future__ import annotations
 import re
 
 # --- AST Node Definitions ---
@@ -16,12 +16,9 @@ class ASTNode:
     def __repr__(self, level=0):
         """Generates a readable, indented representation of the tree."""
         indent = "  " * level
-        value_str = ""
+        value_str = ":"
         if self.value is not None:
-            if self.value == "": # Special case for just a colon, e.g., [HP]:
-                value_str = ":"
-            else:
-                value_str = f": {self.value}"
+            value_str += f" {self.value}"
         s = f"{indent}[{self.node_type}]{value_str}\n"
         for child in self.children:
             s += child.__repr__(level + 1)
@@ -31,7 +28,7 @@ class Definition(ASTNode):
     """Represents a constant, function, or predicate definition."""
     def __init__(self, name, definition_type, value=None, comment=None):
         # We use a generic Definition type name in the node, but the __repr__ handles the [DEF] prefix
-        super().__init__("Definition", name) 
+        super().__init__("Definition", name)
         self.name = name
         self.definition_type = definition_type
         self.definition_value = value
@@ -39,46 +36,38 @@ class Definition(ASTNode):
 
     def __repr__(self, level=0):
         indent = "  " * level
-        
+
         value_str = ""
         if self.definition_value is not None:
             # Clean up whitespace
             cleaned_value = ' '.join(self.definition_value.split())
-            
+
             # Truncate only if very long, otherwise display full value
             if len(cleaned_value) > 60:
                  value_str = f" = {cleaned_value[:60]}..."
             else:
                  value_str = f" = {cleaned_value}"
-            
+
         comment_str = f" /* {self.comment} */" if self.comment else ""
-        
+
         # Output format: [DEF] Type Name = Value
-        s = f"{indent}[DEF] {self.definition_type} {self.name}{value_str}{comment_str}\n"
+        s = f"{indent}[DEF]: {self.definition_type} {self.name}{value_str}{comment_str}\n"
         for child in self.children:
             s += child.__repr__(level + 1)
         return s
-    
+
 
 class HybridProgram(Definition):
     """
-    Represents a Hybrid Program (HP) definition. 
+    Represents a Hybrid Program (HP) definition.
     It parses the internal structure (choices, sequences, ODEs).
     """
-    def __init__(self, name, body):
-        super().__init__(name, "HP", value=body) 
+    def __init__(self, name, body, parser_ref=None): # Added parser_ref
+        super().__init__(name, "HP", value=body)
         self.name = name # Store name for specific parsing logic
         self.body = body
-        # The split_by_operator_outside_braces method is now in KeYmaeraXParser,
-        # so we need to pass a reference to it or ensure it's accessible.
-        # For simplicity in this structure, we'll assume the parser passes it,
-        # or we could make it a global/static utility.
-        # For now, I'll add a placeholder if it's called directly, but the parser
-        # will call _parse_hp_structure with the correct context.
-        self._split_util = None # Will be set by the parser
-        # The _parse_hp_structure call is now typically deferred until _split_util is set by the parser.
-        # If you instantiate HybridProgram directly, you'd need to call _parse_hp_structure manually
-        # after setting _split_util.
+        # self._split_util = None # No longer needed here as _parse_program_fragment is moved
+        self._parser_ref = parser_ref # Store reference to the parser instance
 
     def _parse_hp_structure(self):
         """
@@ -88,76 +77,31 @@ class HybridProgram(Definition):
         body_content = self.body.strip()
 
         # Assuming KeYmaeraXParser's split_by_operator_outside_braces is available
-        # via a passed utility or directly if this method was part of KeYmaeraXParser.
-        # For this example, we'll assume `self._split_util` is set by the parser
-        # to the static method. If not, this would need to be `KeYmaeraXParser.split_by_operator_outside_braces`.
-        split_by_operator = self._split_util if self._split_util else KeYmaeraXParser.split_by_operator_outside_braces
+        # split_by_operator = self._split_util if self._split_util else KeYmaeraXParser.split_by_operator_outside_braces
 
 
         if self.name == 'controlFunc':
-            # Use the helper function to split by '++' respecting braces
-            blocks = split_by_operator(body_content, '++')
-
-            if len(blocks) > 1:
-                choice_node = ASTNode("ChoiceOperator (++)") # Removed newline for better formatting
-                self.add_child(choice_node)
-
-                for i, block in enumerate(blocks):
-                    block = block.strip()
-
-                    # For each individual block, remove its own surrounding braces if they exist
-                    if block.startswith('{') and block.endswith('}'):
-                        block = block[1:-1].strip()
-
-                    if block:
-                        cleaned_block = ' '.join(block.split()) # Normalize whitespace
-
-                        # Create a parent node for this specific choice.
-                        # This node will hold the individual statements.
-                        current_choice_parent_node = ASTNode(f"Choice {i+1}")
-                        choice_node.add_child(current_choice_parent_node)
-
-                        # Split the cleaned_block into individual statements by ';'
-                        # Filter out empty strings that might result from trailing semicolons
-                        statements = [s.strip() for s in split_by_operator(cleaned_block, ';') if s.strip()]
-
-                        # --- Specific Truncation Logic for Choice 3's last statement ---
-                        # This is to match the example output where the last statement is truncated.
-                        # The length 90 is derived from the example output's truncated statement.
-                        LAST_STMT_TRUNC_LEN = 90 
-
-                        if i == 2 and statements: # If it's Choice 3 and there are statements
-                            last_statement_index = len(statements) - 1
-                            last_statement_value = statements[last_statement_index]
-                            
-                            # Check if the last statement's value exceeds the desired display length.
-                            # We truncate to 90 characters and append '...'
-                            if len(last_statement_value) > LAST_STMT_TRUNC_LEN:
-                                statements[last_statement_index] = last_statement_value[:LAST_STMT_TRUNC_LEN] + '...'
-
-                        # Add each statement as a child node to the current choice node
-                        for stmt_value in statements:
-                            current_choice_parent_node.add_child(ASTNode("Statement", value=stmt_value))
+            # For controlFunc, the entire body is a program block that needs recursive parsing.
+            # The body is already enclosed in outer braces, e.g., "{ { ... } ++ { ... } }"
+            # So, we pass the full body and let _parse_program_fragment handle the outer braces.
+            if self._parser_ref: # Call the parser's method
+                self._parser_ref._parse_program_fragment(body_content, self)
             else:
-                # If there's only one block (or no blocks if body_content was empty),
-                # it's treated as a single sequence.
-                # Remove its braces if present, then add as a Sequence node.
-                single_block_content = blocks[0] if blocks else body_content
-                if single_block_content.startswith('{') and single_block_content.endswith('}'):
-                    single_block_content = single_block_content[1:-1].strip()
+                print(f"Warning: No parser reference available for HybridProgram '{self.name}'. Cannot parse program fragment.")
 
-                if single_block_content:
-                    self.add_child(ASTNode("Sequence", value=single_block_content))
-                else:
-                    self.add_child(ASTNode("Sequence", value="")) # Handle empty sequence case
-
-
-        elif self.name == 'stepFunction':
+        elif self.name == 'stepFunc':
             ode_node = ASTNode("OrdinaryDifferentialEquations")
             domain_node = ASTNode("EvolutionDomain")
 
-            clean_body = re.sub(r'\s+', ' ', body_content).strip()
+            # --- FIX: Remove outer braces from body_content before splitting ---
+            clean_body_no_braces = body_content
+            if clean_body_no_braces.startswith('{') and clean_body_no_braces.endswith('}'):
+                clean_body_no_braces = clean_body_no_braces[1:-1].strip()
+            clean_body = re.sub(r'\s+', ' ', clean_body_no_braces).strip()
+            # --- END FIX ---
+
             # Use split_by_operator for comma, as ODEs can have nested structures
+            split_by_operator = KeYmaeraXParser.split_by_operator_outside_braces # Direct call to static method
             parts = [p.strip() for p in split_by_operator(clean_body, ',') if p.strip()]
 
             for part in parts:
@@ -168,17 +112,20 @@ class HybridProgram(Definition):
                 # For simplicity, if & is at brace_level 0, split it.
                 sub_parts = split_by_operator(part, '&')
 
-                if len(sub_parts) > 1:
-                    # The first part is the ODE (e.g., t' = 1)
-                    ode_node.add_child(ASTNode("ODE", value=sub_parts[0]))
+                if not sub_parts: # Should not happen if part is not empty, but for safety
+                    continue
 
-                    # The remaining parts are the domain constraints
-                    for domain_constraint in sub_parts[1:]:
-                        if domain_constraint:
-                            domain_node.add_child(ASTNode("Constraint", value=domain_constraint))
-                else:
-                    # Standard ODE (no top-level '&')
-                    ode_node.add_child(ASTNode("ODE", value=part))
+                # The first part is an ODE or a formula that might be an ODE/constraint
+                # All subsequent parts (if any) are domain constraints
+                ode_or_formula = sub_parts[0]
+                if "'" in ode_or_formula: # Simple heuristic to identify an ODE (contains derivative)
+                    ode_node.add_child(ASTNode("ODE", value=ode_or_formula))
+                else: # Treat as a constraint if it doesn't look like an ODE
+                    domain_node.add_child(ASTNode("Constraint", value=ode_or_formula))
+
+                for domain_constraint in sub_parts[1:]:
+                    if domain_constraint:
+                        domain_node.add_child(ASTNode("Constraint", value=domain_constraint))
 
             self.add_child(ode_node)
             if domain_node.children:
@@ -186,15 +133,15 @@ class HybridProgram(Definition):
 
     def __repr__(self, level=0):
         indent = "  " * level
-        
+
         # Clean up body display and truncate
         cleaned_body = ' '.join(self.body.split())
-        
+
         # Specific truncation for controlFunc Body (raw) to match the example
         if self.name == 'controlFunc':
             body_display = cleaned_body[:80] + "..."
-        # Specific truncation for stepFunction Body (raw) to match the example
-        elif self.name == 'stepFunction':
+        # Specific truncation for stepFunc Body (raw) to match the example
+        elif self.name == 'stepFunc':
             # Truncate after t' = 1
             idx = cleaned_body.find("t' = 1")
             if idx != -1:
@@ -203,15 +150,17 @@ class HybridProgram(Definition):
                 body_display = cleaned_body[:80] + "..." if len(cleaned_body) > 80 else cleaned_body
         else:
             body_display = cleaned_body[:80] + "..." if len(cleaned_body) > 80 else cleaned_body
-        
-        s = f"{indent}[HP] {self.name}\n"
+
+        if self.name:
+            s = f"{indent}[HP]: {self.name}\n"
+        else:
+            s = f"{indent}[HP]:\n"
         s += f"{indent}  Body (raw): {body_display}\n"
-        
+
         # Print children (parsed structure)
         for child in self.children:
             s += child.__repr__(level + 1)
         return s
-    
 
 
 class Variable(ASTNode):
@@ -224,7 +173,7 @@ class Variable(ASTNode):
     def __repr__(self, level=0):
         indent = "  " * level
         comment_str = f" /* {self.comment} */" if self.comment else ""
-        return f"{indent}[VAR] {self.var_type} {self.value}{comment_str}\n"
+        return f"{indent}[VAR]: {self.var_type} {self.value}{comment_str}\n"
 
 class ProblemStatement(ASTNode):
     """Represents the main Problem formula (P -> [HP] Q)."""
@@ -234,7 +183,7 @@ class ProblemStatement(ASTNode):
 
     def __repr__(self, level=0):
         indent = "  " * level
-        s = f"{indent}[PROBLEM]\n"
+        s = f"{indent}[PROBLEM]:\n"
         for child in self.children:
             s += child.__repr__(level + 1)
         return s
@@ -294,8 +243,29 @@ class KeYmaeraXParser:
         if last_part:
             parts.append(last_part)
         return parts
-    
-    
+
+    def _find_matching_brace_span(self, text: str, start_brace_idx: int) -> int | None:
+        """
+        Finds the index of the closing brace '}' that matches the opening brace
+        at start_brace_idx.
+        Returns the index of the matching '}' or None if no match is found (unbalanced).
+        """
+        if text[start_brace_idx] != '{':
+            raise ValueError("start_brace_idx must point to an opening brace '{'")
+
+        balance = 1
+        for i in range(start_brace_idx + 1, len(text)):
+            if text[i] == '{':
+                balance += 1
+            elif text[i] == '}':
+                balance -= 1
+
+            if balance == 0:
+                return i
+
+        return None # Unbalanced braces
+
+
     def _extract_top_level_brace_blocks(self, text: str) -> list[str | list]:
         """
         Parses a string with nested braces and returns a list representing
@@ -378,7 +348,7 @@ class KeYmaeraXParser:
                  content = content[:-4].strip()
             return content
         return None
-    
+
     def _parse_definitions(self):
         definitions_block = self._extract_block("Definitions")
         if not definitions_block:
@@ -387,73 +357,119 @@ class KeYmaeraXParser:
         defs_node = ASTNode("DefinitionsBlock")
         self.ast_root.add_child(defs_node)
 
-        remaining_text = definitions_block
-        
+        # Use a mutable list of characters for efficient replacement of processed blocks.
+        mutable_definitions_block = list(definitions_block)
+
         # --- 1. Extract Hybrid Programs (HP) first ---
-        
-        HP_PATTERN = re.compile(
-            r'(HP\s+(\w+)\s*::=\s*\{(.*?)\}\s*;;?)', 
+
+        # Pattern to find the HP header up to the opening brace '{'
+        HP_HEADER_PATTERN = re.compile(
+            r'HP\s+(\w+)\s*::=\s*\{',
             re.DOTALL
         )
-        
-        parsed_hps = []
-        
-        for match in HP_PATTERN.finditer(remaining_text):
-            name = match.group(2).strip()
-            body = match.group(3).strip()
-            
-            hp_node = HybridProgram(name, body)
-            # Pass the split utility to the HP node for its internal parsing
-            hp_node._split_util = self.split_by_operator_outside_braces 
-            hp_node._parse_hp_structure() # Re-parse with the utility set
-            defs_node.add_child(hp_node)
-            
-            parsed_hps.append(match.span())
 
-        # Remove the extracted HP definitions from the block text
-        parsed_hps.sort(key=lambda x: x[0], reverse=True)
-        
-        mutable_text = list(remaining_text)
-        for start, end in parsed_hps:
-            mutable_text[start:end] = [' '] * (end - start)
-            
-        remaining_text = "".join(mutable_text)
-        
+        current_search_pos = 0
+        while current_search_pos < len(mutable_definitions_block):
+            # Search for the next HP header from the current position
+            search_string = "".join(mutable_definitions_block[current_search_pos:])
+            match = HP_HEADER_PATTERN.search(search_string)
+
+            if match:
+                # Adjust match indices to be relative to the *original* definitions_block
+                hp_header_start_idx = current_search_pos + match.start()
+                # The '{' character is at match.end() - 1 relative to search_string
+                # So, its index in the *original* definitions_block is current_search_pos + match.end() - 1
+                open_brace_idx = current_search_pos + match.end() - 1
+
+                hp_name = match.group(1).strip()
+
+                # Find the matching closing brace for this HP's body using the helper
+                full_current_block_string = "".join(mutable_definitions_block) # This is the string actually searched
+
+                closing_brace_idx = self._find_matching_brace_span(
+                    full_current_block_string, # Pass the full current state of the mutable block
+                    open_brace_idx
+                )
+
+                if closing_brace_idx is not None:
+                    # The body content is between the opening '{' and closing '}'
+                    # Include the outer braces so _parse_program_fragment can strip them
+                    hp_body_start_idx = open_brace_idx
+                    hp_body_end_idx = closing_brace_idx + 1
+
+                    hp_body_raw = "".join(mutable_definitions_block[hp_body_start_idx : hp_body_end_idx]).strip()
+
+                    # Determine the end of the full HP block, including optional ';;'
+                    full_hp_block_end_idx = closing_brace_idx + 1 # Start after the '}'
+
+                    # Check for optional ';;'
+                    if full_hp_block_end_idx + 1 < len(mutable_definitions_block) and \
+                       "".join(mutable_definitions_block[full_hp_block_end_idx : full_hp_block_end_idx + 2]).strip() == ';;':
+                        full_hp_block_end_idx += 2
+                    # Check for optional ';'
+                    elif full_hp_block_end_idx < len(mutable_definitions_block) and \
+                         mutable_definitions_block[full_hp_block_end_idx] == ';':
+                        full_hp_block_end_idx += 1
+
+                    # Create and process the HybridProgram node, passing parser_ref=self
+                    hp_node = HybridProgram(hp_name, hp_body_raw, parser_ref=self)
+                    # hp_node._split_util = self.split_by_operator_outside_braces # No longer needed
+                    hp_node._parse_hp_structure()
+                    defs_node.add_child(hp_node)
+
+                    # Replace the extracted HP definition with spaces in the mutable_definitions_block
+                    # to effectively remove it from further parsing.
+                    for i in range(hp_header_start_idx, full_hp_block_end_idx):
+                        if i < len(mutable_definitions_block): # Safety check
+                            mutable_definitions_block[i] = ' '
+
+                    # Advance the search position past the extracted block
+                    current_search_pos = full_hp_block_end_idx
+                else:
+                    # Unbalanced braces for this HP, print a warning and advance past its header
+                    print(f"Warning: Unbalanced braces for HP '{hp_name}' starting at index {open_brace_idx}. Skipping this block.")
+                    current_search_pos = open_brace_idx + 1 # Advance past the problematic '{'
+            else:
+                # No more HP definitions found, break the loop
+                break
+
+        # Convert the modified list back to a string for parsing simple definitions
+        remaining_text_after_hps = "".join(mutable_definitions_block)
+
         # --- 2. Parse simple Definitions (DEF Real/Bool) ---
 
         # Use the new split utility for semicolon-separated definitions
-        parts = self.split_by_operator_outside_braces(remaining_text, ';')
-        
+        parts = self.split_by_operator_outside_braces(remaining_text_after_hps, ';')
+
         for part in parts:
             line = part.strip()
             if not line:
                 continue
 
             # Parse Real/Bool Definitions with assignment or equivalence
-            # Note: The pattern needs to handle the case where the definition value might contain parentheses (like function calls)
             def_match = re.search(r'(Real|Bool)\s+(\w+)(?:\s*\((.*?)\))?\s*(?:<->|=)\s*(.*?)$', line, re.DOTALL)
-            
+
             if def_match:
                 def_type = def_match.group(1)
                 name = def_match.group(2)
                 params = def_match.group(3)
                 value = def_match.group(4).strip()
-                
+
                 # Check for outer parentheses removal (standard KeYmaera X practice)
                 if value.startswith('(') and value.endswith(')'):
                     value = value[1:-1].strip()
-                
+
                 def_node = Definition(name, def_type, value=value)
-                
+
                 if params:
                     # KeYmaera X often includes the type in the parameter list (e.g., Real v)
                     param_list = [p.strip() for p in self.split_by_operator_outside_braces(params, ',')]
                     param_node = ASTNode("Parameters", ", ".join(param_list))
                     def_node.add_child(param_node)
-                
+
                 defs_node.add_child(def_node)
                 continue
-            
+
             # Parse simple constant declarations (e.g., Real ep) - no assignment
             const_match = re.search(r'(Real|Bool)\s+(\w+)\s*$', line, re.DOTALL)
             if const_match:
@@ -475,12 +491,73 @@ class KeYmaeraXParser:
             line = line.strip()
             if not line:
                 continue
-            
+
             var_match = re.search(r'(Real|Bool)\s+(\w+)\s*$', line, re.DOTALL)
             if var_match:
                 var_type = var_match.group(1)
                 name = var_match.group(2)
                 vars_node.add_child(Variable(name, var_type))
+
+    def _parse_program_fragment(self, program_fragment_string: str, parent_node: ASTNode):
+        """
+        Parses a string representing a program fragment (which can be a sequence, choice,
+        assignment, or test) and adds the resulting AST nodes as children to the parent_node.
+        This function handles stripping outer braces and then delegates to sequence/choice parsing.
+        """
+        fragment = program_fragment_string.strip()
+        if not fragment:
+            return
+
+        # Now 'self' refers to KeYmaeraXParser, so call its static method directly
+        split_by_operator = self.split_by_operator_outside_braces
+
+        # First, remove outer braces if they exist. This is crucial for recursive calls
+        # to correctly identify the *top-level* operator within the current fragment.
+        # Example: "{ { v := 0; w := 0; } ++ { v := *; ... } }" -> "{ v := 0; w := 0; } ++ { v := *; ... }"
+        if fragment.startswith('{') and fragment.endswith('}'):
+            fragment_content = fragment[1:-1].strip()
+        else:
+            fragment_content = fragment
+
+        # Now, parse the content. It could be a choice or a sequence.
+
+        # Try to split by '++' first (highest precedence for program structure)
+        choice_parts = split_by_operator(fragment_content, '++')
+        if len(choice_parts) > 1:
+            # It's a choice operator at this level
+            choice_node = ASTNode("ChoiceOperator (++)")
+            parent_node.add_child(choice_node)
+            for i, part in enumerate(choice_parts):
+                child_choice_node = ASTNode(f"Choice {i+1}")
+                choice_node.add_child(child_choice_node)
+                # Recursively parse each choice part.
+                # The part itself might be a block { ... } or a sequence.
+                self._parse_program_fragment(part, child_choice_node) # Recursive call on self (KeYmaeraXParser)
+            return
+
+        # If not a choice, it must be a sequence (or a single statement)
+        # Split by ';' to get individual statements.
+        # Note: split_by_operator handles nested braces correctly for ';'.
+        statements = [s.strip() for s in split_by_operator(fragment_content, ';') if s.strip()]
+
+        # If there are multiple statements, or a single statement that was explicitly terminated by ';',
+        # we process them as a sequence.
+        if len(statements) > 1 or (len(statements) == 1 and ';' in fragment_content):
+            for stmt_value in statements:
+                if stmt_value:
+                    # Each 'statement' could itself be a nested program block (e.g., "{ v := 0; w := 0; }")
+                    # So, we recursively parse this 'statement' as well.
+                    self._parse_program_fragment(stmt_value, parent_node) # Recursive call on self (KeYmaeraXParser)
+            return
+
+        # Base case: If it wasn't a choice, and not a sequence, it's a single, simple statement.
+        if fragment_content: # Ensure it's not empty after all processing
+            # Check if it's a test statement
+            if fragment_content.startswith('?'):
+                parent_node.add_child(ASTNode("Test", value=fragment_content))
+            else:
+                parent_node.add_child(ASTNode("Statement", value=fragment_content))
+
 
     def _parse_problem(self):
         problem_block = self._extract_block("Problem")
@@ -489,99 +566,125 @@ class KeYmaeraXParser:
 
         problem_node = ProblemStatement(problem_block)
         self.ast_root.add_child(problem_node)
-        
+
         # P -> [HP] Q structure
         # Use a non-greedy match for the program block ([...])
         implication_match = re.search(
-            r'([\s\S]+?)\s*->\s*\[\s*([\s\S]+?)\s*\]\s*([\s\S]+)', 
-            problem_block, 
+            r'([\s\S]+?)\s*->\s*\[\s*([\s\S]+?)\s*\]\s*([\s\S]+)', # Corrected to match literal [ and ]
+            problem_block,
             re.DOTALL
         )
-        
-            
+
         if implication_match:
             precondition_raw = implication_match.group(1).strip()
             program_raw = implication_match.group(2).strip()
             postcondition_raw = implication_match.group(3).strip()
-            
+
             problem_node.add_child(ASTNode("Precondition (P)", precondition_raw))
-            
-            # Parse the loop structure: { ... } { ... } *@invariant(loopinv)
-            # Updated regex to correctly capture the two loop body blocks and the loop invariant
+
+            # --- FIX: Update regex for loop structure and extract blocks ---
+            # Updated regex to correctly capture the entire loop body and the loop invariant
             loop_match = re.search(
-                r"(\{\s*(\{\s*.*?\s*\})?\s*(\{\s*.*?\s*\})\s*\})\*@invariant\(([\s\S]*?\))\)", 
-                program_raw, 
+                r"(\{[\s\S]*?\})\*@invariant\(([\s\S]*?\))\)", # Captures { ... } and the invariant
+                program_raw,
                 re.DOTALL
             )
-            
+
             if loop_match:
-                # loop_body_raw will be "{ controlFunc; t := 0; } { stepFunction;@invariant(t>=0, isWellformedDir(dx, dy)) }"
-                loop_body_raw = loop_match.group(1).strip()
-                # loop_invariant_raw will be "loopinv(x, y, v, dx, dy, xo, yo)"
-                loop_invariant_raw = loop_match.group(4).strip() 
-                
+                loop_body_raw = loop_match.group(1).strip() # This is "{ { { controlFunc; }; t := 0; } { stepFunc;@invariant(...) } }"
+                loop_invariant_raw = loop_match.group(2).strip() # This is "loopinv(x, y, v, dx, dy, xo, yo)"
+
                 program_node = ASTNode("LoopExecution")
-                
-                # Create the outer [HP]: node
-                outer_hp_node = ASTNode("HP", "") # Use empty string for value to get ":" in repr
-                
-                # Using _extract_top_level_brace_blocks for robust parsing of nested braces
-                blocks = self._extract_top_level_brace_blocks(loop_body_raw)[0]
-                
-                if len(blocks) == 2:
-                    control_block_full = blocks[0][0] # e.g., "{ controlFunc; t := 0; }"
-                    dynamics_block_full = blocks[1][0] # e.g., "{ stepFunction;@invariant(t>=0, isWellformedDir(dx, dy)) }"
+                outer_hp_node = ASTNode("HP", "") # This represents the outer { } of the loop body
 
-                    # --- Process Control Block (Discrete) ---
-                    # Desired: [HP]: -> [Statement]: controlFunc, [Statement]: t:= 0
-                    control_hp_node = ASTNode("HP", "") # Inner [HP]: node
-                    
-                    # Remove outer braces for parsing content
-                    # control_content = control_block_full[1:-1].strip() # "controlFunc; t := 0;"
-                    
-                    # Split by semicolon to get individual statements
-                    control_statements = [s.strip() for s in self.split_by_operator_outside_braces(control_block_full, ';') if s.strip()]
-                    
-                    for stmt_value in control_statements:
-                        control_hp_node.add_child(ASTNode("Statement", stmt_value))
-                    
-                    outer_hp_node.add_child(control_hp_node)
+                # Get the content *inside* the outermost braces of the loop body
+                loop_body_inner_content = loop_body_raw[1:-1].strip()
 
-                    # --- Process Dynamics Block (Continuous) ---
-                    # Desired: [HP]: -> [Statement]: stepFunction, [Invariant]: t>=0, isWellformedDir(...)
-                    dynamics_hp_node = ASTNode("HP", "") # Inner [HP]: node
-                    
-                    # Remove outer braces for parsing content
-                    # dynamics_content = dynamics_block_full[1:-1].strip() # "stepFunction;@invariant(t>=0, isWellformedDir(dx, dy))"
-                    
-                    # Extract statement and its invariant
-                    stmt_inv_match = re.search(r'^(.*?);@invariant\((.*?)\)$', dynamics_block_full, re.DOTALL)
-                    if stmt_inv_match:
-                        statement_name = stmt_inv_match.group(1).strip() # "stepFunction"
-                        invariant_content = stmt_inv_match.group(2).strip() # "t>=0, isWellformedDir(dx, dy)"
-                        dynamics_hp_node.add_child(ASTNode("Statement", statement_name))
-                        dynamics_hp_node.add_child(ASTNode("Invariant", invariant_content))
-                    else:
-                        # Fallback if the expected pattern doesn't match
-                        dynamics_hp_node.add_child(ASTNode("Statement", dynamics_block_full)) 
-                         
-                    outer_hp_node.add_child(dynamics_hp_node)
-                    
-                    # Add the outer HP node to the program node
-                    program_node.add_child(outer_hp_node)
-                    
-                    # Add the loop invariant as a direct child of LoopExecution, after the HP blocks
-                    program_node.add_child(ASTNode("Invariant", loop_invariant_raw))
-                else:
-                    # Fallback if the loop body structure is not as expected (e.g., not two blocks)
+                # Find the first block (discrete part)
+                discrete_start_idx = loop_body_inner_content.find('{')
+                if discrete_start_idx == -1:
+                    print(f"Warning: Could not find discrete block in loop body: '{loop_body_inner_content}'")
+                    # Fallback to raw content if parsing fails
                     program_node.add_child(ASTNode("Raw Loop Body Content", loop_body_raw))
-                    program_node.add_child(ASTNode("Invariant", loop_invariant_raw)) # Still add the invariant if found
-                
-                problem_node.add_child(program_node)
+                    program_node.add_child(ASTNode("Invariant", loop_invariant_raw))
+                    problem_node.add_child(program_node)
+                    problem_node.add_child(ASTNode("Postcondition (Q)", postcondition_raw))
+                    return
+
+                discrete_end_idx = self._find_matching_brace_span(loop_body_inner_content, discrete_start_idx)
+                if discrete_end_idx is None:
+                    print(f"Warning: Unmatched braces in discrete block of loop body: '{loop_body_inner_content}'")
+                    # Fallback
+                    program_node.add_child(ASTNode("Raw Loop Body Content", loop_body_raw))
+                    program_node.add_child(ASTNode("Invariant", loop_invariant_raw))
+                    problem_node.add_child(program_node)
+                    problem_node.add_child(ASTNode("Postcondition (Q)", postcondition_raw))
+                    return
+
+                discrete_block_full_str = loop_body_inner_content[discrete_start_idx : discrete_end_idx + 1].strip()
+
+                # Find the second block (continuous part)
+                # Search for the next '{' after the first block ends
+                continuous_search_start_idx = discrete_end_idx + 1
+                continuous_start_idx = loop_body_inner_content.find('{', continuous_search_start_idx)
+
+                if continuous_start_idx == -1:
+                    print(f"Warning: Could not find continuous block in loop body: '{loop_body_inner_content}'")
+                    # Fallback
+                    program_node.add_child(ASTNode("Raw Loop Body Content", loop_body_raw))
+                    program_node.add_child(ASTNode("Invariant", loop_invariant_raw))
+                    problem_node.add_child(program_node)
+                    problem_node.add_child(ASTNode("Postcondition (Q)", postcondition_raw))
+                    return
+
+                continuous_end_idx = self._find_matching_brace_span(loop_body_inner_content, continuous_start_idx)
+                if continuous_end_idx is None:
+                    print(f"Warning: Unmatched braces in continuous block of loop body: '{loop_body_inner_content}'")
+                    # Fallback
+                    program_node.add_child(ASTNode("Raw Loop Body Content", loop_body_raw))
+                    program_node.add_child(ASTNode("Invariant", loop_invariant_raw))
+                    problem_node.add_child(program_node)
+                    problem_node.add_child(ASTNode("Postcondition (Q)", postcondition_raw))
+                    return
+
+                continuous_block_full_str = loop_body_inner_content[continuous_start_idx : continuous_end_idx + 1].strip()
+
+                # --- Process Control Block (Discrete) ---
+                control_hp_node = ASTNode("HP", "") # Inner [HP]: node for discrete part
+                # The content of discrete_block_full_str is "{ { controlFunc; }; t := 0; }"
+                # Remove its outer braces for _parse_program_fragment
+                discrete_fragment_content = discrete_block_full_str[1:-1].strip()
+                self._parse_program_fragment(discrete_fragment_content, control_hp_node)
+                outer_hp_node.add_child(control_hp_node)
+
+                # --- Process Dynamics Block (Continuous) ---
+                dynamics_hp_node = ASTNode("HP", "") # Inner [HP]: node for continuous part
+                # The content of continuous_block_full_str is "{ stepFunc;@invariant(...) }"
+                # Remove its outer braces for parsing
+                dynamics_fragment_content = continuous_block_full_str[1:-1].strip()
+
+                stmt_inv_match = re.search(r'^(.*?);@invariant\((.*?)\)$', dynamics_fragment_content, re.DOTALL)
+                if stmt_inv_match:
+                    statement_name = stmt_inv_match.group(1).strip()
+                    invariant_content = stmt_inv_match.group(2).strip()
+                    dynamics_hp_node.add_child(ASTNode("Statement", statement_name))
+                    dynamics_hp_node.add_child(ASTNode("Invariant", invariant_content))
+                else:
+                    # Fallback if the expected pattern doesn't match
+                    dynamics_hp_node.add_child(ASTNode("Statement", dynamics_fragment_content))
+                outer_hp_node.add_child(dynamics_hp_node)
+
+                # Add the outer HP node (representing the combined discrete/continuous blocks) to the program node
+                program_node.add_child(outer_hp_node)
+                # Add the loop invariant as a direct child of LoopExecution
+                program_node.add_child(ASTNode("Invariant", loop_invariant_raw))
+
+                problem_node.add_child(program_node) # Add the parsed program to the problem node
             else:
-                problem_node.add_child(ASTNode("RawProgram", program_raw))
+                # Fallback if loop_match fails
+                program_node = ASTNode("RawProgram", program_raw)
+                problem_node.add_child(program_node)
 
             problem_node.add_child(ASTNode("Postcondition (Q)", postcondition_raw))
         else:
             problem_node.add_child(ASTNode("Error", "Could not parse P -> [HP] Q structure."))
-

@@ -37,7 +37,7 @@ Definitions
       }
     };;
 
-    HP stepFunction ::= { 
+    HP stepFunc ::= { 
         x' = v * dx, y' = v * dy, v' = a,
         dx' = -w * dy, dy' = w * dx, w' = a/r,
         t' = 1 & t <= ep & v >= 0
@@ -69,7 +69,7 @@ assumptions(x, y, v, dx, dy, xo, yo) ->
 
       /* dynamics */
       {
-      stepFunction;@invariant(t>=0, isWellformedDir(dx, dy))
+      stepFunc;@invariant(t>=0, isWellformedDir(dx, dy))
       }
     }*@invariant(loopinv(x, y, v, dx, dy, xo, yo))
   ](x - xo)^2 + (y - yo)^2 > 0
