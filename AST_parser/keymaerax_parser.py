@@ -1,5 +1,6 @@
 from __future__ import annotations
 import re
+from ast_config import *
 
 # --- AST Node Definitions ---
 
@@ -688,3 +689,237 @@ class KeYmaeraXParser:
             problem_node.add_child(ASTNode("Postcondition (Q)", postcondition_raw))
         else:
             problem_node.add_child(ASTNode("Error", "Could not parse P -> [HP] Q structure."))
+
+# --- Helper to convert KeYmaeraX AST to Intermediate PyAST ---
+def convert_keymaerax_ast_to_intermediate_pyast(kx_ast_root: ASTNode) -> GymEnvironmentConfig:
+    """
+    Converts the KeYmaera X AST into the intermediate Python AST representation.
+    """
+    if not kx_ast_root or kx_ast_root.node_type != "KeYmaeraXSpecification":
+        raise ValueError("Invalid KeYmaera X AST root node provided.")
+
+    env_name = "KeYmaeraX_RL_Environment" # Default name
+    theorem_name_node = next((c for c in kx_ast_root.children if c.node_type == "TheoremName"), None)
+    if theorem_name_node and theorem_name_node.value:
+        # Clean up the theorem name for use as an environment name
+        env_name = theorem_name_node.value.replace(' ', '_').replace(':', '_').replace('"', '').replace('/', '_').replace('.', '_')
+
+    # Initialize top-level PyAST config with placeholder ProblemConfig
+    gym_config = GymEnvironmentConfig(
+        env_name=env_name,
+        definitions=DefinitionsConfig(),
+        variables=VariablesConfig(),
+        problem=ProblemConfig(
+            precondition=PreconditionConfig(formula=""),
+            loop_execution=LoopExecutionConfig(),
+            postcondition=PostconditionConfig(formula="")
+        )
+    )
+
+    # Process Definitions Block
+    defs_block_kx = next((c for c in kx_ast_root.children if c.node_type == "DefinitionsBlock"), None)
+    if defs_block_kx:
+        defs_config = gym_config.definitions
+
+        for def_node_kx in defs_block_kx.children:
+            if def_node_kx.node_type == "Definition" and hasattr(def_node_kx, 'definition_type'): # General definition
+                parameters = []
+                params_node = next((c for c in def_node_kx.children if c.node_type == "Parameters"), None)
+                if params_node and params_node.value: # Check if value is not empty
+                    # Parameters value is a comma-separated string like "Real v, Real dx"
+                    param_strings = [p.strip() for p in params_node.value.split(',')]
+                    for p_str in param_strings:
+                        parts = p_str.split(' ')
+                        if len(parts) == 2: # e.g., "Real v"
+                            parameters.append((parts[0], parts[1]))
+                        else: # Fallback if type is missing, assume Real
+                            parameters.append(('Real', p_str))
+
+                if def_node_kx.definition_type == "HP":
+                    if def_node_kx.name == "controlFunc":
+                        control_func_config = ControlFuncConfig(name=def_node_kx.name, body_raw=def_node_kx.body)
+                        # The controlFunc HP node's children directly represent its action structure
+                        # We expect a ChoiceOperator (++) as the top-level child for this example
+                        control_func_root_action = next((c for c in def_node_kx.children if c.node_type == "ChoiceOperator (++)"), None)
+                        if control_func_root_action:
+                            control_func_config.action_structure = _parse_kx_hp_program_fragment_to_action_config(
+                                control_func_root_action, 0
+                            )
+                        defs_config.hybrid_programs.append(control_func_config)
+                    elif def_node_kx.name == "stepFunc":
+                        step_func_config = StepFuncConfig(name=def_node_kx.name, body_raw=def_node_kx.body)
+                        ode_block = next((c for c in def_node_kx.children if c.node_type == "OrdinaryDifferentialEquations"), None)
+                        if ode_block:
+                            for ode_child in ode_block.children:
+                                if ode_child.node_type == "ODE" and ode_child.value:
+                                    # ODEs are like "x' = v * dx", extract variable and equation
+                                    parts = ode_child.value.split("=", 1)
+                                    if len(parts) == 2:
+                                        var = parts[0].strip().replace("'", "") # Remove ' from variable
+                                        equation = parts[1].strip()
+                                        step_func_config.odes.append(ODEConfig(variable=var, equation=equation))
+                                    else:
+                                        print(f"Warning: Could not parse ODE: {ode_child.value}")
+
+                        domain_block = next((c for c in def_node_kx.children if c.node_type == "EvolutionDomain"), None)
+                        if domain_block:
+                            evolution_domain_config = EvolutionDomainConfig()
+                            for domain_child in domain_block.children:
+                                if domain_child.node_type == "Constraint" and domain_child.value:
+                                    evolution_domain_config.constraints.append(domain_child.value)
+                            step_func_config.evolution_domain = evolution_domain_config
+                        defs_config.hybrid_programs.append(step_func_config)
+                elif def_node_kx.definition_type == "Real":
+                    if parameters: # Has parameters, so it's a function
+                        defs_config.functions.append(FunctionDefinitionConfig(
+                            name=def_node_kx.name,
+                            return_type=def_node_kx.definition_type,
+                            parameters=parameters,
+                            body=def_node_kx.definition_value
+                        ))
+                    else: # No parameters, so it's a constant
+                        defs_config.constants.append(ConstantDefinitionConfig(
+                            name=def_node_kx.name,
+                            type=def_node_kx.definition_type,
+                            value=def_node_kx.definition_value
+                        ))
+                elif def_node_kx.definition_type == "Bool":
+                    defs_config.predicates.append(PredicateDefinitionConfig(
+                        name=def_node_kx.name,
+                        parameters=parameters,
+                        body=def_node_kx.definition_value
+                    ))
+
+    # Process Program Variables Block
+    vars_block_kx = next((c for c in kx_ast_root.children if c.node_type == "ProgramVariablesBlock"), None)
+    if vars_block_kx:
+        vars_config = gym_config.variables
+        for var_node_kx in vars_block_kx.children:
+            if var_node_kx.node_type == "Variable": # This is the type from your parser's Variable class
+                vars_config.variables.append(VariableConfig(name=var_node_kx.value, type=var_node_kx.var_type))
+
+    # Process Problem Block
+    problem_block_kx = next((c for c in kx_ast_root.children if c.node_type == "ProblemStatement"), None)
+    if problem_block_kx:
+        problem_config = gym_config.problem
+
+        precondition_kx = next((c for c in problem_block_kx.children if c.node_type == "Precondition (P)"), None)
+        if precondition_kx and precondition_kx.value:
+            problem_config.precondition = PreconditionConfig(formula=precondition_kx.value)
+
+        loop_execution_kx = next((c for c in problem_block_kx.children if c.node_type == "LoopExecution"), None)
+        if loop_execution_kx:
+            loop_inv_kx = next((c for c in loop_execution_kx.children if c.node_type == "Invariant"), None)
+            loop_execution_config = LoopExecutionConfig(
+                loop_invariant_formula=loop_inv_kx.value if loop_inv_kx and loop_inv_kx.value else "",
+                iterations="inf"
+            )
+            problem_config.loop_execution = loop_execution_config
+
+            # The LoopExecution node in KeYmaera X AST contains an HP node for the loop body
+            loop_body_hp_kx = next((c for c in loop_execution_kx.children if c.node_type == "HP"), None)
+            if loop_body_hp_kx and len(loop_body_hp_kx.children) == 2:
+                # Discrete control part: { { controlFunc; }; t := 0; }
+                discrete_hp_kx = loop_body_hp_kx.children[0] # This is an HP node
+                if discrete_hp_kx.node_type == "HP":
+                    discrete_sequence_config = SequenceActionConfig()
+                    # The children of this discrete_hp_kx are the actual statements/calls
+                    for stmt_kx in discrete_hp_kx.children:
+                        if stmt_kx.node_type == "Statement":
+                            if stmt_kx.value == "controlFunc":
+                                discrete_sequence_config.actions.append(CallHybridProgramConfig(hp_name="controlFunc"))
+                            elif ":=" in stmt_kx.value:
+                                var, val = stmt_kx.value.split(':=', 1)
+                                discrete_sequence_config.actions.append(DeterministicAssignmentActionConfig(variable=var.strip(), value=val.strip()))
+                            else:
+                                print(f"Warning: Unhandled statement in discrete loop body: {stmt_kx.value}")
+                        else:
+                            print(f"Warning: Unhandled node type in discrete loop body: {stmt_kx.node_type}")
+                    loop_execution_config.loop_body.actions.append(discrete_sequence_config)
+
+                # Continuous dynamics part: { stepFunc;@invariant(...) }
+                continuous_hp_kx = loop_body_hp_kx.children[1] # This is an HP node
+                if continuous_hp_kx.node_type == "HP":
+                    step_func_call_kx = next((c for c in continuous_hp_kx.children if c.node_type == "Statement" and c.value == "stepFunc"), None)
+                    step_inv_kx = next((c for c in continuous_hp_kx.children if c.node_type == "Invariant"), None)
+                    if step_func_call_kx:
+                        loop_execution_config.loop_body.actions.append(HybridProgramStepConfig(
+                            hp_name="stepFunc",
+                            invariant_formula=step_inv_kx.value if step_inv_kx and step_inv_kx.value else None
+                        ))
+                    else:
+                        print(f"Warning: Could not find stepFunc call in continuous loop body.")
+                else:
+                    print(f"Warning: Expected HP node for continuous part, got {continuous_hp_kx.node_type}")
+            else:
+                print(f"Warning: Loop body HP node structure unexpected: {loop_body_hp_kx}")
+
+
+        postcondition_kx = next((c for c in problem_block_kx.children if c.node_type == "Postcondition (Q)"), None)
+        if postcondition_kx and postcondition_kx.value:
+            problem_config.postcondition = PostconditionConfig(formula=postcondition_kx.value)
+
+    return gym_config
+
+def _parse_kx_hp_program_fragment_to_action_config(kx_node: ASTNode, choice_level: int) -> ActionType:
+    """
+    Recursively parses a KeYmaera X program fragment (like controlFunc body)
+    into an ActionBlockConfig structure (ChoiceActionConfig or SequenceActionConfig).
+    This function now expects to receive the *already parsed* ASTNodes from KeYmaeraXParser.
+    """
+    if not kx_node:
+        return SequenceActionConfig() # Return an empty sequence if node is empty
+
+    # If the current node is a ChoiceOperator (++)
+    if kx_node.node_type == "ChoiceOperator (++)":
+        choice_block = ChoiceActionConfig(level_name=f"ChoiceLevel_{choice_level}")
+        for choice_kx_branch in kx_node.children:
+            # Each child of ChoiceOperator is a "Choice N" node
+            if choice_kx_branch.node_type.startswith("Choice"):
+                # The content of this specific choice branch is its children, forming a sequence
+                choice_content_sequence = SequenceActionConfig()
+                for sub_node_kx in choice_kx_branch.children:
+                    # Recursively parse the sub-node. It could be another ChoiceOperator, Statement, or Test.
+                    parsed_sub_block = _parse_kx_hp_program_fragment_to_action_config(sub_node_kx, choice_level + 1)
+                    # If the recursive call returns a sequence, extend the current sequence
+                    if isinstance(parsed_sub_block, SequenceActionConfig):
+                        choice_content_sequence.actions.extend(parsed_sub_block.actions)
+                    else:
+                        # Otherwise, add the single action/block returned
+                        choice_content_sequence.actions.append(parsed_sub_block)
+                choice_block.choices.append(choice_content_sequence) # Each choice branch is a sequence of actions
+        return choice_block
+
+    # If the current node is a single Statement or Test
+    elif kx_node.node_type == "Statement":
+        if kx_node.value.endswith(":= *"):
+            var_name = kx_node.value.split(':=')[0].strip()
+            return NondeterministicAssignmentActionConfig(variable=var_name)
+        elif ":=" in kx_node.value:
+            var_name, value = kx_node.value.split(':=', 1)
+            return DeterministicAssignmentActionConfig(variable=var_name.strip(), value=value.strip())
+        else:
+            # For controlFunc, there aren't typically other direct statements, but for robustness
+            # one might add CallHybridProgramConfig if a statement was a direct HP call.
+            # For now, if it's not an assignment, treat it as an unhandled statement in this context.
+            print(f"Warning: Unhandled statement type in controlFunc parsing: {kx_node.value}")
+            return SequenceActionConfig() # Return an empty sequence for unhandled
+
+    elif kx_node.node_type == "Test":
+        return ActionConstraintConfig(formula=kx_node.value)
+
+    # If the current node is not a ChoiceOperator, Statement, or Test,
+    # but it has children, it implies an implicit sequence of its children.
+    # This handles cases where the KeYmaera X parser might group multiple statements
+    # under a generic ASTNode (e.g., the root of controlFunc's body if it's not a direct choice).
+    elif kx_node.children:
+        sequence_block = SequenceActionConfig()
+        for child_kx in kx_node.children:
+            parsed_child_block = _parse_kx_hp_program_fragment_to_action_config(child_kx, choice_level)
+            if isinstance(parsed_child_block, SequenceActionConfig):
+                sequence_block.actions.extend(parsed_child_block.actions)
+            else:
+                sequence_block.actions.append(parsed_child_block)
+        return sequence_block
+
+    return SequenceActionConfig() # Default for unhandled or empty nodes

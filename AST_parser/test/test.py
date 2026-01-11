@@ -1,18 +1,35 @@
 # test.py
 import unittest
 import os
-from pathlib import Path # Import Path from pathlib
-import difflib # Import difflib for detailed comparison
+from pathlib import Path
+import difflib
+import sys # <--- IMPORT sys MODULE HERE
+
+# Define constants for your test directories using pathlib
+# Use Path(__file__).parent to get the directory of the current script.
+# Then navigate relative to that.
+
+# Assuming 'test' directory is a sibling of 'AST_parser' (i.e., one level up from test.py's directory)
+
+# SCRIPT_DIR should be the directory containing test.py
+# Path(__file__) gives the full path to test.py
+# .parent gives the directory of test.py
+SCRIPT_DIR = Path(__file__).parent # Corrected: This will be 'project_root/AST_parser/test/'
+
+# --- FIX FOR IMPORT START ---
+# Add the directory containing 'keymaerax_parser.py' to Python's system path.
+# 'keymaerax_parser.py' is in the parent directory of SCRIPT_DIR.
+# SCRIPT_DIR is 'project_root/AST_parser/test/'
+# SCRIPT_DIR.parent is 'project_root/AST_parser/'
+parser_dir = SCRIPT_DIR.parent
+if str(parser_dir) not in sys.path:
+    sys.path.insert(0, str(parser_dir)) # Insert at the beginning to prioritize it
+# --- FIX FOR IMPORT END ---
 
 # Import your parser from the separate file
 # Make sure 'keymaerax_parser.py' is in the same directory or accessible via PYTHONPATH
 from keymaerax_parser import KeYmaeraXParser
 
-# Define constants for your test directories using pathlib
-# Use Path(__file__).parent to get the directory of the current script.
-# Then navigate relative to that.
-# Assuming 'test' directory is a sibling of 'AST_parser' (i.e., one level up from test.py's directory)
-SCRIPT_DIR = Path(__file__)
 # Assuming your project structure is something like:
 # project_root/
 # ├── AST_parser/
@@ -27,29 +44,32 @@ SCRIPT_DIR = Path(__file__)
 #     │   ├── test2.txt
 #     │   └── test3.txt
 #     └── test.py
-# If 'test.py' is directly in 'project_root', adjust PROJECT_ROOT accordingly.
-# For the structure above, if test.py is in 'test/', then SCRIPT_DIR.parent is 'test/',
-# and SCRIPT_DIR.parent.parent would be 'project_root'.
-# Let's assume 'test.py' is in 'project_root/test/'
-PROJECT_ROOT = SCRIPT_DIR.parent # Go up two levels from test.py to project_root
 
-TEST_DIR = PROJECT_ROOT / "test" / "input"
-TEST_OUTPUT_DIR = PROJECT_ROOT / "test" / "output"
+# Calculate PROJECT_ROOT
+# SCRIPT_DIR is 'project_root/AST_parser/test/'
+# SCRIPT_DIR.parent is 'project_root/AST_parser/'
+# SCRIPT_DIR.parent.parent is 'project_root/'
+PROJECT_ROOT = SCRIPT_DIR.parent.parent # Corrected: Go up two levels from test.py's directory to get to 'project_root'
+
+# Now, define TEST_INPUT_DIR and TEST_OUTPUT_DIR relative to PROJECT_ROOT
+TEST_INPUT_DIR = PROJECT_ROOT / "AST_parser" / "test" / "input" # Corrected path
+TEST_OUTPUT_DIR = PROJECT_ROOT / "AST_parser" / "test" / "output" # Corrected path
 
 class TestKeYmaeraXParser(unittest.TestCase):
 
     def _load_test_case(self, test_name):
         """Loads source code and expected AST from files."""
         # Use the / operator for Path objects to join components
-        source_code_path = TEST_DIR / f"{test_name}.txt"
+        source_code_path = TEST_INPUT_DIR / f"{test_name}.txt"
         expected_output_path = TEST_OUTPUT_DIR / f"{test_name}.txt"
 
         # --- Debugging prints (highly recommended to verify paths) ---
         # You can uncomment these if you are having trouble with file not found errors
         # print(f"\n--- Debugging Paths for '{test_name}.txt' ---")
         # print(f"Script Directory: {SCRIPT_DIR.resolve()}")
+        # print(f"Parser Directory: {parser_dir.resolve()}") # Added for debugging
         # print(f"Project Root (calculated): {PROJECT_ROOT.resolve()}")
-        # print(f"Calculated Input Directory: {TEST_DIR.resolve()}")
+        # print(f"Calculated Input Directory: {TEST_INPUT_DIR.resolve()}")
         # print(f"Calculated Output Directory: {TEST_OUTPUT_DIR.resolve()}")
         # print(f"Attempting to open source file: {source_code_path.resolve()}")
         # print(f"Attempting to open output file: {expected_output_path.resolve()}")
@@ -70,7 +90,7 @@ class TestKeYmaeraXParser(unittest.TestCase):
             # .strip() is important to handle any leading/trailing newlines
             # or whitespace differences that might exist in the file
             expected_ast_str = f.read().strip()
-            
+
         return source_code, expected_ast_str
 
     def _assert_parsed_ast_matches_expected(self, test_name):
@@ -114,7 +134,7 @@ class TestKeYmaeraXParser(unittest.TestCase):
 
     def test_case_1_static_safety(self):
         self._assert_parsed_ast_matches_expected("test1")
-        
+
     def test_case_2_velocity_controlled_passive_safety(self):
         self._assert_parsed_ast_matches_expected("test2")
 
