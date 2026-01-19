@@ -36,6 +36,7 @@ class CarEnv(gym.Env):
             self.kx_predicates[name] = getattr(self, name)
 
         # --- Generated Observation Space ---
+        # Note: Why there is only two variable here
         self.observation_space = spaces.Box(
             low=np.array([self._eval_expr('0.0', {}), self._eval_expr('-10.0', {})], dtype=np.float32),
             high=np.array([self._eval_expr('100.0', {}), self._eval_expr('10.0', {})], dtype=np.float32),
@@ -51,6 +52,7 @@ class CarEnv(gym.Env):
     def _apply_agent_action(self, action):
         # Apply agent's chosen action to the environment state
         # Returns True if action was valid, False otherwise (e.g., violated constraint)
+        # Note: This need to be more 
         self.terminated = False # Reset termination flag for action application
         self.reward = 0.0 # Reset reward for action application
         self.state['a'] = action['assign_a']
@@ -132,6 +134,7 @@ class CarEnv(gym.Env):
     def _ode_event(self, t, y):
         state_dict = {k: v for k, v in zip(self.observation_vars, y)}
         # Event occurs when evolution domain becomes false (crosses 0 from positive)
+        # Note: need to take a look at this 
         return self._eval_expr('(True)', state_dict)
         _ode_event.terminal = True
         _ode_event.direction = -1
