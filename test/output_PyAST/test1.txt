@@ -1,0 +1,79 @@
+[GymEnvironmentConfig](IJRR17_Theorem_1__Static_safety)
+  [DefinitionsConfig]
+    [Constants]:
+          [ConstantDefinition](ep): Type='Real'
+          [ConstantDefinition](b): Type='Real'
+          [ConstantDefinition](A): Type='Real'
+          [ConstantDefinition](W): Type='Real'
+    [Functions]:
+          [FunctionDefinition](stopDist): Returns='Real', Params=(Real v), Body='v^2 / (2*b)'
+          [FunctionDefinition](accelComp): Returns='Real', Params=(Real v), Body='(A/b + 1) * (A/2 * ep^2 + ep*v)'
+          [FunctionDefinition](admissibleSeparation): Returns='Real', Params=(Real v), Body='stopDist(v) + accelComp(v)'
+    [Predicates]:
+          [PredicateDefinition](isWellformedDir): Params=(Real dx, Real dy), Body='dx^2 + dy^2 = 1'
+          [PredicateDefinition](bounds): Params=(), Body='A >= 0
+    & b > 0
+    & ep > 0'
+    [Hybrid Programs]:
+          [HybridProgram](controlFunc)
+            [Body (parsed)]: 'a := -b ++ ?v = 0; a := 0; w := 0 ++ a := A; w := *; ?-W<=w & w<=W; r := *; xo := *; yo := *; ?r!=0 & r*w = v; ? abs(x-xo) > admissibleSeparation(v) | abs(y-yo) > admissibleSeparation(v)'
+            [ChoiceAction](ChoiceLevel_0)
+              [Choice 1]:
+                [SequenceAction]
+                  [DeterministicAssignment]: a := '-b'
+              [Choice 2]:
+                [SequenceAction]
+                  [ActionConstraint]: '?v = 0'
+                  [DeterministicAssignment]: a := '0'
+                  [DeterministicAssignment]: w := '0'
+              [Choice 3]:
+                [SequenceAction]
+                  [DeterministicAssignment]: a := 'A'
+                  [NondeterministicAssignment]: w := *
+                  [ActionConstraint]: '?-W<=w & w<=W'
+                  [NondeterministicAssignment]: r := *
+                  [NondeterministicAssignment]: xo := *
+                  [NondeterministicAssignment]: yo := *
+                  [ActionConstraint]: '?r!=0 & r*w = v'
+                  [ActionConstraint]: '? abs(x-xo) > admissibleSeparation(v)
+        | abs(y-yo) > admissibleSeparation(v)'
+          [HybridProgram](stepFunc)
+            [Body (parsed)]: 'x' = v * dx, y' = v * dy, v' = a, dx' = -w * dy, dy' = w * dx, w' = a/r, t' = 1 & t <= ep & v >= 0'
+            [ODEs]:
+              [ODEConfig(var='x', eq='v * dx')]
+              [ODEConfig(var='y', eq='v * dy')]
+              [ODEConfig(var='v', eq='a')]
+              [ODEConfig(var='dx', eq='-w * dy')]
+              [ODEConfig(var='dy', eq='w * dx')]
+              [ODEConfig(var='w', eq='a/r')]
+              [ODEConfig(var='t', eq='1')]
+            [Evolution Domain]:
+              [Constraint]: 't <= ep'
+              [Constraint]: 'v >= 0'
+  [VariablesConfig]
+    [State Variables]:
+          [VariableDeclaration](x): Type='Real'
+          [VariableDeclaration](y): Type='Real'
+          [VariableDeclaration](v): Type='Real'
+          [VariableDeclaration](a): Type='Real'
+          [VariableDeclaration](dx): Type='Real'
+          [VariableDeclaration](dy): Type='Real'
+          [VariableDeclaration](w): Type='Real'
+          [VariableDeclaration](r): Type='Real'
+          [VariableDeclaration](xo): Type='Real'
+          [VariableDeclaration](yo): Type='Real'
+          [VariableDeclaration](t): Type='Real'
+    [Auxiliary Variables]:
+      (None)
+  [ProblemConfig]
+    [Precondition]: 'assumptions(x, y, v, dx, dy, xo, yo)'
+    [LoopExecution]
+      [Iterations]: 'inf'
+      [LoopInvariant]: 'loopinv(x, y, v, dx, dy, xo, yo)'
+      [LoopBody]:
+        [SequenceAction]
+          [SequenceAction]
+            [CallHybridProgram]: controlFunc
+            [DeterministicAssignment]: t := '0'
+          [HybridProgramStep]: stepFunc@invariant(t>=0, isWellformedDir(dx, dy))
+    Postcondition(formula='(x - xo)^2 + (y - yo)^2 > 0')
