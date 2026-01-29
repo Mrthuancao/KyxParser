@@ -75,6 +75,7 @@ def generate_gym_environment_code(config: GymEnvironmentConfig) -> str:
     # --- Generate Constants, Functions, Predicates ---
     constants_init_code_lines = []
     for const in config.definitions.constants:
+        #Problematic line: default_value could break the env: ep = 0
         default_val = '0.0' if const.type == 'Real' else 'False'
         constants_init_code_lines.append(f"self.constants['{const.name}'] = {const.value if const.value is not None else default_val}")
     # Pre-indent this block

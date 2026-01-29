@@ -771,7 +771,6 @@ def convert_keymaerax_ast_to_intermediate_pyast(kx_ast_root: ASTNode) -> GymEnvi
         vars_config = gym_config.variables
         for var_node_kx in vars_block_kx.children:
             if var_node_kx.node_type == "Variable":
-                # THIS IS THE LINE THAT FIXES THE ATTRIBUTEERROR:
                 vars_config.state_variables.append(VariableConfig(name=var_node_kx.value, type=var_node_kx.var_type))
 
     # Process Problem Block

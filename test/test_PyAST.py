@@ -130,11 +130,11 @@ class TestPyASTGeneration(unittest.TestCase):
         self._assert_generated_pyast_matches_expected("test1")
 
     # You can add more test cases here, e.g.:
-    # def test_case_2_velocity_controlled_pyast(self):
-    #     self._assert_generated_pyast_matches_expected("test2")
+    def test_case_2_velocity_controlled_pyast(self):
+        self._assert_generated_pyast_matches_expected("test2")
 
-    # def test_case_3_imperfect_trajectories_pyast(self):
-    #     self._assert_generated_pyast_matches_expected("test3")
+    def test_case_3_imperfect_trajectories_pyast(self):
+        self._assert_generated_pyast_matches_expected("test3")
 
 
 if __name__ == '__main__':

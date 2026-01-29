@@ -8,7 +8,7 @@ import textwrap
 import re # For regex replacements in _evaluate_expression
 from ast_config import (ChoiceActionConfig, SequenceActionConfig, DeterministicAssignmentActionConfig, NondeterministicAssignmentActionConfig, ActionConstraintConfig, CallHybridProgramConfig) # Import AST classes
 
-class IJRR17_Theorem_1__Static_safety(gym.Env):
+class KeYmaeraX_RL_Environment(gym.Env):
     metadata = {"render_modes": ["human"], "render_fps": 30}
 
     def __init__(self, render_mode=None):
@@ -22,22 +22,24 @@ class IJRR17_Theorem_1__Static_safety(gym.Env):
 
         # Constants
         self.constants['ep'] = 0.0
-        self.constants['b'] = 0.0
-        self.constants['A'] = 0.0
         self.constants['W'] = 0.0
+        self.constants['V'] = 0.0
 
         # Functions (lambdas for easy evaluation)
-        self.functions['stopDist'] = lambda v: self._evaluate_expression('v^2 / (2*b)', {'v': v})
-        self.functions['accelComp'] = lambda v: self._evaluate_expression('(A/b + 1) * (A/2 * ep^2 + ep*v)', {'v': v})
+        self.functions['stopDist'] = lambda v: self._evaluate_expression('0', {'v': v})
+        self.functions['accelComp'] = lambda v: self._evaluate_expression('ep*(v+V)', {'v': v})
         self.functions['admissibleSeparation'] = lambda v: self._evaluate_expression('stopDist(v) + accelComp(v)', {'v': v})
 
         # Predicates (lambdas for easy evaluation)
         self.predicates['isWellformedDir'] = lambda dx, dy: self._evaluate_expression('dx^2 + dy^2 = 1', {'dx': dx, 'dy': dy})
-        self.predicates['bounds'] = lambda : self._evaluate_expression('A >= 0     & b > 0     & ep > 0', {})
+        self.predicates['bounds'] = lambda : self._evaluate_expression('ep > 0                                                                                                               & V >= 0', {})
+        self.predicates['initialState'] = lambda x, y, v, dx, dy, xo, yo: self._evaluate_expression('v = 0     & (x-xo)^2 + (y-yo)^2 > 0     & isWellformedDir(dx,dy)', {'x': x, 'y': y, 'v': v, 'dx': dx, 'dy': dy, 'xo': xo, 'yo': yo})
+        self.predicates['assumptions'] = lambda x, y, v, dx, dy, xo, yo: self._evaluate_expression('bounds() & initialState(x,y,v,dx,dy,xo,yo)', {'x': x, 'y': y, 'v': v, 'dx': dx, 'dy': dy, 'xo': xo, 'yo': yo})
+        self.predicates['loopinv'] = lambda x, y, v, dx, dy, xo, yo: self._evaluate_expression('v >= 0     & isWellformedDir(dx,dy)     & (v>0 -> abs(x-xo) > stopDist(v) | abs(y-yo) > stopDist(v))', {'x': x, 'y': y, 'v': v, 'dx': dx, 'dy': dy, 'xo': xo, 'yo': yo})
 
         # --- State Variables ---
         # Mapping of state variable names to their index in the observation array
-        self._state_keys = ['x', 'y', 'v', 'a', 'dx', 'dy', 'w', 'r', 'xo', 'yo', 't']
+        self._state_keys = ['x', 'y', 'v', 'a', 'dx', 'dy', 'w', 'r', 'xo', 'yo', 'vxo', 'vyo', 't']
         # Current state values (dictionary for easy access by name)
         self.state = {key: 0.0 for key in self._state_keys} 
         # Initial state values are set in reset()
@@ -52,38 +54,48 @@ class IJRR17_Theorem_1__Static_safety(gym.Env):
         # --- Action Space (from controlFunc) ---
         # The action space is a Dict to handle choices and nondeterministic assignments.
         self.action_space = spaces.Dict({
-                'choice_ChoiceLevel_0': spaces.Discrete(3),
+                'choice_ChoiceLevel_0': spaces.Discrete(2),
+                'assign_vxo': spaces.Box(low=-np.inf, high=np.inf, shape=(), dtype=np.float32),
+                'assign_vyo': spaces.Box(low=-np.inf, high=np.inf, shape=(), dtype=np.float32),
+                'choice_ChoiceLevel_1': spaces.Discrete(2),
+                'assign_v': spaces.Box(low=-np.inf, high=np.inf, shape=(), dtype=np.float32),
                 'assign_w': spaces.Box(low=-np.inf, high=np.inf, shape=(), dtype=np.float32),
                 'assign_r': spaces.Box(low=-np.inf, high=np.inf, shape=(), dtype=np.float32),
                 'assign_xo': spaces.Box(low=-np.inf, high=np.inf, shape=(), dtype=np.float32),
                 'assign_yo': spaces.Box(low=-np.inf, high=np.inf, shape=(), dtype=np.float32),
                     })
-        self._action_space_keys = ['choice_ChoiceLevel_0', 'assign_w', 'assign_r', 'assign_xo', 'assign_yo']
+        self._action_space_keys = ['choice_ChoiceLevel_0', 'assign_vxo', 'assign_vyo', 'choice_ChoiceLevel_1', 'assign_v', 'assign_w', 'assign_r', 'assign_xo', 'assign_yo']
         self._control_func_action_config = ChoiceActionConfig(level_name='ChoiceLevel_0', choices=[
             SequenceActionConfig(actions=[
-                DeterministicAssignmentActionConfig(variable='a', value='-b')
+                NondeterministicAssignmentActionConfig(variable='vxo'),
+                NondeterministicAssignmentActionConfig(variable='vyo'),
+                ActionConstraintConfig(formula='?vxo^2+vyo^2<=V^2')
             ]),
             SequenceActionConfig(actions=[
-                ActionConstraintConfig(formula='?v = 0'),
-                DeterministicAssignmentActionConfig(variable='a', value='0'),
-                DeterministicAssignmentActionConfig(variable='w', value='0')
-            ]),
-            SequenceActionConfig(actions=[
-                DeterministicAssignmentActionConfig(variable='a', value='A'),
-                NondeterministicAssignmentActionConfig(variable='w'),
-                ActionConstraintConfig(formula='?-W<=w & w<=W'),
-                NondeterministicAssignmentActionConfig(variable='r'),
-                NondeterministicAssignmentActionConfig(variable='xo'),
-                NondeterministicAssignmentActionConfig(variable='yo'),
-                ActionConstraintConfig(formula='?r!=0 & r*w = v'),
-                ActionConstraintConfig(formula='? abs(x-xo) > admissibleSeparation(v)         | abs(y-yo) > admissibleSeparation(v)')
+                ChoiceActionConfig(level_name='ChoiceLevel_1', choices=[
+                    SequenceActionConfig(actions=[
+                        DeterministicAssignmentActionConfig(variable='v', value='0'),
+                        DeterministicAssignmentActionConfig(variable='w', value='0')
+                    ]),
+                    SequenceActionConfig(actions=[
+                        NondeterministicAssignmentActionConfig(variable='v'),
+                        ActionConstraintConfig(formula='?0<=v'),
+                        NondeterministicAssignmentActionConfig(variable='w'),
+                        ActionConstraintConfig(formula='?-W<=w & w<=W'),
+                        NondeterministicAssignmentActionConfig(variable='r'),
+                        NondeterministicAssignmentActionConfig(variable='xo'),
+                        NondeterministicAssignmentActionConfig(variable='yo'),
+                        ActionConstraintConfig(formula='?r!=0 & r*w = v'),
+                        ActionConstraintConfig(formula='? abs(x-xo) > admissibleSeparation(v)         | abs(y-yo) > admissibleSeparation(v)')
+                    ])
+                ])
             ])
         ]) # Stored for step logic
 
         # --- ODE Solver Setup (from stepFunc) ---
         # Mapping from state variable names to their index in the ODE solver's y array
-        self._ode_state_map = {'x': 0, 'y': 1, 'v': 2, 'a': 3, 'dx': 4, 'dy': 5, 'w': 6, 'r': 7, 'xo': 8, 'yo': 9, 't': 10}
-        self._ode_state_idx_map = {0: 'x', 1: 'y', 2: 'v', 3: 'a', 4: 'dx', 5: 'dy', 6: 'w', 7: 'r', 8: 'xo', 9: 'yo', 10: 't'} # Map index to name
+        self._ode_state_map = {'x': 0, 'y': 1, 'v': 2, 'a': 3, 'dx': 4, 'dy': 5, 'w': 6, 'r': 7, 'xo': 8, 'yo': 9, 'vxo': 10, 'vyo': 11, 't': 12}
+        self._ode_state_idx_map = {0: 'x', 1: 'y', 2: 'v', 3: 'a', 4: 'dx', 5: 'dy', 6: 'w', 7: 'r', 8: 'xo', 9: 'yo', 10: 'vxo', 11: 'vyo', 12: 't'} # Map index to name
 
         self._ode_func_str = '''
             def ode_func(t_val, y_array):
@@ -98,7 +110,9 @@ class IJRR17_Theorem_1__Static_safety(gym.Env):
                 r = y_array[7]
                 xo = y_array[8]
                 yo = y_array[9]
-                t = y_array[10]
+                vxo = y_array[10]
+                vyo = y_array[11]
+                t = y_array[12]
 
                 # Ensure self.state is updated with current ODE values for expression evaluation
                 for i, var_name in self._ode_state_idx_map.items():
@@ -108,14 +122,16 @@ class IJRR17_Theorem_1__Static_safety(gym.Env):
                 dydt = [
                     self._evaluate_expression('v * dx'), # dx/dt
                     self._evaluate_expression('v * dy'), # dy/dt
-                    self._evaluate_expression('a'), # dv/dt
+                    0.0, # dv/dt
                     0.0, # da/dt
                     self._evaluate_expression('-w * dy'), # ddx/dt
                     self._evaluate_expression('w * dx'), # ddy/dt
-                    self._evaluate_expression('a/r'), # dw/dt
+                    0.0, # dw/dt
                     0.0, # dr/dt
-                    0.0, # dxo/dt
-                    0.0, # dyo/dt
+                    self._evaluate_expression('vxo'), # dxo/dt
+                    self._evaluate_expression('vyo'), # dyo/dt
+                    0.0, # dvxo/dt
+                    0.0, # dvyo/dt
                     self._evaluate_expression('1'), # dt/dt
                 ]
                 return dydt
@@ -124,7 +140,7 @@ class IJRR17_Theorem_1__Static_safety(gym.Env):
             def event_t_max(t_val, y_array):
                 # Event: t exceeds ep
                 # Returns 0 when t == ep
-                return self.constants['ep'] - y_array[10]
+                return self.constants['ep'] - y_array[12]
             event_t_max.terminal = True
             event_t_max.direction = -1 # Trigger when ep - t goes from positive to negative (t > ep)
 
@@ -309,6 +325,8 @@ class IJRR17_Theorem_1__Static_safety(gym.Env):
         self.state['r'] = 1.0
         self.state['xo'] = 5.0
         self.state['yo'] = 0.0
+        self.state['vxo'] = 0.0
+        self.state['vyo'] = 0.0
         self.state['t'] = 0.0
 
         # Ensure dx, dy represent a unit vector initially
@@ -403,7 +421,7 @@ class IJRR17_Theorem_1__Static_safety(gym.Env):
         # (x - xo)^2 + (y - yo)^2 > 0
         # This means the robot must NOT be at the obstacle's position.
         # If it becomes <= 0, safety is violated.
-        postcondition_satisfied = self._evaluate_expression('(x - xo)^2 + (y - yo)^2 > 0')
+        postcondition_satisfied = self._evaluate_expression('(v>0 -> (x - xo)^2 + (y - yo)^2 > 0)')
         if not postcondition_satisfied:
             reward -= 100.0 # Safety violation
             terminated = True
