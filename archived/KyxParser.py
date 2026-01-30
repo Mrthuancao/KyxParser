@@ -1,5 +1,5 @@
 import re
-from declaration import VariableDeclaration, HybridProgramDeclaration, PredicateDeclaration
+from archived.declaration import VariableDeclaration, HybridProgramDeclaration, PredicateDeclaration
 
 class KyxParser:
     def __init__(self):
