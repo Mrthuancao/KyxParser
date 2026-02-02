@@ -3,7 +3,7 @@
 from __future__ import annotations
 import re
 import logging # Import the logging module
-from ast_config import *
+from ast_config import * # Import ast_config and its helper functions
 
 # Configure logging (you might want to customize this further in a real application)
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s') # Changed to INFO for less verbose default
@@ -38,7 +38,7 @@ class Definition(ASTNode):
         super().__init__("Definition", name)
         self.name = name
         self.definition_type = definition_type
-        self.definition_value = value
+        self.definition_value = value # Stores the full, raw value
         self.comment = comment
 
     def __repr__(self, level=0):
@@ -46,7 +46,7 @@ class Definition(ASTNode):
 
         value_str = ""
         if self.definition_value is not None:
-            # Clean up whitespace
+            # Clean up whitespace for display in KeYmaeraX AST
             cleaned_value = ' '.join(self.definition_value.split())
 
             # Truncate only if very long, otherwise display full value
@@ -72,8 +72,7 @@ class HybridProgram(Definition):
     def __init__(self, name, body, parser_ref=None): # Added parser_ref
         super().__init__(name, "HP", value=body)
         self.name = name # Store name for specific parsing logic
-        self.body = body
-        # self._split_util = None # No longer needed here as _parse_program_fragment is moved
+        self.body = body # Stores the raw body string
         self._parser_ref = parser_ref # Store reference to the parser instance
 
     def _parse_hp_structure(self):
@@ -112,8 +111,6 @@ class HybridProgram(Definition):
                 if not part: continue
 
                 # Check for evolution domain constraints (using &)
-                # This split needs to be careful, as & might be inside a formula
-                # For simplicity, if & is at brace_level 0, split it.
                 sub_parts = split_by_operator(part, '&')
                 logging.debug(f"stepFunc sub-parts for '{part}' after splitting by '&': {sub_parts}")
 
@@ -349,10 +346,23 @@ class KeYmaeraXParser:
         return self.ast_root
 
     def _parse_theorem_name(self):
+        # First, try to match the 'ArchiveEntry' format
+        match = re.search(r'ArchiveEntry\s+"(.*?)"', self.source_code, re.DOTALL)
+        if match:
+            theorem_name = match.group(1)
+            self.ast_root.add_child(ASTNode("TheoremName", theorem_name))
+            logging.debug(f"Theorem name found from ArchiveEntry: '{theorem_name}'")
+            return
+
+        # If ArchiveEntry not found, try the 'Theorem' format (for backward compatibility or other files)
         match = re.search(r'Theorem\s+"(.*?)"', self.source_code, re.DOTALL)
         if match:
-            self.ast_root.add_child(ASTNode("TheoremName", match.group(1)))
-            logging.debug(f"Theorem name found: '{match.group(1)}'")
+            theorem_name = match.group(1)
+            self.ast_root.add_child(ASTNode("TheoremName", theorem_name))
+            logging.debug(f"Theorem name found from Theorem: '{theorem_name}'")
+            return
+
+        logging.debug("No Theorem name (neither ArchiveEntry nor Theorem) found in the source code.")
 
     def _extract_block(self, keyword):
         # Extracts content between 'Keyword' and 'End.' or the next major keyword block
@@ -459,7 +469,8 @@ class KeYmaeraXParser:
                 value = def_match.group(4).strip()
                 logging.debug(f"Found Real/Bool definition with value: Type='{def_type}', Name='{name}', Value='{value}'")
 
-                if value.startswith('(') and value.endswith(')'):
+                # FIX: Conditionally remove outer parentheses for Bool types only
+                if def_type == "Bool" and value.startswith('(') and value.endswith(')'):
                     value = value[1:-1].strip()
 
                 def_node = Definition(name, def_type, value=value)
@@ -542,8 +553,9 @@ class KeYmaeraXParser:
 
         if fragment_content:
             if fragment_content.startswith('?'):
-                parent_node.add_child(ASTNode("Test", value=fragment_content))
-                logging.debug(f"Added Test statement: '{fragment_content}'")
+                # FIX: Remove leading '?' for ActionConstraintConfig
+                parent_node.add_child(ASTNode("Test", value=fragment_content[1:]))
+                logging.debug(f"Added Test statement: '{fragment_content[1:]}'")
             else:
                 parent_node.add_child(ASTNode("Statement", value=fragment_content))
                 logging.debug(f"Added Statement: '{fragment_content}'")
@@ -562,7 +574,8 @@ class KeYmaeraXParser:
         logging.debug("Created ProblemStatement ASTNode.")
 
         implication_match = re.search(
-            r'([\s\S]+?)\s*->\s*\[([\s\S]+?)\]\s*([\s\S]+)', # Corrected regex for [HP]
+            # FIX: Escape literal square brackets [ and ]
+            r'([\s\S]+?)\s*->\s*\[([\s\S]+?)\]\s*([\s\S]+)',
             problem_block,
             re.DOTALL
         )
@@ -580,7 +593,8 @@ class KeYmaeraXParser:
             problem_node.add_child(ASTNode("Precondition (P)", precondition_raw))
 
             loop_match = re.search(
-                r"(\{[\s\S]*?\})\*@invariant\(([\s\S]*?)\)", # Corrected regex for invariant closing paren
+                # FIX: Use greedy match for invariant to capture full content
+                r"(\{[\s\S]*?\})\*@invariant\(([\s\S]*)\)",
                 program_raw,
                 re.DOTALL
             )
@@ -689,6 +703,7 @@ def convert_keymaerax_ast_to_intermediate_pyast(kx_ast_root: ASTNode) -> GymEnvi
     env_name = "KeYmaeraX_RL_Environment" # Default name
     theorem_name_node = next((c for c in kx_ast_root.children if c.node_type == "TheoremName"), None)
     if theorem_name_node and theorem_name_node.value:
+        # The replacement logic here correctly handles the string from ArchiveEntry
         env_name = theorem_name_node.value.replace(' ', '_').replace(':', '_').replace('"', '').replace('/', '_').replace('.', '_')
         logging.debug(f"Set environment name to '{env_name}' from theorem name.")
 
@@ -780,7 +795,8 @@ def convert_keymaerax_ast_to_intermediate_pyast(kx_ast_root: ASTNode) -> GymEnvi
                         # For now, we'll keep it as None and let the generator use a default.
                         
                         evolution_domain = EvolutionDomainConfig(constraints=evolution_domain_constraints) if evolution_domain_constraints else None
-                        step_func_config = StepFuncConfig(name=def_node_kx.name, odes=odes, evolution_domain=evolution_domain, duration=duration_expr)
+                        # Pass raw_body_snippet to StepFuncConfig
+                        step_func_config = StepFuncConfig(name=def_node_kx.name, odes=odes, evolution_domain=evolution_domain, duration=duration_expr, raw_body_snippet=def_node_kx.body)
                         definitions_config.hybrid_programs.append(step_func_config)
                         logging.debug("Appended StepFuncConfig to hybrid_programs.")
                     else:
@@ -908,15 +924,22 @@ def _parse_kx_hp_program_fragment_to_action_config(kx_node: ASTNode, choice_leve
         logging.debug(f"Creating ChoiceActionConfig for ChoiceOperator (++) at level {choice_level}.")
         for choice_kx_branch in kx_node.children:
             if choice_kx_branch.node_type.startswith("Choice"):
-                choice_content_sequence = SequenceActionConfig()
-                logging.debug(f"Processing choice branch: {choice_kx_branch.node_type}")
-                for sub_node_kx in choice_kx_branch.children:
-                    parsed_sub_block = _parse_kx_hp_program_fragment_to_action_config(sub_node_kx, choice_level + 1)
-                    if isinstance(parsed_sub_block, SequenceActionConfig):
-                        choice_content_sequence.actions.extend(parsed_sub_block.actions)
-                    else:
-                        choice_content_sequence.actions.append(parsed_sub_block)
-                choice_block.choices.append(choice_content_sequence)
+                # FIX: Handle nested ChoiceOperator directly without wrapping in SequenceAction
+                if len(choice_kx_branch.children) == 1 and choice_kx_branch.children[0].node_type == "ChoiceOperator (++)":
+                    parsed_nested_choice = _parse_kx_hp_program_fragment_to_action_config(
+                        choice_kx_branch.children[0], choice_level + 1
+                    )
+                    choice_block.choices.append(parsed_nested_choice)
+                else:
+                    choice_content_sequence = SequenceActionConfig()
+                    logging.debug(f"Processing choice branch: {choice_kx_branch.node_type}")
+                    for sub_node_kx in choice_kx_branch.children:
+                        parsed_sub_block = _parse_kx_hp_program_fragment_to_action_config(sub_node_kx, choice_level + 1)
+                        if isinstance(parsed_sub_block, SequenceActionConfig):
+                            choice_content_sequence.actions.extend(parsed_sub_block.actions)
+                        else:
+                            choice_content_sequence.actions.append(parsed_sub_block)
+                    choice_block.choices.append(choice_content_sequence)
         return choice_block
 
     elif kx_node.node_type == "Statement":

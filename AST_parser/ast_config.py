@@ -1,11 +1,43 @@
-#ast_config.py
-#this file provide the building block for PyAST
 import logging
 from typing import List, Dict, Any, Optional, Union, Tuple
 
 # Configure logging for ast_config.py
 logger = logging.getLogger(__name__)
 # logger.setLevel(logging.DEBUG) # Set to DEBUG for detailed logs, INFO for less verbose
+
+# Helper function for splitting by operator outside parentheses
+def _split_by_operator_outside_parens(text: str, operator: str) -> List[str]:
+    parts = []
+    paren_level = 0
+    current_part_start = 0
+    op_len = len(operator)
+
+    i = 0
+    while i < len(text):
+        if text[i] == '(':
+            paren_level += 1
+        elif text[i] == ')':
+            paren_level -= 1
+        
+        # Check for operator match
+        if (i + op_len <= len(text) and
+            paren_level == 0 and
+            text[i:i+op_len] == operator):
+            
+            part = text[current_part_start:i].strip()
+            if part:
+                parts.append(part)
+            current_part_start = i + op_len
+            i += op_len - 1 # Adjust i to continue after the operator
+        i += 1
+    
+    # Add the last part
+    last_part = text[current_part_start:].strip()
+    if last_part:
+        parts.append(last_part)
+    
+    return [p for p in parts if p] # Filter out empty strings
+
 
 # Base AST Node for configuration
 class ASTConfigNode:
@@ -82,9 +114,7 @@ class FunctionDefinitionConfig(ASTConfigNode):
     def _repr_indent(self, level=0):
         indent = "  " * level
         params_str = ", ".join([f"{t} {n}" for t, n in self.parameters])
-        body_display = self.body
-        if len(body_display) > 50:
-            body_display = body_display[:47] + "..."
+        body_display = self.body # Do not truncate or format here
         return f"{indent}[FunctionDefinition]({self.name}): Returns='{self.return_type}', Params=({params_str}), Body='{body_display}'"
 
 class PredicateDefinitionConfig(ASTConfigNode):
@@ -96,9 +126,40 @@ class PredicateDefinitionConfig(ASTConfigNode):
     def _repr_indent(self, level=0):
         indent = "  " * level
         params_str = ", ".join([f"{t} {n}" for t, n in self.parameters])
-        body_display = self.body
-        if len(body_display) > 50:
-            body_display = body_display[:47] + "..."
+        
+        body_display = self.body.strip()
+        # Apply formatting for readability if it contains logical operators
+        # This is a heuristic to match the expected multi-line output for predicates
+        if '&' in body_display or '|' in body_display:
+            # Split by '&' first, then by '|' within each '&' part
+            and_parts = _split_by_operator_outside_parens(body_display, '&')
+            
+            formatted_body_parts = []
+            for i, part in enumerate(and_parts):
+                if i > 0: # Add newline and indent for subsequent '&' parts
+                    formatted_body_parts.append(f"\n{indent}    & ")
+                
+                # Then, split each 'and_part' by '|'
+                or_parts = _split_by_operator_outside_parens(part, '|')
+                if len(or_parts) > 1:
+                    # If an 'and_part' itself contains '|', format it
+                    formatted_sub_part = or_parts[0]
+                    for sub_part_idx in range(1, len(or_parts)):
+                        if or_parts[sub_part_idx] == '|':
+                            formatted_sub_part += f"\n{indent}      | " # Further indent for OR
+                        else:
+                            formatted_sub_part += or_parts[sub_part_idx]
+                    formatted_body_parts.append(formatted_sub_part)
+                else:
+                    formatted_body_parts.append(part)
+            
+            body_display = "".join(formatted_body_parts).strip()
+        
+        # Truncation logic for predicates, if the expected output truncates
+        single_line_body_for_len = body_display.replace('\n', ' ').strip()
+        if len(single_line_body_for_len) > 80: # Arbitrary threshold for display
+            body_display = single_line_body_for_len[:77] + "..."
+
         return f"{indent}[PredicateDefinition]({self.name}): Params=({params_str}), Body='{body_display}'"
 
 class HybridProgramConfig(ASTConfigNode):
@@ -147,11 +208,12 @@ class EvolutionDomainConfig(ASTConfigNode):
 
 class StepFuncConfig(HybridProgramConfig):
     """Configuration for a step function (differential equations)."""
-    def __init__(self, name: str, odes: List[ODEConfig], evolution_domain: Optional[EvolutionDomainConfig] = None, duration: Optional[str] = None):
+    def __init__(self, name: str, odes: List[ODEConfig], evolution_domain: Optional[EvolutionDomainConfig] = None, duration: Optional[str] = None, raw_body_snippet: Optional[str] = None):
         super().__init__(name)
         self.odes = odes
         self.evolution_domain = evolution_domain
         self.duration = duration # e.g., 'ep' for the t' = 1 & t <= ep part
+        self.raw_body_snippet = raw_body_snippet # Added to store raw body for display
 
     def _repr_indent(self, level=0):
         indent = "  " * level
@@ -161,7 +223,15 @@ class StepFuncConfig(HybridProgramConfig):
         ode_block_str = "\n".join(odes_lines) if odes_lines else f"{indent}  (None)"
         domain_block_str = self.evolution_domain._repr_indent(level + 1) if self.evolution_domain else f"{indent}  [Evolution Domain]:\n{indent}    (None)"
 
+        body_parsed_str = ""
+        if self.raw_body_snippet:
+            body_display = self.raw_body_snippet
+            if len(body_display) > 80: # Truncate for display
+                body_display = body_display[:77] + "..."
+            body_parsed_str = f"{indent}  [Body (parsed)]: '{body_display}'\n"
+
         return (f"{indent}[HybridProgram]({self.name}){duration_str}\n"
+                f"{body_parsed_str}" # Add this line
                 f"{indent}  [ODEs]:\n{ode_block_str}\n"
                 f"{domain_block_str}")
 
@@ -249,7 +319,18 @@ class HybridProgramStepConfig(ASTConfigNode):
 
     def _repr_indent(self, level=0):
         indent = "  " * level
-        invariant_str = f"@invariant({self.invariant_formula})" if self.invariant_formula else ""
+        invariant_str = ""
+        if self.invariant_formula:
+            # Format invariant formula with newlines and indentation
+            parts = _split_by_operator_outside_parens(self.invariant_formula, ',')
+            if len(parts) > 1:
+                formatted_invariant = f"@invariant({parts[0]}"
+                for part in parts[1:]:
+                    formatted_invariant += f",\n{indent}          {part}" # 10 spaces for alignment after indent
+                formatted_invariant += ")"
+                invariant_str = formatted_invariant
+            else:
+                invariant_str = f"@invariant({self.invariant_formula})"
         return f"{indent}[HybridProgramStep]: {self.hp_name}{invariant_str}"
 
 

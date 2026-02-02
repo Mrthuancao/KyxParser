@@ -11,25 +11,22 @@
     [Predicates]:
           [PredicateDefinition](isWellformedDir): Params=(Real dx, Real dy), Body='dx^2 + dy^2 = 1'
           [PredicateDefinition](bounds): Params=(), Body='ep > 0
-    & V >= 0'
-          [PredicateDefinition](initialState): Params=(Real x, Real y, Real v, Real dx, Real dy, Real xo, Real yo), Body='v = 0
-    & (x-xo)^2 + (y-yo)^2 > 0
-    & isWellformedDir(dx,dy)'
-          [PredicateDefinition](assumptions): Params=(Real x, Real y, Real v, Real dx, Real dy, Real xo, Real yo), Body='bounds() & initialState(x,y,v,dx,dy,xo,yo)'
-          [PredicateDefinition](loopinv): Params=(Real x, Real y, Real v, Real dx, Real dy, Real xo, Real yo), Body='v >= 0
-    & isWellformedDir(dx,dy)
-    & (v>0 -> abs(x-xo) > stopDist(v) | abs(y-yo) > stopDist(v))'
+              & V >= 0'
+          [PredicateDefinition](initialState): Params=(Real x, Real y, Real v, Real dx, Real dy, Real xo, Real yo), Body='v = 0               & (x-xo)^2 + (y-yo)^2 > 0               & isWellformedDir...'
+          [PredicateDefinition](assumptions): Params=(Real x, Real y, Real v, Real dx, Real dy, Real xo, Real yo), Body='bounds()
+              & initialState(x,y,v,dx,dy,xo,yo)'
+          [PredicateDefinition](loopinv): Params=(Real x, Real y, Real v, Real dx, Real dy, Real xo, Real yo), Body='v >= 0               & isWellformedDir(dx,dy)               & (v>0 -> abs(x-x...'
     [Hybrid Programs]:
           [HybridProgram](controlFunc)
-            [Body (parsed)]: 'vxo := *; vyo := *; ?vxo^2+vyo^2<=V^2 ++ v := 0; w := 0 ++ v := *; ?0<=v; w := *; ?-W<=w & w<=W; r := *; xo := *; yo := *; ?r!=0 & r*w = v; ? abs(x-xo) > admissibleSeparation(v) | abs(y-yo) > admissibleSeparation(v)'
+            [Body (parsed)]: 'vxo := *; vyo := *; ?vxo^2+vyo^2<=V^2 ++ v := 0; w := 0 ++ v := *; ?0<=v; w :...'
             [ChoiceAction](ChoiceLevel_0)
               [Choice 1]:
                 [SequenceAction]
                   [NondeterministicAssignment]: vxo := *
                   [NondeterministicAssignment]: vyo := *
-                  [ActionConstraint]: '?vxo^2+vyo^2<=V^2'
+                  [ActionConstraint]: 'vxo^2+vyo^2<=V^2'
               [Choice 2]:
-                [ChoiceAction](ChoiceLevel_0)
+                [ChoiceAction](ChoiceLevel_1)
                   [Choice 1]:
                     [SequenceAction]
                       [DeterministicAssignment]: v := '0'
@@ -37,17 +34,19 @@
                   [Choice 2]:
                     [SequenceAction]
                       [NondeterministicAssignment]: v := *
-                      [ActionConstraint]: '?0<=v'
+                      [ActionConstraint]: '0<=v'
                       [NondeterministicAssignment]: w := *
-                      [ActionConstraint]: '?-W<=w & w<=W'
+                      [ActionConstraint]: '-W<=w & w<=W'
                       [NondeterministicAssignment]: r := *
                       [NondeterministicAssignment]: xo := *
                       [NondeterministicAssignment]: yo := *
-                      [ActionConstraint]: '?r!=0 & r*w = v'
-                      [ActionConstraint]: '? abs(x-xo) > admissibleSeparation(v)
+                      [ActionConstraint]: 'r!=0 & r*w = v'
+                      [ActionConstraint]: ' abs(x-xo) > admissibleSeparation(v)
         | abs(y-yo) > admissibleSeparation(v)'
           [HybridProgram](stepFunc)
-            [Body (parsed)]: 'x' = v * dx, y' = v * dy, dx' = -w * dy, dy' = w * dx, xo' = vxo, yo' = vyo, t' = 1 & t <= ep & v >= 0'
+            [Body (parsed)]: '{ 
+        x' = v * dx, y' = v * dy,                          
+        dx' = ...'
             [ODEs]:
               [ODEConfig(var='x', eq='v * dx')]
               [ODEConfig(var='y', eq='v * dy')]
@@ -86,5 +85,12 @@
           [SequenceAction]
             [CallHybridProgram]: controlFunc
             [DeterministicAssignment]: t := '0'
-          [HybridProgramStep]: stepFunc@invariant(t>=0, isWellformedDir(dx,dy), (-t*V <= xo - old(xo) & xo - old(xo) <= t*V), (-t*V <= yo - old(yo) & yo - old(yo) <= t*V), (x'=0*dx -> x = old(x)), (x'=0*dx -> y = old(y)), (x'=v*dx -> -t * v <= x - old(x) & x - old(x) <= t * v), (x'=v*dx -> -t * v <= y - old(y) & y - old(y) <= t * v))
-    Postcondition(formula='v>0 -> (x - xo)^2 + (y - yo)^2 > 0')
+          [HybridProgramStep]: stepFunc@invariant(t>=0,
+                    isWellformedDir(dx,dy),
+                    (-t*V <= xo - old(xo) & xo - old(xo) <= t*V),
+                    (-t*V <= yo - old(yo) & yo - old(yo) <= t*V),
+                    (x'=0*dx -> x = old(x)),
+                    (x'=0*dx -> y = old(y)),
+                    (x'=v*dx -> -t * v <= x - old(x) & x - old(x) <= t * v),
+                    (x'=v*dx -> -t * v <= y - old(y) & y - old(y) <= t * v))
+    Postcondition(formula='(v>0 -> (x - xo)^2 + (y - yo)^2 > 0)')

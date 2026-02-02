@@ -103,8 +103,8 @@ class TestKeYmaeraXParser(unittest.TestCase):
         # CORRECTED: Use the __repr__() of the KeYmaeraX AST directly for comparison
         actual_ast_str = kx_ast_root.__repr__().strip()
 
-        # print("\n--- Actual Output ---")
-        # print(actual_ast_str)
+        print("\n--- Actual Output ---")
+        print(actual_ast_str)
         # print("\n--- Expected Output ---")
         # print(expected_ast_str)
         # print("---------------------\n")
