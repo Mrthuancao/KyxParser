@@ -1,0 +1,604 @@
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.distributions import Normal, Categorical
+import numpy as np
+import random
+from collections import deque
+import sys
+import os
+import time
+import matplotlib.pyplot as plt
+
+# Add project root and AST_parser to sys.path for module imports
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+    print(f"Added project root: {project_root} to sys.path.")
+
+ast_parser_path = os.path.join(project_root, 'AST_parser')
+if ast_parser_path not in sys.path:
+    sys.path.insert(0, ast_parser_path)
+    print(f"Added AST_parser directory: {ast_parser_path} to sys.path for ast_config.")
+
+test_path = os.path.join(project_root, 'test')
+if test_path not in sys.path:
+    sys.path.insert(0, test_path)
+    print(f"Added test directory: {test_path} to sys.path for environment import.")
+
+# Import the environment class
+try:
+    # Assuming the environment is in ideal_output_python/test2.py
+    from ideal_output_python.test2 import IJRR17_Corollary_1_1__Velocity_controlled_passive_safety as EnvClass
+    print("Successfully imported environment: IJRR17_Corollary_1_1__Velocity_controlled_passive_safety")
+except ImportError as e:
+    print(f"Error importing environment: {e}")
+    print("Please ensure 'ideal_output_python/test2.py' exists and is correctly structured.")
+    sys.exit(1)
+
+# --- Configuration ---
+# Hyperparameters for the RL agent
+LEARNING_RATE = 3e-4
+GAMMA = 0.99
+GAE_LAMBDA = 0.95
+PPO_EPSILON = 0.2
+CRITIC_LOSS_COEF = 0.5
+ENTROPY_COEF = 0.01
+PPO_EPOCHS = 10
+MINI_BATCH_SIZE = 64
+MAX_GRAD_NORM = 0.5
+TARGET_KL = 0.01 # For early stopping PPO epochs
+LOG_STD_MAX = 2 # Max value for log_std to prevent very large std
+LOG_STD_MIN = -20 # Min value for log_std to prevent very small std
+
+# Environment specific constants (will be updated from env.constants in run_training_for_env)
+W_VAL = 2.0
+V_VAL = 1.0
+
+# --- Policy Network (Actor-Critic) ---
+class PolicyNetwork(nn.Module):
+    def __init__(self, observation_space_shape, action_space_dict, W_val, V_val):
+        super(PolicyNetwork, self).__init__()
+
+        self.W_val = W_val # Max angular velocity for 'w'
+        self.V_val = V_val # Max obstacle velocity for 'vxo', 'vyo'
+
+        self.obs_dim = observation_space_shape[0]
+
+        # Shared layers for actor and critic
+        self.shared_layers = nn.Sequential(
+            nn.Linear(self.obs_dim, 256),
+            nn.ReLU(),
+            nn.Linear(256, 256),
+            nn.ReLU()
+        )
+
+        # Store discrete and continuous action keys for easy iteration
+        self.discrete_action_keys = [k for k in action_space_dict if k.startswith('choice_')]
+        self.continuous_action_keys = [k for k in action_space_dict if k.startswith('assign_')]
+
+        # Actor (policy) heads for discrete actions
+        self.actor_discrete_heads = nn.ModuleDict()
+        for key in self.discrete_action_keys:
+            self.actor_discrete_heads[key] = nn.Linear(256, action_space_dict[key].n)
+
+        # Actor (policy) heads for continuous actions (mean and log_std)
+        self.actor_continuous_mean_heads = nn.ModuleDict()
+        self.actor_continuous_log_std_heads = nn.ParameterDict()
+        for key in self.continuous_action_keys:
+            self.actor_continuous_mean_heads[key] = nn.Linear(256, 1) # Each Box action has shape () -> 1
+            self.actor_continuous_log_std_heads[key] = nn.Parameter(torch.zeros(1))
+
+        # Critic (value) head
+        self.critic_head = nn.Linear(256, 1)
+
+    def forward(self, obs):
+        shared_output = self.shared_layers(obs)
+
+        # Discrete action logits
+        discrete_logits = {key: self.actor_discrete_heads[key](shared_output) for key in self.discrete_action_keys}
+
+        # Continuous action means and log_stds
+        continuous_means = {}
+        continuous_log_stds = {}
+        for key in self.continuous_action_keys:
+            mean = self.actor_continuous_mean_heads[key](shared_output)
+            log_std = torch.clamp(self.actor_continuous_log_std_heads[key].expand_as(mean), LOG_STD_MIN, LOG_STD_MAX)
+            continuous_means[key] = mean
+            continuous_log_stds[key] = log_std
+
+        # Value estimate
+        value = self.critic_head(shared_output)
+
+        return discrete_logits, continuous_means, continuous_log_stds, value
+
+# --- Agent Implementation (PPO) ---
+class PPOAgent:
+    def __init__(self, env, device='cpu'):
+        self.env = env
+        self.device = device
+
+        # W_val and V_val will be updated from the environment's constants during training setup
+        self.W_val = W_VAL
+        self.V_val = V_VAL
+
+        self.policy_network = PolicyNetwork(
+            env.observation_space.shape,
+            env.action_space,
+            W_val=self.W_val, # Pass W_val to the policy network
+            V_val=self.V_val  # Pass V_val to the policy network
+        ).to(self.device)
+        self.optimizer = optim.Adam(self.policy_network.parameters(), lr=LEARNING_RATE)
+
+        self.buffer = [] # Stores (state, action_tensor, log_prob, reward, next_state, done)
+        self.gamma = GAMMA
+        self.gae_lambda = GAE_LAMBDA
+        self.ppo_epsilon = PPO_EPSILON
+        self.critic_loss_coef = CRITIC_LOSS_COEF
+        self.entropy_coef = ENTROPY_COEF
+        self.ppo_epochs = PPO_EPOCHS
+        self.mini_batch_size = MINI_BATCH_SIZE
+        self.max_grad_norm = MAX_GRAD_NORM
+        self.target_kl = TARGET_KL
+
+        # Store the mapping from action space keys to their indices for flattening
+        self.discrete_action_keys = self.policy_network.discrete_action_keys
+        self.continuous_action_keys = self.policy_network.continuous_action_keys
+        # Define a fixed order for all action keys for flattening/unflattening
+        self.all_action_keys_ordered = self.discrete_action_keys + self.continuous_action_keys
+
+        # Set the agent's reference in the environment for constant updates
+        # This allows the environment to update agent.W_val and agent.V_val if env.constants changes
+        self.env.agent = self
+
+    def choose_action(self, observation):
+        state = torch.FloatTensor(observation).to(self.device)
+
+        # Forward pass through the policy network to get all distributions' parameters
+        discrete_logits_dict, continuous_means_dict, continuous_log_stds_dict, _ = self.policy_network(state)
+
+        env_action = {}
+        total_log_prob = torch.tensor(0.0, device=self.device)
+
+        # Sample ALL discrete actions and accumulate log_probs
+        for key in self.discrete_action_keys:
+            logits = discrete_logits_dict[key]
+            # Ensure logits are finite
+            if torch.isnan(logits).any() or torch.isinf(logits).any():
+                print(f"WARNING: NaN/Inf detected in logits for discrete action '{key}' during action choice. Replacing with zeros.")
+                logits = torch.nan_to_num(logits, nan=0.0, posinf=1e10, neginf=-1e10) # Clamp to large finite values
+            dist = Categorical(logits=logits)
+            action = dist.sample()
+            log_prob = dist.log_prob(action)
+
+            env_action[key] = action.item()
+            total_log_prob += log_prob
+
+        # Sample ALL continuous actions and accumulate log_probs
+        for key in self.continuous_action_keys:
+            mean = continuous_means_dict[key]
+            log_std = continuous_log_stds_dict[key]
+
+            # Defensive checks for mean and log_std
+            if torch.isnan(mean).any() or torch.isinf(mean).any():
+                print(f"WARNING: NaN/Inf detected in mean for continuous action '{key}' during action choice. Replacing with zeros.")
+                mean = torch.nan_to_num(mean, nan=0.0, posinf=1e10, neginf=-1e10)
+            if torch.isnan(log_std).any() or torch.isinf(log_std).any():
+                print(f"WARNING: NaN/Inf detected in log_std for continuous action '{key}' during action choice. Replacing with zeros.")
+                log_std = torch.nan_to_num(log_std, nan=0.0, posinf=LOG_STD_MAX, neginf=LOG_STD_MIN) # Clamp to valid log_std range
+
+            std = torch.exp(log_std)
+            # Ensure std is positive and finite
+            if torch.isinf(std).any():
+                print(f"WARNING: Inf detected in std for continuous action '{key}' during action choice. Clamping to max finite value.")
+                std = torch.clamp(std, max=torch.finfo(std.dtype).max)
+            if (std <= 0).any(): # std must be positive
+                print(f"WARNING: Non-positive std detected for continuous action '{key}' during action choice. Clamping to small positive value.")
+                std = torch.clamp(std, min=1e-8)
+
+            dist = Normal(mean, std)
+            action_raw = dist.sample().squeeze(0) # Remove the last dim of 1
+
+            # Apply clipping based on key and store in env_action
+            if key in ['assign_vxo', 'assign_vyo']:
+                env_action[key] = torch.clamp(action_raw, -self.V_val, self.V_val).item()
+            elif key == 'assign_v':
+                env_action[key] = torch.clamp(action_raw, 0.0, 5.0).item()
+            elif key == 'assign_w':
+                env_action[key] = torch.clamp(action_raw, -self.W_val, self.W_val).item()
+
+            # Squeeze the log_prob to ensure it's a scalar (shape [])
+            total_log_prob += dist.log_prob(action_raw).squeeze() # Sum log_prob for this single continuous action
+
+        # Flatten all sampled actions into a single tensor for buffer storage
+        # This includes all discrete and continuous actions, regardless of whether they were
+        # added to env_action. This ensures a fixed-size action_tensor for batching.
+        action_array = []
+        for key in self.all_action_keys_ordered:
+            # Ensure all keys are present in env_action for flattening.
+            # This is guaranteed by the loops above.
+            action_array.append(env_action[key])
+
+        action_tensor = torch.FloatTensor(action_array).to(self.device)
+
+        return env_action, total_log_prob.item(), action_tensor
+
+    def store_transition(self, state, env_action, log_prob, reward, next_state, done, action_tensor):
+        # action_tensor is the flattened representation of all sampled actions
+        self.buffer.append((
+            torch.FloatTensor(state).to(self.device),
+            action_tensor, # Store the flattened tensor
+            torch.FloatTensor([log_prob]).to(self.device),
+            torch.FloatTensor([reward]).to(self.device),
+            torch.FloatTensor(next_state).to(self.device),
+            torch.FloatTensor([done]).to(self.device)
+        ))
+
+    def compute_advantages_and_returns(self, rewards, values, dones):
+        advantages = torch.zeros_like(rewards).to(self.device)
+        returns = torch.zeros_like(rewards).to(self.device)
+        last_gae_lam = 0
+
+        # Iterate backwards to compute GAE and returns
+        for t in reversed(range(len(rewards))):
+            if t == len(rewards) - 1:
+                # If episode ends, next value is 0 (or value of next_state if not done)
+                next_value = 0.0
+            else:
+                next_value = values[t+1]
+
+            # GAE formula: delta = R_t + gamma * V(S_{t+1}) * (1 - D_t) - V(S_t)
+            delta = rewards[t] + self.gamma * next_value * (1 - dones[t]) - values[t]
+            # A_t = delta_t + gamma * lambda * (1 - D_t) * A_{t+1}
+            advantages[t] = last_gae_lam = delta + self.gamma * self.gae_lambda * (1 - dones[t]) * last_gae_lam
+
+        # Returns = Advantages + Values
+        returns = advantages + values
+        return advantages, returns
+
+    def learn(self):
+        if not self.buffer:
+            return
+
+        # Stack all experiences from the buffer
+        batch_states, batch_action_tensors, batch_log_probs, batch_rewards, batch_next_states, batch_dones = zip(*self.buffer)
+
+        batch_states = torch.stack(batch_states)
+        batch_action_tensors = torch.stack(batch_action_tensors)
+        batch_log_probs = torch.stack(batch_log_probs).squeeze(1) # Remove extra dimension
+        batch_rewards = torch.stack(batch_rewards).squeeze(1)
+        batch_dones = torch.stack(batch_dones).squeeze(1)
+
+        # Clear buffer after collecting a batch
+        self.buffer = []
+
+        # Debug: Check for NaNs/Infs in collected data before network pass
+        if torch.isnan(batch_states).any() or torch.isinf(batch_states).any():
+            print("DEBUG WARNING: NaN/Inf detected in batch_states before value prediction.")
+        if torch.isnan(batch_rewards).any() or torch.isinf(batch_rewards).any():
+            print("DEBUG WARNING: NaN/Inf detected in batch_rewards before GAE calculation.")
+
+        # Get initial values from the current policy network for GAE calculation
+        _, _, _, batch_values = self.policy_network(batch_states)
+        batch_values = batch_values.squeeze(1)
+
+        if torch.isnan(batch_values).any() or torch.isinf(batch_values).any():
+            print("DEBUG WARNING: NaN/Inf detected in batch_values after initial policy_network pass.")
+
+        # Compute advantages and returns
+        advantages, returns = self.compute_advantages_and_returns(batch_rewards, batch_values, batch_dones)
+
+        advantages = advantages.detach()
+        returns = returns.detach()
+
+        if torch.isnan(advantages).any() or torch.isinf(advantages).any():
+            print("DEBUG WARNING: NaN/Inf detected in advantages after GAE calculation.")
+        if torch.isnan(returns).any() or torch.isinf(returns).any():
+            print("DEBUG WARNING: NaN/Inf detected in returns after GAE calculation.")
+
+        # Normalize advantages
+        advantages_mean = advantages.mean()
+        advantages_std = advantages.std()
+        # Ensure std is never too small to avoid division by zero or very large numbers
+        advantages = (advantages - advantages_mean) / (advantages_std + 1e-8)
+
+        if torch.isnan(advantages).any() or torch.isinf(advantages).any():
+            print("DEBUG WARNING: NaN/Inf detected in advantages after normalization.")
+
+        # Create a DataLoader for mini-batching
+        dataset = torch.utils.data.TensorDataset(
+            batch_states, batch_action_tensors, batch_log_probs, advantages, returns
+        )
+        loader = torch.utils.data.DataLoader(dataset, batch_size=self.mini_batch_size, shuffle=True)
+
+        for epoch in range(self.ppo_epochs):
+            for mini_batch_states, mini_batch_action_tensors, mini_batch_old_log_probs, mini_batch_advantages, mini_batch_returns in loader:
+
+                # Debug: Check for NaNs/Infs in mini-batch data
+                if torch.isnan(mini_batch_states).any() or torch.isinf(mini_batch_states).any():
+                    print("DEBUG WARNING: NaN/Inf detected in mini_batch_states during PPO epoch.")
+                if torch.isnan(mini_batch_advantages).any() or torch.isinf(mini_batch_advantages).any():
+                    print("DEBUG WARNING: NaN/Inf detected in mini_batch_advantages during PPO epoch.")
+                if torch.isnan(mini_batch_returns).any() or torch.isinf(mini_batch_returns).any():
+                    print("DEBUG WARNING: NaN/Inf detected in mini_batch_returns during PPO epoch.")
+
+                # Forward pass for the minibatch
+                discrete_logits_dict, continuous_means_dict, continuous_log_stds_dict, values_pred = self.policy_network(mini_batch_states)
+                values_pred = values_pred.squeeze(1)
+
+                # Defensive check for values_pred
+                if torch.isnan(values_pred).any() or torch.isinf(values_pred).any():
+                    print("WARNING: NaN/Inf detected in values_pred. Clamping to finite values.")
+                    values_pred = torch.nan_to_num(values_pred, nan=0.0, posinf=1e10, neginf=-1e10)
+
+
+                # --- Calculate new log probabilities and entropy ---
+                new_log_probs = torch.zeros_like(mini_batch_old_log_probs)
+                current_entropy = torch.tensor(0.0, device=self.device)
+
+                # Unflatten action_tensor to individual actions for evaluation
+                idx = 0
+                current_actions = {}
+                for key in self.all_action_keys_ordered:
+                    if key in self.discrete_action_keys:
+                        current_actions[key] = mini_batch_action_tensors[:, idx].long()
+                        idx += 1
+                    elif key in self.continuous_action_keys:
+                        current_actions[key] = mini_batch_action_tensors[:, idx].unsqueeze(1) # Add back dim of 1 for Normal dist
+                        idx += 1
+
+                # Evaluate discrete actions
+                for key in self.discrete_action_keys:
+                    logits = discrete_logits_dict[key]
+                    # FIX: Handle potential NaNs/Infs in logits to prevent ValueError
+                    if torch.isnan(logits).any() or torch.isinf(logits).any():
+                        print(f"WARNING: NaN/Inf detected in logits for discrete action '{key}' during PPO epoch. Replacing with zeros.")
+                        logits = torch.nan_to_num(logits, nan=0.0, posinf=1e10, neginf=-1e10)
+                    dist = Categorical(logits=logits)
+                    new_log_probs += dist.log_prob(current_actions[key])
+                    current_entropy += dist.entropy().mean()
+
+                # Evaluate continuous actions
+                for key in self.continuous_action_keys:
+                    mean = continuous_means_dict[key]
+                    log_std = continuous_log_stds_dict[key]
+
+                    # Defensive checks for mean and log_std
+                    if torch.isnan(mean).any() or torch.isinf(mean).any():
+                        print(f"WARNING: NaN/Inf detected in mean for continuous action '{key}' during PPO epoch. Replacing with zeros.")
+                        mean = torch.nan_to_num(mean, nan=0.0, posinf=1e10, neginf=-1e10)
+                    if torch.isnan(log_std).any() or torch.isinf(log_std).any():
+                        print(f"WARNING: NaN/Inf detected in log_std for continuous action '{key}' during PPO epoch. Replacing with zeros.")
+                        log_std = torch.nan_to_num(log_std, nan=0.0, posinf=LOG_STD_MAX, neginf=LOG_STD_MIN)
+
+                    std = torch.exp(log_std)
+                    # Ensure std is positive and finite
+                    if torch.isinf(std).any():
+                        print(f"WARNING: Inf detected in std for continuous action '{key}' during PPO epoch. Clamping to max finite value.")
+                        std = torch.clamp(std, max=torch.finfo(std.dtype).max)
+                    if (std <= 0).any(): # std must be positive
+                        print(f"WARNING: Non-positive std detected for continuous action '{key}' during PPO epoch. Clamping to small positive value.")
+                        std = torch.clamp(std, min=1e-8)
+
+                    dist = Normal(mean, std)
+                    new_log_probs += dist.log_prob(current_actions[key]).squeeze(1) # Squeeze back to (batch_size,)
+                    current_entropy += dist.entropy().mean()
+
+                # --- PPO Loss Calculation ---
+                ratio = torch.exp(new_log_probs - mini_batch_old_log_probs)
+                surr1 = ratio * mini_batch_advantages
+                surr2 = torch.clamp(ratio, 1 - self.ppo_epsilon, 1 + self.ppo_epsilon) * mini_batch_advantages
+
+                policy_loss = -torch.min(surr1, surr2).mean()
+                value_loss = self.critic_loss_coef * nn.functional.mse_loss(values_pred, mini_batch_returns)
+                entropy_loss = -self.entropy_coef * current_entropy
+
+                total_loss = policy_loss + value_loss + entropy_loss
+
+                # Backpropagation
+                self.optimizer.zero_grad()
+                total_loss.backward()
+                nn.utils.clip_grad_norm_(self.policy_network.parameters(), self.max_grad_norm)
+                self.optimizer.step()
+
+            # Early stopping check for PPO
+            with torch.no_grad():
+                # Re-evaluate for the entire batch
+                discrete_logits_full, continuous_means_full, continuous_log_stds_full, _ = self.policy_network(batch_states)
+
+                new_log_probs_full = torch.zeros_like(batch_log_probs)
+
+                idx = 0
+                current_actions_full = {}
+                for key in self.all_action_keys_ordered:
+                    if key in self.discrete_action_keys:
+                        current_actions_full[key] = batch_action_tensors[:, idx].long()
+                        idx += 1
+                    elif key in self.continuous_action_keys:
+                        current_actions_full[key] = batch_action_tensors[:, idx].unsqueeze(1)
+                        idx += 1
+
+                for key in self.discrete_action_keys:
+                    logits = discrete_logits_full[key]
+                    # FIX: Handle potential NaNs/Infs in logits for early stopping check
+                    if torch.isnan(logits).any() or torch.isinf(logits).any():
+                        print(f"WARNING: NaN/Inf detected in logits for discrete action '{key}' during early stopping check. Replacing with zeros.")
+                        logits = torch.nan_to_num(logits, nan=0.0, posinf=1e10, neginf=-1e10)
+                    dist = Categorical(logits=logits)
+                    new_log_probs_full += dist.log_prob(current_actions_full[key])
+
+                for key in self.continuous_action_keys:
+                    mean = continuous_means_full[key]
+                    log_std = continuous_log_stds_full[key]
+
+                    # Defensive checks for mean and log_std in early stopping
+                    if torch.isnan(mean).any() or torch.isinf(mean).any():
+                        print(f"WARNING: NaN/Inf detected in mean for continuous action '{key}' during early stopping check. Replacing with zeros.")
+                        mean = torch.nan_to_num(mean, nan=0.0, posinf=1e10, neginf=-1e10)
+                    if torch.isnan(log_std).any() or torch.isinf(log_std).any():
+                        print(f"WARNING: NaN/Inf detected in log_std for continuous action '{key}' during early stopping check. Replacing with zeros.")
+                        log_std = torch.nan_to_num(log_std, nan=0.0, posinf=LOG_STD_MAX, neginf=LOG_STD_MIN)
+
+                    std = torch.exp(log_std)
+                    # Ensure std is positive and finite
+                    if torch.isinf(std).any():
+                        print(f"WARNING: Inf detected in std for continuous action '{key}' during early stopping check. Clamping to max finite value.")
+                        std = torch.clamp(std, max=torch.finfo(std.dtype).max)
+                    if (std <= 0).any():
+                        print(f"WARNING: Non-positive std detected for continuous action '{key}' during early stopping check. Clamping to small positive value.")
+                        std = torch.clamp(std, min=1e-8)
+
+                    dist = Normal(mean, std)
+                    new_log_probs_full += dist.log_prob(current_actions_full[key]).squeeze(1)
+
+                kl_divergence = (batch_log_probs - new_log_probs_full).mean()
+                if kl_divergence > 1.5 * self.target_kl:
+                    print(f"Early stopping PPO epoch {epoch} due to large KL divergence: {kl_divergence:.4f}")
+                    break
+
+    def evaluate_agent(self, num_episodes=5):
+        self.policy_network.eval() # Set policy to evaluation mode
+        eval_rewards = []
+        for _ in range(num_episodes):
+            observation, info = self.env.reset()
+            done = False
+            truncated = False
+            episode_reward = 0
+            while not done and not truncated:
+                state = torch.FloatTensor(observation).to(self.device)
+                discrete_logits_dict, continuous_means_dict, _, _ = self.policy_network(state) # Don't need log_stds for evaluation mean
+
+                env_action = {}
+
+                # Take greedy action for ALL discrete actions
+                for key in self.discrete_action_keys:
+                    logits = discrete_logits_dict[key]
+                    # Ensure logits are finite even during evaluation
+                    if torch.isnan(logits).any() or torch.isinf(logits).any():
+                        print(f"WARNING: NaN/Inf detected in logits for discrete action '{key}' during evaluation. Replacing with zeros.")
+                        logits = torch.nan_to_num(logits, nan=0.0, posinf=1e10, neginf=-1e10)
+                    env_action[key] = logits.argmax().item()
+
+                # Take mean for ALL continuous actions and clip
+                for key in self.continuous_action_keys:
+                    action_mean = continuous_means_dict[key].squeeze(0)
+                    # Defensive check for action_mean
+                    if torch.isnan(action_mean).any() or torch.isinf(action_mean).any():
+                        print(f"WARNING: NaN/Inf detected in action_mean for continuous action '{key}' during evaluation. Replacing with zeros.")
+                        action_mean = torch.nan_to_num(action_mean, nan=0.0, posinf=1e10, neginf=-1e10)
+
+                    if key in ['assign_vxo', 'assign_vyo']:
+                        env_action[key] = torch.clamp(action_mean, -self.V_val, self.V_val).item()
+                    elif key == 'assign_v':
+                        env_action[key] = torch.clamp(action_mean, 0.0, 5.0).item()
+                    elif key == 'assign_w':
+                        env_action[key] = torch.clamp(action_mean, -self.W_val, self.W_val).item()
+
+                observation, reward, done, truncated, _ = self.env.step(env_action)
+                episode_reward += reward
+            eval_rewards.append(episode_reward) # Changed from total_rewards to eval_rewards
+
+        print(f"Evaluation over {num_episodes} episodes: Mean Reward = {np.mean(eval_rewards):.2f}, Std Dev = {np.std(eval_rewards):.2f}")
+        self.policy_network.train() # Set policy back to training mode
+
+# --- Main Training Loop ---
+def run_training_for_env(
+    env_class,
+    num_episodes=500,
+    max_steps_per_episode=200,
+    evaluate_every_n_episodes=50,
+    EVALUATE_ONLY=False
+):
+    print(f"Starting training for {env_class.__name__}...")
+    env = env_class()
+
+    # Update the global W_VAL and V_VAL for the agent from the environment's constants
+    global W_VAL, V_VAL
+    W_VAL = env.constants.get('W', W_VAL)
+    V_VAL = env.constants.get('V', V_VAL)
+    print(f"Agent's W_VAL set to: {W_VAL}, V_VAL set to: {V_VAL}")
+
+    agent = PPOAgent(env, device='cpu') # Using CPU for simplicity
+
+    if EVALUATE_ONLY:
+        print("Running in EVALUATE_ONLY mode.")
+        # Load a pre-trained model if available
+        # agent.policy_network.load_state_dict(torch.load("path_to_model.pth"))
+        # agent.policy_network.eval()
+        agent.evaluate_agent(num_episodes=10) # Run a few evaluation episodes
+        return [] # Return empty list in evaluate only mode
+
+    total_rewards = []
+    episode_rewards = deque(maxlen=100) # For average over last 100 episodes
+
+    for episode in range(num_episodes):
+        observation, info = env.reset()
+        current_episode_reward = 0
+
+        # Debug: Check initial observation for NaNs/Infs
+        if np.isnan(observation).any() or np.isinf(observation).any():
+            print(f"WARNING: NaN/Inf detected in initial observation at episode {episode+1}. Observation: {observation}")
+
+        for step in range(max_steps_per_episode):
+            # Agent chooses action
+            env_action, total_log_prob, action_tensor = agent.choose_action(observation)
+
+            # Environment takes a step
+            next_observation, reward, done, truncated, info = env.step(env_action)
+
+            # Debug: Check for NaNs/Infs in next observation and reward
+            if np.isnan(next_observation).any() or np.isinf(next_observation).any():
+                print(f"WARNING: NaN/Inf detected in next_observation at episode {episode+1}, step {step+1}. Observation: {next_observation}")
+            if np.isnan(reward) or np.isinf(reward):
+                print(f"WARNING: NaN/Inf detected in reward at episode {episode+1}, step {step+1}. Reward: {reward}")
+
+            # Store transition (action_tensor is the flattened representation of all sampled actions)
+            agent.store_transition(observation, env_action, total_log_prob, reward, next_observation, done or truncated, action_tensor)
+
+            observation = next_observation
+            current_episode_reward += reward
+
+            if done or truncated:
+                break
+
+        # Agent learns after each episode
+        agent.learn()
+
+        total_rewards.append(current_episode_reward)
+        episode_rewards.append(current_episode_reward)
+
+        print(f"Episode {episode+1}/{num_episodes}, Reward: {current_episode_reward:.2f}, Avg100: {np.mean(episode_rewards):.2f}")
+
+        if (episode + 1) % evaluate_every_n_episodes == 0:
+            print(f"--- Evaluating agent after {episode+1} episodes ---")
+            agent.evaluate_agent()
+            print(f"--- End Evaluation ---")
+            # Optionally save model
+            # torch.save(agent.policy_network.state_dict(), f"ppo_agent_ep{episode+1}.pth")
+
+    env.close()
+    return total_rewards
+
+# --- Entry Point ---
+if __name__ == "__main__":
+    # Define W_VAL, V_VAL globally for the agent's initialization
+    # They will be updated from the environment in run_training_for_env
+    W_VAL = 2.0
+    V_VAL = 1.0
+
+    EVALUATE_ONLY = False
+
+    rewards = run_training_for_env(
+        EnvClass, # Use the imported EnvClass
+        num_episodes=100, # Increased for better learning
+        max_steps_per_episode=100, # Increased for better learning
+        evaluate_every_n_episodes=20,
+        EVALUATE_ONLY=EVALUATE_ONLY
+    )
+
+    if rewards: # Only plot if rewards were collected (not in EVALUATE_ONLY mode)
+        plt.plot(rewards)
+        plt.title("Training Rewards")
+        plt.xlabel("Episode")
+        plt.ylabel("Total Reward")
+        plt.show()

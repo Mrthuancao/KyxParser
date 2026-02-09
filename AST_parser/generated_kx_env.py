@@ -8,7 +8,7 @@ import textwrap
 import re # For regex replacements in _evaluate_expression
 from ast_config import (ChoiceActionConfig, SequenceActionConfig, DeterministicAssignmentActionConfig, NondeterministicAssignmentActionConfig, ActionConstraintConfig, CallHybridProgramConfig) # Import AST classes
 
-class KeYmaeraX_RL_Environment(gym.Env):
+class IJRR17_Corollary_1_1__Velocity-controlled_passive_safety(gym.Env):
     metadata = {"render_modes": ["human"], "render_fps": 30}
 
     def __init__(self, render_mode=None):
@@ -69,25 +69,23 @@ class KeYmaeraX_RL_Environment(gym.Env):
             SequenceActionConfig(actions=[
                 NondeterministicAssignmentActionConfig(variable='vxo'),
                 NondeterministicAssignmentActionConfig(variable='vyo'),
-                ActionConstraintConfig(formula='?vxo^2+vyo^2<=V^2')
+                ActionConstraintConfig(formula='vxo^2+vyo^2<=V^2')
             ]),
-            SequenceActionConfig(actions=[
-                ChoiceActionConfig(level_name='ChoiceLevel_1', choices=[
-                    SequenceActionConfig(actions=[
-                        DeterministicAssignmentActionConfig(variable='v', value='0'),
-                        DeterministicAssignmentActionConfig(variable='w', value='0')
-                    ]),
-                    SequenceActionConfig(actions=[
-                        NondeterministicAssignmentActionConfig(variable='v'),
-                        ActionConstraintConfig(formula='?0<=v'),
-                        NondeterministicAssignmentActionConfig(variable='w'),
-                        ActionConstraintConfig(formula='?-W<=w & w<=W'),
-                        NondeterministicAssignmentActionConfig(variable='r'),
-                        NondeterministicAssignmentActionConfig(variable='xo'),
-                        NondeterministicAssignmentActionConfig(variable='yo'),
-                        ActionConstraintConfig(formula='?r!=0 & r*w = v'),
-                        ActionConstraintConfig(formula='? abs(x-xo) > admissibleSeparation(v)         | abs(y-yo) > admissibleSeparation(v)')
-                    ])
+            ChoiceActionConfig(level_name='ChoiceLevel_1', choices=[
+                SequenceActionConfig(actions=[
+                    DeterministicAssignmentActionConfig(variable='v', value='0'),
+                    DeterministicAssignmentActionConfig(variable='w', value='0')
+                ]),
+                SequenceActionConfig(actions=[
+                    NondeterministicAssignmentActionConfig(variable='v'),
+                    ActionConstraintConfig(formula='0<=v'),
+                    NondeterministicAssignmentActionConfig(variable='w'),
+                    ActionConstraintConfig(formula='-W<=w & w<=W'),
+                    NondeterministicAssignmentActionConfig(variable='r'),
+                    NondeterministicAssignmentActionConfig(variable='xo'),
+                    NondeterministicAssignmentActionConfig(variable='yo'),
+                    ActionConstraintConfig(formula='r!=0 & r*w = v'),
+                    ActionConstraintConfig(formula='abs(x-xo) > admissibleSeparation(v)         | abs(y-yo) > admissibleSeparation(v)')
                 ])
             ])
         ]) # Stored for step logic

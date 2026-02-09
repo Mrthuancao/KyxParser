@@ -1,0 +1,339 @@
+import torch
+import torch.nn as nn
+from torch.distributions import Categorical, Normal
+import gymnasium as gym
+import numpy as np
+# The environment code (IJRR17_Corollary_1_2__Static_safety_with_margin_for_imperfect_trajectories)
+# and the AST config classes (ActionConfig, ChoiceActionConfig, etc.)
+# should be defined or imported before this agent code.
+# For a complete runnable example, they would be in the same file or imported.
+
+
+class ActorCritic(nn.Module):
+    def __init__(self, observation_space, action_space):
+        super(ActorCritic, self).__init__()
+
+        self.observation_space = observation_space
+        self.action_space = action_space
+        
+        obs_dim = observation_space.shape[0]
+        
+        # Shared layers for both actor and critic
+        self.shared_layers = nn.Sequential(
+            nn.Linear(obs_dim, 256),
+            nn.ReLU(),
+            nn.Linear(256, 256),
+            nn.ReLU()
+        )
+
+        # Actor (Policy) specific layers
+        self.actor_layers = nn.Sequential(
+            nn.Linear(256, 256),
+            nn.ReLU()
+        )
+        
+        self.action_heads = nn.ModuleDict()
+        
+        # Create action heads based on the Dict action space structure
+        for key, space in action_space.spaces.items():
+            if isinstance(space, spaces.Discrete):
+                # For discrete actions, output logits for a Categorical distribution
+                self.action_heads[key] = nn.Linear(256, space.n)
+            elif isinstance(space, spaces.Box):
+                # For continuous actions, output mean and log_std for a Normal distribution
+                self.action_heads[f"{key}_mean"] = nn.Linear(256, space.shape[0])
+                # log_std is a learnable parameter, initialized to zeros (std=1)
+                self.action_heads[f"{key}_log_std"] = nn.Parameter(torch.zeros(space.shape[0]))
+            else:
+                raise NotImplementedError(f"Action space type {type(space)} not supported for PPO agent.")
+
+        # Critic (Value) specific layers
+        self.critic_layers = nn.Sequential(
+            nn.Linear(256, 256),
+            nn.ReLU(),
+            nn.Linear(256, 1) # Output a single value for the state
+        )
+
+    def forward(self, obs):
+        shared_output = self.shared_layers(obs)
+        
+        # Actor output
+        actor_output = self.actor_layers(shared_output)
+        action_dists = {}
+        
+        for key, space in self.action_space.spaces.items():
+            if isinstance(space, spaces.Discrete):
+                logits = self.action_heads[key](actor_output)
+                action_dists[key] = Categorical(logits=logits)
+            elif isinstance(space, spaces.Box):
+                mean = self.action_heads[f"{key}_mean"](actor_output)
+                log_std = self.action_heads[f"{key}_log_std"].expand_as(mean)
+                std = torch.exp(log_std)
+                action_dists[key] = Normal(mean, std)
+        
+        # Critic output
+        value = self.critic_layers(shared_output)
+        
+        return action_dists, value
+
+    def act(self, obs):
+        # Ensure observation is a tensor and has a batch dimension
+        obs_tensor = torch.as_tensor(obs, dtype=torch.float32).unsqueeze(0).to(self.device)
+        
+        action_dists, _ = self.forward(obs_tensor)
+        
+        actions = {}
+        log_probs = {}
+        
+        for key, dist in action_dists.items():
+            action = dist.sample()
+            # Convert sampled action to numpy and remove batch dimension
+            actions[key] = action.squeeze(0).cpu().numpy()
+            log_probs[key] = dist.log_prob(action).squeeze(0)
+        
+        # For Dict space, the total log_prob is the sum of log_probs of individual components
+        total_log_prob = sum(log_probs.values())
+        
+        return actions, total_log_prob.item() # Return actions as a dict, and total log_prob as scalar
+
+    def evaluate(self, obs, actions):
+        # obs: batch_size x obs_dim
+        # actions: dict of tensors, each batch_size x action_dim
+        
+        action_dists, values = self.forward(obs)
+        
+        log_probs = {}
+        entropies = {}
+        
+        for key, dist in action_dists.items():
+            action_tensor = actions[key] # Actions are already tensors from PPO update
+            log_probs[key] = dist.log_prob(action_tensor)
+            entropies[key] = dist.entropy()
+        
+        # Sum log_probs and entropies for Dict space
+        total_log_prob = sum(log_probs.values())
+        total_entropy = sum(entropies.values())
+        
+        return total_log_prob, values.squeeze(1), total_entropy
+
+
+class PPOAgent:
+    def __init__(self, env, lr=3e-4, gamma=0.99, clip_epsilon=0.2, gae_lambda=0.95, 
+                 ppo_epochs=10, mini_batch_size=64, value_coeff=0.5, entropy_coeff=0.01):
+        
+        self.env = env
+        self.gamma = gamma
+        self.gae_lambda = gae_lambda
+        self.clip_epsilon = clip_epsilon
+        self.ppo_epochs = ppo_epochs
+        self.mini_batch_size = mini_batch_size
+        self.value_coeff = value_coeff
+        self.entropy_coeff = entropy_coeff
+        
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        
+        self.actor_critic = ActorCritic(env.observation_space, env.action_space).to(self.device)
+        self.optimizer = torch.optim.Adam(self.actor_critic.parameters(), lr=lr)
+        
+        # Buffer to store rollout data
+        self.buffer = {
+            'observations': [], 'actions': [], 'log_probs': [],
+            'rewards': [], 'dones': [], 'values': []
+        }
+
+    def collect_rollout(self, num_steps):
+        obs, info = self.env.reset()
+        
+        for step in range(num_steps):
+            action_dict, log_prob = self.actor_critic.act(obs)
+            
+            # Convert numpy actions back to Python scalars or correct types for env.step
+            processed_action_dict = {}
+            for k, v in action_dict.items():
+                if isinstance(self.env.action_space.spaces[k], spaces.Discrete):
+                    processed_action_dict[k] = int(v) # Discrete actions should be integers
+                elif isinstance(self.env.action_space.spaces[k], spaces.Box):
+                    # For Box actions, clip to environment's specified bounds
+                    # This is important as Normal distribution can sample outside bounds
+                    low = self.env.action_space.spaces[k].low
+                    high = self.env.action_space.spaces[k].high
+                    processed_action_dict[k] = float(np.clip(v, low, high)) # Ensure scalar float
+            
+            # Get value estimate for current observation
+            value = self.actor_critic.critic_layers(self.actor_critic.shared_layers(torch.as_tensor(obs, dtype=torch.float32).unsqueeze(0).to(self.device))).item()
+            
+            next_obs, reward, terminated, truncated, info = self.env.step(processed_action_dict)
+            done = terminated or truncated
+            
+            self.buffer['observations'].append(obs)
+            # Store actions as a dictionary of tensors for easier batching later
+            action_tensors = {k: torch.as_tensor(v, dtype=torch.float32 if isinstance(self.env.action_space.spaces[k], spaces.Box) else torch.long) for k, v in processed_action_dict.items()}
+            self.buffer['actions'].append(action_tensors)
+            self.buffer['log_probs'].append(log_prob)
+            self.buffer['rewards'].append(reward)
+            self.buffer['dones'].append(done)
+            self.buffer['values'].append(value)
+            
+            obs = next_obs
+            
+            if done:
+                obs, info = self.env.reset()
+        
+        # Calculate last value for GAE calculation
+        last_value = self.actor_critic.critic_layers(self.actor_critic.shared_layers(torch.as_tensor(obs, dtype=torch.float32).unsqueeze(0).to(self.device))).item()
+        
+        return last_value
+
+    def _compute_advantages(self, rewards, dones, values, last_value):
+        returns = []
+        advantages = []
+        
+        # Convert to tensors
+        rewards = torch.as_tensor(rewards, dtype=torch.float32).to(self.device)
+        dones = torch.as_tensor(dones, dtype=torch.float32).to(self.device)
+        values = torch.as_tensor(values, dtype=torch.float32).to(self.device)
+        
+        # Append last value to values for GAE calculation
+        values = torch.cat([values, torch.as_tensor([last_value], dtype=torch.float32).to(self.device)])
+        
+        # Generalized Advantage Estimation (GAE)
+        gae = 0
+        for i in reversed(range(len(rewards))):
+            delta = rewards[i] + self.gamma * values[i+1] * (1 - dones[i]) - values[i]
+            gae = delta + self.gamma * self.gae_lambda * (1 - dones[i]) * gae
+            advantages.insert(0, gae)
+            
+        advantages = torch.as_tensor(advantages, dtype=torch.float32).to(self.device)
+        returns = advantages + values[:-1] # Target for value function
+        
+        # Normalize advantages for stability
+        advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+        
+        return returns, advantages
+
+    def update(self):
+        # Prepare data from buffer
+        observations = torch.as_tensor(np.array(self.buffer['observations']), dtype=torch.float32).to(self.device)
+        
+        # Convert list of action dicts to dict of action tensors for batching
+        # Example: [{'a':1, 'b':2}, {'a':3, 'b':4}] -> {'a': tensor([1,3]), 'b': tensor([2,4])}
+        actions_batch = {}
+        for key in self.env.action_space.spaces.keys():
+            # Stack tensors for each action component
+            actions_batch[key] = torch.stack([a[key] for a in self.buffer['actions']]).to(self.device)
+
+        old_log_probs = torch.as_tensor(self.buffer['log_probs'], dtype=torch.float32).to(self.device)
+        rewards = self.buffer['rewards']
+        dones = self.buffer['dones']
+        values = self.buffer['values']
+        
+        # Get last value from the end of the last collected rollout
+        # If the last step was 'done', then the last_value should be 0.
+        last_value = values[-1] if not dones[-1] else 0.0 
+        
+        returns, advantages = self._compute_advantages(rewards, dones, values, last_value)
+        
+        # PPO epochs: Iterate multiple times over the collected data
+        for _ in range(self.ppo_epochs):
+            # Create mini-batches for training
+            indices = torch.randperm(len(observations))
+            for start in range(0, len(observations), self.mini_batch_size):
+                end = start + self.mini_batch_size
+                batch_indices = indices[start:end]
+                
+                batch_obs = observations[batch_indices]
+                batch_actions = {k: v[batch_indices] for k, v in actions_batch.items()}
+                batch_old_log_probs = old_log_probs[batch_indices]
+                batch_returns = returns[batch_indices]
+                batch_advantages = advantages[batch_indices]
+                
+                # Evaluate current policy
+                log_probs, values_pred, entropy = self.actor_critic.evaluate(batch_obs, batch_actions)
+                
+                # Policy loss (PPO's clipped objective)
+                ratio = torch.exp(log_probs - batch_old_log_probs)
+                surr1 = ratio * batch_advantages
+                surr2 = torch.clamp(ratio, 1 - self.clip_epsilon, 1 + self.clip_epsilon) * batch_advantages
+                policy_loss = -torch.min(surr1, surr2).mean()
+                
+                # Value loss (Mean Squared Error)
+                value_loss = (values_pred - batch_returns).pow(2).mean()
+                
+                # Total loss
+                loss = policy_loss + self.value_coeff * value_loss - self.entropy_coeff * entropy.mean()
+                
+                # Update networks
+                self.optimizer.zero_grad()
+                loss.backward()
+                nn.utils.clip_grad_norm_(self.actor_critic.parameters(), 0.5) # Gradient clipping
+                self.optimizer.step()
+        
+        # Clear buffer after update
+        self.buffer = {k: [] for k in self.buffer.keys()}
+
+    def train(self, num_iterations, steps_per_iteration):
+        episode_rewards = []
+        for i in range(num_iterations):
+            last_value = self.collect_rollout(steps_per_iteration)
+            self.update()
+            
+            # Log progress
+            avg_reward = np.mean(self.buffer['rewards']) if self.buffer['rewards'] else 0
+            episode_rewards.append(avg_reward)
+            print(f"Iteration {i+1}/{num_iterations}, Avg Reward: {avg_reward:.2f}")
+            
+            # Optional: Evaluate agent periodically
+            if (i + 1) % 10 == 0:
+                self.evaluate_agent(10) # Run 10 evaluation episodes
+
+    def evaluate_agent(self, num_episodes=10):
+        total_rewards = []
+        for _ in range(num_episodes):
+            obs, info = self.env.reset()
+            episode_reward = 0
+            done = False
+            while not done:
+                action_dict, _ = self.actor_critic.act(obs)
+                
+                # Process actions for environment step (clipping continuous actions)
+                processed_action_dict = {}
+                for k, v in action_dict.items():
+                    if isinstance(self.env.action_space.spaces[k], spaces.Discrete):
+                        processed_action_dict[k] = int(v)
+                    elif isinstance(self.env.action_space.spaces[k], spaces.Box):
+                        low = self.env.action_space.spaces[k].low
+                        high = self.env.action_space.spaces[k].high
+                        processed_action_dict[k] = float(np.clip(v, low, high))
+                
+                obs, reward, terminated, truncated, info = self.env.step(processed_action_dict)
+                done = terminated or truncated
+                episode_reward += reward
+            total_rewards.append(episode_reward)
+        
+        print(f"--- Evaluation over {num_episodes} episodes ---")
+        print(f"Avg Episode Reward: {np.mean(total_rewards):.2f}")
+        print(f"Min Episode Reward: {np.min(total_rewards):.2f}")
+        print(f"Max Episode Reward: {np.max(total_rewards):.2f}")
+        print("------------------------------------------")
+
+
+# Example usage:
+if __name__ == '__main__':
+    # It's assumed that the 'ast_config' classes (ActionConfig, ChoiceActionConfig, etc.)
+    # and the 'IJRR17_Corollary_1_2__Static_safety_with_margin_for_imperfect_trajectories' environment class
+    # are defined or imported in the current scope for this example to run.
+
+    env = IJRR17_Corollary_1_2__Static_safety_with_margin_for_imperfect_trajectories()
+    
+    agent = PPOAgent(env, lr=1e-4, gamma=0.99, clip_epsilon=0.2, gae_lambda=0.95, 
+                     ppo_epochs=5, mini_batch_size=32, value_coeff=0.5, entropy_coeff=0.005)
+    
+    print("Training PPO agent...")
+    # Train for a sufficient number of iterations/steps.
+    # Hybrid systems with complex dynamics and constraints often require extensive training.
+    agent.train(num_iterations=500, steps_per_iteration=2048) 
+
+    print("\nEvaluating trained agent:")
+    agent.evaluate_agent(num_episodes=20)
+
+    env.close()

@@ -67,8 +67,25 @@ def generate_gym_environment_code(config: GymEnvironmentConfig) -> str:
     Generates Python code for a Gymnasium environment based on the provided
     GymEnvironmentConfig AST.
     """
-    env_name = config.env_name
+    original_env_name = config.env_name
     
+    # --- SANITIZE ENV_NAME FOR PYTHON CLASS IDENTIFIER ---
+    # 1. Replace non-alphanumeric characters (excluding underscore) with underscore
+    sanitized_env_name = re.sub(r'[^a-zA-Z0-9_]', '_', original_env_name)
+    # 2. Replace multiple underscores with a single underscore and strip leading/trailing underscores
+    # sanitized_env_name = re.sub(r'_+', '_', sanitized_env_name).strip('_')
+    
+    # 3. Ensure it doesn't start with a digit
+    if sanitized_env_name and sanitized_env_name[0].isdigit():
+        sanitized_env_name = '_' + sanitized_env_name
+    
+    # 4. Fallback if the name becomes empty after sanitization
+    if not sanitized_env_name:
+        sanitized_env_name = "GeneratedEnv" 
+    
+    env_name_for_class = sanitized_env_name # Use this for the class definition
+    # ---------------------------------------------------
+
     # Collect all variable names for observation space and ODE state vector
     state_variable_names = [v.name for v in config.variables.state_variables]
 
@@ -137,7 +154,7 @@ def generate_gym_environment_code(config: GymEnvironmentConfig) -> str:
     import re # For regex replacements in _evaluate_expression
     {ast_import_statement} # Import AST classes
 
-    class {env_name}(gym.Env):
+    class {env_name_for_class}(gym.Env):
         metadata = {{"render_modes": ["human"], "render_fps": 30}}
 
         def __init__(self, render_mode=None):
@@ -732,8 +749,9 @@ if __name__ == "__main__":
     )
 
     # Full GymEnvironmentConfig
+    # This example env_name will now be sanitized:
     gym_config_example = GymEnvironmentConfig(
-        env_name='IJRR17_Theorem_1_Static_safety',
+        env_name='IJRR17_Theorem_1_Static_safety', # Original name
         definitions=definitions_config,
         variables=variables_config,
         problem=problem_config
@@ -753,6 +771,15 @@ if __name__ == "__main__":
     print(f"\nGenerated Gymnasium environment code saved to {output_filename}")
 
     print("\n--- Example Usage Instructions ---")
+    
+    # Update the example usage to reflect the sanitized class name
+    sanitized_example_env_name = re.sub(r'[^a-zA-Z0-9_]', '_', gym_config_example.env_name)
+    sanitized_example_env_name = re.sub(r'_+', '_', sanitized_example_env_name).strip('_')
+    if sanitized_example_env_name and sanitized_example_env_name[0].isdigit():
+        sanitized_example_env_name = '_' + sanitized_example_env_name
+    if not sanitized_example_env_name:
+        sanitized_example_env_name = "GeneratedEnv"
+
     print(f"""
 To use the generated environment:
 
@@ -763,11 +790,11 @@ To use the generated environment:
 
 ```python
 import gymnasium as gym
-from generated_kx_env import IJRR17_Theorem_1_Static_safety 
+from generated_kx_env import {sanitized_example_env_name} 
 import numpy as np
 
 # Instantiate the environment
-env = IJRR17_Theorem_1_Static_safety()
+env = {sanitized_example_env_name}()
 
 observation, info = env.reset()
 print("Initial observation:", observation)
@@ -782,22 +809,25 @@ env.constants['A'] = 1.0 # Example: Set A to 1.0
 env.constants['b'] = 0.5 # Example: Set b to 0.5
 env.constants['ep'] = 1.0 # Example: Set ep to 1.0
 
-# Example 1: Choose the first branch: {{ a := -b; }} (index 0)
-# Note: You must provide values for all Box spaces in the Dict action space,
-# even if the chosen branch doesn't use them. Dummy values (e.g., 0.0) are fine.
-action_branch_0 = {{
-    'choice_ChoiceLevel_0': 0, # Select the first branch
-    'assign_w': 0.0,           # Dummy value for unused nondeterministic assignments
-    'assign_r': 0.0,
-    'assign_xo': 0.0,
-    'assign_yo': 0.0,
-}}
+# Example 1: Choose the first branch: {{
+#     'choice_ChoiceLevel_0': 0, # Select the first branch
+#     'assign_w': 0.0,           # Dummy value for unused nondeterministic assignments
+#     'assign_r': 0.0,
+#     'assign_xo': 0.0,
+#     'assign_yo': 0.0,
+# }}
 
 print("\\nTaking 5 steps with action_branch_0 (a := -b;):")
 current_obs = observation
 for i in range(5):
     print(f"Step {{i+1}} (before action): State={{env.state}}")
-    observation, reward, terminated, truncated, info = env.step(action_branch_0)
+    observation, reward, terminated, truncated, info = env.step({{
+        'choice_ChoiceLevel_0': 0, # Select the first branch
+        'assign_w': 0.0,           # Dummy value for unused nondeterministic assignments
+        'assign_r': 0.0,
+        'assign_xo': 0.0,
+        'assign_yo': 0.0,
+    }})
     print(f"Step {{i+1}}: Obs={{observation}}, Reward={{reward:.2f}}, Terminated={{terminated}}, Truncated={{truncated}}")
     if terminated or truncated:
         print("Episode finished.")
@@ -807,7 +837,7 @@ env.close()
 # Example 2: Reset and choose the third branch: {{ a := A; w := *; ... }} (index 2)
 # This branch requires specific values for w, r, xo, yo.
 print("\\nResetting environment and taking 5 steps with action_branch_2 (a := A; w := *; etc.):")
-env = IJRR17_Theorem_1_Static_safety() # Re-instantiate for a fresh start
+env = {sanitized_example_env_name}() # Re-instantiate for a fresh start
 observation, info = env.reset()
 
 # Re-set constants after reset
