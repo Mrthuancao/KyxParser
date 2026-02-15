@@ -1,6 +1,6 @@
 import textwrap
 from typing import List, Dict, Any, Optional, Tuple, Union
-import re # <--- ADDED THIS IMPORT
+import re
 
 # Assuming ast_config.py is in the same directory and contains the ASTConfigNode classes
 from ast_config import (
@@ -15,18 +15,134 @@ from ast_config import (
     ActionConstraintConfig, CallHybridProgramConfig
 )
 
-def _ast_to_python_code_string(ast_node: ActionType, indent_level: int = 0) -> str:
+# --- Helper Functions for Expression Formatting ---
+
+def _format_kx_expr_for_python_lambda_body(expr_str: str, lambda_param_names: List[str], all_constants: List[str], all_state_vars: List[str], all_functions: List[str], all_predicates: List[str]) -> str:
+    """
+    Converts a KeYmaera X expression string into a Python expression string
+    suitable for direct use in a lambda body. Handles operator conversions and
+    prefixes identifiers with their correct scope (self.constants, self.state, etc.).
+    """
+    expr_py = expr_str.strip()
+
+    # --- DEBUGGING PRINT (unconditional for critical transformations) ---
+    print(f"\nDEBUG FORMATTER (lambda body): Processing expression: '{expr_str}'")
+
+    # 1. Basic syntax replacements (power, abs) - Highest precedence
+    expr_py = expr_py.replace('^', '**').replace('abs(', 'np.abs(')
+    print(f"DEBUG FORMATTER (lambda body): After '^' and 'abs(' replacement: '{expr_py}'")
+
+    # 2. Replace single '=' with '==' for equality comparisons.
+    expr_py = re.sub(r'(?<![<>=!])=(?![=])', '==', expr_py)
+    print(f"DEBUG FORMATTER (lambda body): After '=' to '==' replacement: '{expr_py}'")
+
+    # 3. Handle logical operators (&, |) - Convert to Python 'and', 'or'
+    expr_py = expr_py.replace('&', 'and').replace('|', 'or')
+    print(f"DEBUG FORMATTER (lambda body): After '&' and '|' replacement: '{expr_py}'")
+
+    # 4. Handle KeYmaera X implication '->' (A -> B becomes (not (A) or (B))) - Lowest precedence
+    # This regex specifically targets (A -> B) patterns, assuming implications are grouped.
+    # It will repeatedly apply until no more such patterns are found, ensuring inner implications are handled first.
+    # The `.*?` is non-greedy, matching the smallest possible content for A and B.
+    while True:
+        new_expr_py = re.sub(r'\((.*?)\s*->\s*(.*?)\)', r'((not \1) or \2)', expr_py)
+        if new_expr_py == expr_py: # No more (A -> B) patterns found
+            break
+        expr_py = new_expr_py
+    print(f"DEBUG FORMATTER (lambda body): After '->' replacement: '{expr_py}'")
+    
+    # 5. Identify and replace identifiers with their correct scope prefix
+    # Build a list of all known identifiers (excluding lambda params)
+    # Order matters: longer names first, then constants, then state, then functions/preds
+    all_env_identifiers = sorted(
+        list(set(all_constants + all_state_vars + all_functions + all_predicates)),
+        key=len, reverse=True # Longest names first
+    )
+
+    # Create a regex pattern to match these identifiers as whole words
+    # Ensure lambda_param_names are not replaced
+    identifiers_to_replace = [
+        ident for ident in all_env_identifiers if ident not in lambda_param_names
+    ]
+    
+    if identifiers_to_replace: # Only apply if there are identifiers to replace
+        # Escape identifiers for regex and join them with '|'
+        # Add lookarounds to ensure whole word matching for identifiers
+        pattern_str = r'\b(' + '|'.join(re.escape(ident) for ident in identifiers_to_replace) + r')\b'
+        pattern = re.compile(pattern_str)
+
+        def replacer(match):
+            ident = match.group(1)
+            if ident in all_constants:
+                return f"self.constants['{ident}']"
+            elif ident in all_state_vars:
+                return f"self.state['{ident}']"
+            elif ident in all_functions:
+                # For functions, we assume they are called. We just prefix the name.
+                # The actual arguments will be part of the original expr_str.
+                return f"self.functions['{ident}']"
+            elif ident in all_predicates:
+                return f"self.predicates['{ident}']"
+            return ident # Should not be reached if pattern is correct
+
+        # Perform replacements
+        expr_py = pattern.sub(replacer, expr_py)
+    
+    print(f"DEBUG FORMATTER (lambda body): Final (with scope) expr_py: '{expr_py}'")
+    
+    return expr_py
+
+def _format_kx_expr_for_python_eval_context(expr_str: str) -> str:
+    """
+    Converts a KeYmaera X expression string into a Python expression string
+    suitable for evaluation within a general context (like _evaluate_expression).
+    Handles operator conversions. Identifier prefixing is handled by eval_globals/locals.
+    """
+    expr_py = expr_str.strip()
+
+    # 1. Basic syntax replacements (power, abs)
+    expr_py = expr_py.replace('^', '**').replace('abs(', 'np.abs(')
+    
+    # 2. Replace single '=' with '==' for equality comparisons.
+    expr_py = re.sub(r'(?<![<>=!])=(?![=])', '==', expr_py)
+
+    # 3. Handle logical operators (&, |)
+    expr_py = expr_py.replace('&', 'and').replace('|', 'or')
+    
+    # 4. Handle KeYmaera X implication '->' (A -> B becomes (not (A) or (B)))
+    while True:
+        # Note: The backreferences here need to be double-escaped when this string
+        # is embedded into a triple-quoted Python string literal.
+        new_expr_py = re.sub(r'\((.*?)\s*->\s*(.*?)\)', r'((not \\1) or \\2)', expr_py)
+        if new_expr_py == expr_py:
+            break
+        expr_py = new_expr_py
+    
+    return expr_py
+
+# --- End Helper Functions ---
+
+
+def _ast_to_python_code_string(ast_node: ActionType, indent_level: int = 0,
+                                all_constants: List[str] = None, all_state_vars: List[str] = None,
+                                all_functions: List[str] = None, all_predicates: List[str] = None) -> str:
     """
     Recursively converts an ActionType AST node into its Python constructor call string.
     This is used to embed the control function's action configuration directly into the
     generated environment's __init__ method.
     """
+    # Initialize lists if not provided (for top-level call)
+    if all_constants is None: all_constants = []
+    if all_state_vars is None: all_state_vars = []
+    if all_functions is None: all_functions = []
+    if all_predicates is None: all_predicates = []
+
     indent_str = "    " * indent_level
     next_indent_str = "    " * (indent_level + 1)
 
     if isinstance(ast_node, ChoiceActionConfig):
         choices_str = ",\n".join([
-            f"{next_indent_str}{_ast_to_python_code_string(choice, indent_level + 1)}"
+            f"{next_indent_str}{_ast_to_python_code_string(choice, indent_level + 1, all_constants, all_state_vars, all_functions, all_predicates)}"
             for choice in ast_node.choices
         ])
         return (
@@ -36,7 +152,7 @@ def _ast_to_python_code_string(ast_node: ActionType, indent_level: int = 0) -> s
         )
     elif isinstance(ast_node, SequenceActionConfig):
         actions_str = ",\n".join([
-            f"{next_indent_str}{_ast_to_python_code_string(action, indent_level + 1)}"
+            f"{next_indent_str}{_ast_to_python_code_string(action, indent_level + 1, all_constants, all_state_vars, all_functions, all_predicates)}"
             for action in ast_node.actions
         ])
         return (
@@ -45,19 +161,25 @@ def _ast_to_python_code_string(ast_node: ActionType, indent_level: int = 0) -> s
             f"{indent_str}])"
         )
     elif isinstance(ast_node, DeterministicAssignmentActionConfig):
-        return f"DeterministicAssignmentActionConfig(variable='{ast_node.variable}', value='{ast_node.value}')"
+        # Format the value string for direct evaluation by _evaluate_expression
+        formatted_value = _format_kx_expr_for_python_eval_context(ast_node.value)
+        return f"DeterministicAssignmentActionConfig(variable='{ast_node.variable}', value='{formatted_value}')"
     elif isinstance(ast_node, NondeterministicAssignmentActionConfig):
         return f"NondeterministicAssignmentActionConfig(variable='{ast_node.variable}')"
     elif isinstance(ast_node, ActionConstraintConfig):
         # Ensure formula is single-line for string literal
         formula_single_line = ast_node.formula.replace('\n', ' ').strip()
-        return f"ActionConstraintConfig(formula='{formula_single_line}')"
+        # Format the formula string for direct evaluation by _evaluate_expression
+        formatted_formula = _format_kx_expr_for_python_eval_context(formula_single_line)
+        return f"ActionConstraintConfig(formula='{formatted_formula}')"
     elif isinstance(ast_node, CallHybridProgramConfig):
         return f"CallHybridProgramConfig(hp_name='{ast_node.hp_name}')"
     elif isinstance(ast_node, HybridProgramStepConfig):
         # Ensure invariant formula is single-line for string literal
         invariant_single_line = ast_node.invariant_formula.replace('\n', ' ').strip()
-        return f"HybridProgramStepConfig(hp_name='{ast_node.hp_name}', invariant_formula='{invariant_single_line}')"
+        # Format the invariant formula string for direct evaluation by _evaluate_expression
+        formatted_invariant = _format_kx_expr_for_python_eval_context(invariant_single_line)
+        return f"HybridProgramStepConfig(hp_name='{ast_node.hp_name}', invariant_formula='{formatted_invariant}')"
     else:
         raise ValueError(f"Unknown AST node type: {type(ast_node)}")
 
@@ -73,7 +195,7 @@ def generate_gym_environment_code(config: GymEnvironmentConfig) -> str:
     # 1. Replace non-alphanumeric characters (excluding underscore) with underscore
     sanitized_env_name = re.sub(r'[^a-zA-Z0-9_]', '_', original_env_name)
     # 2. Replace multiple underscores with a single underscore and strip leading/trailing underscores
-    # sanitized_env_name = re.sub(r'_+', '_', sanitized_env_name).strip('_')
+    sanitized_env_name = re.sub(r'_+', '_', sanitized_env_name).strip('_')
     
     # 3. Ensure it doesn't start with a digit
     if sanitized_env_name and sanitized_env_name[0].isdigit():
@@ -88,33 +210,53 @@ def generate_gym_environment_code(config: GymEnvironmentConfig) -> str:
 
     # Collect all variable names for observation space and ODE state vector
     state_variable_names = [v.name for v in config.variables.state_variables]
+    all_constant_names = [c.name for c in config.definitions.constants]
+    all_function_names = [f.name for f in config.definitions.functions]
+    all_predicate_names = [p.name for p in config.definitions.predicates]
 
     # --- Generate Constants, Functions, Predicates ---
     constants_init_code_lines = []
     for const in config.definitions.constants:
-        #Problematic line: default_value could break the env: ep = 0
-        default_val = '0.0' if const.type == 'Real' else 'False'
-        constants_init_code_lines.append(f"self.constants['{const.name}'] = {const.value if const.value is not None else default_val}")
+        formatted_value = const.value
+        if formatted_value is not None:
+             # Format constant value if it's an expression. Assume no lambda params here.
+            formatted_value = _format_kx_expr_for_python_lambda_body(
+                formatted_value, [], all_constant_names, state_variable_names, all_function_names, all_predicate_names
+            )
+        else:
+            formatted_value = '0.0' if const.type == 'Real' else 'False'
+
+        constants_init_code_lines.append(f"self.constants['{const.name}'] = {formatted_value}")
     # Pre-indent this block
     indented_constants_block = textwrap.indent("\n".join(constants_init_code_lines), '            ')
 
     functions_init_code_lines = []
     for func in config.definitions.functions:
         params_str = ", ".join([p_name for _, p_name in func.parameters])
-        params_dict_str = ", ".join([f"'{p_name}': {p_name}" for _, p_name in func.parameters])
+        param_names_list = [p_name for _, p_name in func.parameters]
         # Ensure function body is a single line for embedding in string literal
         body_single_line = func.body.replace('\n', ' ').strip()
-        functions_init_code_lines.append(f"self.functions['{func.name}'] = lambda {params_str}: self._evaluate_expression('{body_single_line}', {{{params_dict_str}}})")
+        
+        # Format the body for direct Python lambda evaluation
+        formatted_body = _format_kx_expr_for_python_lambda_body(
+            body_single_line, param_names_list, all_constant_names, state_variable_names, all_function_names, all_predicate_names
+        )
+        functions_init_code_lines.append(f"self.functions['{func.name}'] = lambda {params_str}: {formatted_body}")
     # Pre-indent this block
     indented_functions_block = textwrap.indent("\n".join(functions_init_code_lines), '            ')
 
     predicates_init_code_lines = []
     for pred in config.definitions.predicates:
         params_str = ", ".join([p_name for _, p_name in pred.parameters])
-        params_dict_str = ", ".join([f"'{p_name}': {p_name}" for _, p_name in pred.parameters])
+        param_names_list = [p_name for _, p_name in pred.parameters]
         # Ensure predicate body is a single line for embedding in string literal
         body_single_line = pred.body.replace('\n', ' ').strip()
-        predicates_init_code_lines.append(f"self.predicates['{pred.name}'] = lambda {params_str}: self._evaluate_expression('{body_single_line}', {{{params_dict_str}}})")
+        
+        # Format the body for direct Python lambda evaluation
+        formatted_body = _format_kx_expr_for_python_lambda_body(
+            body_single_line, param_names_list, all_constant_names, state_variable_names, all_function_names, all_predicate_names
+        )
+        predicates_init_code_lines.append(f"self.predicates['{pred.name}'] = lambda {params_str}: {formatted_body}")
     # Pre-indent this block
     indented_predicates_block = textwrap.indent("\n".join(predicates_init_code_lines), '            ')
 
@@ -122,10 +264,17 @@ def generate_gym_environment_code(config: GymEnvironmentConfig) -> str:
     action_space_definition, control_func_ast_object, action_space_keys = _generate_action_space_and_logic(config.definitions.hybrid_programs)
     
     # Convert the control_func_ast_object to its Python code string representation
-    control_func_ast_code_str = _ast_to_python_code_string(control_func_ast_object, indent_level=3) # Indent for __init__ method
+    control_func_ast_code_str = _ast_to_python_code_string(
+        control_func_ast_object, indent_level=3,
+        all_constants=all_constant_names, all_state_vars=state_variable_names,
+        all_functions=all_function_names, all_predicates=all_predicate_names
+    ) # Indent for __init__ method
 
     # --- Generate ODEs and Evolution Domain ---
-    ode_func_code, ode_event_code, ode_state_map, ode_state_idx_map = _generate_ode_solver_logic(config.definitions.hybrid_programs, state_variable_names)
+    ode_func_code, ode_event_code, ode_state_map, ode_state_idx_map = _generate_ode_solver_logic(
+        config.definitions.hybrid_programs, state_variable_names,
+        all_constant_names, all_function_names, all_predicate_names
+    )
 
     # --- Generate Initial State (reset logic) ---
     reset_initial_state_code_lines = _generate_reset_logic(config.variables.state_variables, config.problem.precondition)
@@ -133,13 +282,18 @@ def generate_gym_environment_code(config: GymEnvironmentConfig) -> str:
     indented_reset_block = textwrap.indent("\n".join(reset_initial_state_code_lines), '            ')
 
     # --- Generate Problem Logic (Postcondition, Loop Invariants) ---
-    postcondition_formula_py = config.problem.postcondition.formula.replace('\n', ' ').strip() # Ensure single line
-    loop_invariant_formula_py = config.problem.loop_execution.loop_invariant_formula.replace('\n', ' ').strip() # Ensure single line
+    # Ensure formula is single-line for Python eval
+    postcondition_formula_py_raw = config.problem.postcondition.formula.replace('\n', ' ').strip()
+    postcondition_formula_py = _format_kx_expr_for_python_eval_context(postcondition_formula_py_raw)
+
+    loop_invariant_formula_py_raw = config.problem.loop_execution.loop_invariant_formula.replace('\n', ' ').strip()
+    loop_invariant_formula_py = _format_kx_expr_for_python_eval_context(loop_invariant_formula_py_raw)
 
     # Imports for AST classes needed for _control_func_action_config
     ast_imports = [
         "ChoiceActionConfig", "SequenceActionConfig", "DeterministicAssignmentActionConfig",
-        "NondeterministicAssignmentActionConfig", "ActionConstraintConfig", "CallHybridProgramConfig"
+        "NondeterministicAssignmentActionConfig", "ActionConstraintConfig", "CallHybridProgramConfig",
+        "HybridProgramStepConfig" # Added HybridProgramStepConfig for loop_body
     ]
     ast_import_statement = f"from ast_config import ({', '.join(ast_imports)})"
 
@@ -220,9 +374,9 @@ def generate_gym_environment_code(config: GymEnvironmentConfig) -> str:
             self.reward_range = (-float('inf'), float('inf'))
 
         def _compile_ode_func(self, func_str):
-            # Create a dictionary for locals that includes 'self'
-            exec_globals = {{'np': np, 'math': math}}
-            exec_locals = {{'self': self}}
+            # Create a dictionary for globals that includes 'self'
+            exec_globals = {{'np': np, 'math': math, 'self': self}} # 'self' in globals
+            exec_locals = {{}} # No special locals needed, self is in globals
             # Dedent the string before execution, as it was indented for the triple-quote literal
             exec(textwrap.dedent(func_str), exec_globals, exec_locals)
             return exec_locals['ode_func']
@@ -230,8 +384,8 @@ def generate_gym_environment_code(config: GymEnvironmentConfig) -> str:
         def _compile_ode_events(self, events_str):
             if not events_str.strip():
                 return []
-            exec_globals = {{'np': np, 'math': math}}
-            exec_locals = {{'self': self}}
+            exec_globals = {{'np': np, 'math': math, 'self': self}} # 'self' in globals
+            exec_locals = {{}} # No special locals needed, self is in globals
             # Dedent the string before execution
             exec(textwrap.dedent(events_str), exec_globals, exec_locals)
             return exec_locals['ode_events']
@@ -242,8 +396,11 @@ def generate_gym_environment_code(config: GymEnvironmentConfig) -> str:
         def _get_info(self):
             return self.state.copy() # Return a copy of the current state dictionary
 
-        def _evaluate_expression(self, expr_str, local_vars=None):
-            # Safe evaluation of expressions using environment's context
+        def _evaluate_expression(self, expr_str, local_vars=None, is_constraint=False):
+            
+            # Safe evaluation of expressions using environment's context.
+            # If is_constraint is True, returns False on evaluation error.
+            
             if local_vars is None:
                 local_vars = {{}}
             
@@ -255,30 +412,35 @@ def generate_gym_environment_code(config: GymEnvironmentConfig) -> str:
             eval_globals = {{
                 'np': np, 'math': math,
                 **self.constants,
-                **self.functions,
-                **self.predicates
+                **self.functions, # Include functions for general expressions
+                **self.predicates  # Include predicates for general expressions
             }}
             eval_locals = {{
                 **self.state,
                 **local_vars
             }}
             
-            # Replace common KeYmaera X syntax with Python
-            expr_py = expr_str.replace('^', '**').replace('abs(', 'np.abs(')
+            # Apply the same transformations as in _format_kx_expr_for_python_lambda_body
+            # to ensure consistency when evaluating expressions at runtime.
+            expr_py = expr_str.strip()
             
-            # Handle logical operators (assuming KeYmaera X uses '&' and '|' for logical AND/OR)
+            # 1. Basic syntax replacements (power, abs)
+            expr_py = expr_py.replace('^', '**').replace('abs(', 'np.abs(')
+            
+            # 2. Replace single '=' with '==' for equality comparisons.
+            expr_py = re.sub(r'(?<![<>=!])=(?![=])', '==', expr_py)
+
+            # 3. Handle logical operators (&, |)
             expr_py = expr_py.replace('&', 'and').replace('|', 'or')
             
-            # Handle comparison operators:
-            # These are mostly no-ops if the input already uses Python syntax, but ensures consistency.
-            expr_py = expr_py.replace('==', '==') 
-            expr_py = expr_py.replace('!=', '!=')
-            expr_py = expr_py.replace('>=', '>=')
-            expr_py = expr_py.replace('<=', '<=')
-            
-            # Replace standalone '=' with '==' for equality.
-            # This regex ensures that '=' is not part of '<=', '>=', '!=' or '=='
-            expr_py = re.sub(r'(?<![<>=!])=(?![=])', '==', expr_py) # <--- MODIFIED LINE
+            # 4. Handle KeYmaera X implication '->' (A -> B becomes (not (A) or (B)))
+            while True:
+                # Backreferences \\1 and \\2 are double-escaped because this string
+                # is itself a string literal within the generated Python code.
+                new_expr_py = re.sub(r'\\((.*?)\\s*->\\s*(.*?)\\)', r'((not \\1) or \\2)', expr_py)
+                if new_expr_py == expr_py:
+                    break
+                expr_py = new_expr_py
             
             try:
                 return eval(expr_py, eval_globals, eval_locals)
@@ -286,7 +448,9 @@ def generate_gym_environment_code(config: GymEnvironmentConfig) -> str:
                 print(f"Error evaluating expression '{{expr_str}}': {{e}}")
                 print(f"Eval globals: {{eval_globals}}")
                 print(f"Eval locals: {{eval_locals}}")
-                raise
+                if is_constraint:
+                    return False # For constraints, return False on error
+                raise # Re-raise for non-constraint expressions
 
         def _apply_control_action(self, action):
             reward = 0
@@ -305,7 +469,7 @@ def generate_gym_environment_code(config: GymEnvironmentConfig) -> str:
             for sub_action_config in chosen_branch_config.actions:
                 if isinstance(sub_action_config, ActionConstraintConfig):
                     # Evaluate constraint. If false, action is invalid.
-                    constraint_met = self._evaluate_expression(sub_action_config.formula)
+                    constraint_met = self._evaluate_expression(sub_action_config.formula, is_constraint=True)
                     if not constraint_met:
                         # print(f"Constraint violated: {{sub_action_config.formula}}")
                         reward -= 100.0 # Penalty for invalid action
@@ -313,6 +477,7 @@ def generate_gym_environment_code(config: GymEnvironmentConfig) -> str:
                         return reward, terminated, False # False means action was not fully applied
                 elif isinstance(sub_action_config, DeterministicAssignmentActionConfig):
                     # Apply deterministic assignment
+                    # The value string is already pre-formatted to be Python-compatible
                     assigned_value = self._evaluate_expression(sub_action_config.value)
                     self.state[sub_action_config.variable] = assigned_value
                 elif isinstance(sub_action_config, NondeterministicAssignmentActionConfig):
@@ -337,7 +502,7 @@ def generate_gym_environment_code(config: GymEnvironmentConfig) -> str:
                     # when it returns a SequenceActionConfig for a choice branch.
                     for inner_action in sub_action_config.actions:
                         if isinstance(inner_action, ActionConstraintConfig):
-                            constraint_met = self._evaluate_expression(inner_action.formula)
+                            constraint_met = self._evaluate_expression(inner_action.formula, is_constraint=True)
                             if not constraint_met:
                                 reward -= 100.0
                                 terminated = True
@@ -458,7 +623,7 @@ def generate_gym_environment_code(config: GymEnvironmentConfig) -> str:
             # (x - xo)^2 + (y - yo)^2 > 0
             # This means the robot must NOT be at the obstacle's position.
             # If it becomes <= 0, safety is violated.
-            postcondition_satisfied = self._evaluate_expression('{postcondition_formula_py}')
+            postcondition_satisfied = self._evaluate_expression('{postcondition_formula_py}', is_constraint=True)
             if not postcondition_satisfied:
                 reward -= 100.0 # Safety violation
                 terminated = True
@@ -534,7 +699,8 @@ def _generate_action_space_and_logic(hps: List[HybridProgramConfig]):
     # Return the actual AST object for the control function
     return action_space_definition, control_func_config.action_space_config, action_space_keys
 
-def _generate_ode_solver_logic(hps: List[HybridProgramConfig], state_variable_names: List[str]):
+def _generate_ode_solver_logic(hps: List[HybridProgramConfig], state_variable_names: List[str],
+                               all_constants: List[str], all_function_names: List[str], all_predicate_names: List[str]):
     """
     Generates the Python code for the ODE function and event functions
     for scipy.integrate.solve_ivp.
@@ -565,7 +731,14 @@ def _generate_ode_solver_logic(hps: List[HybridProgramConfig], state_variable_na
         if idx is not None:
             # Ensure ODE equation is a single line
             equation_single_line = ode.equation.replace('\n', ' ').strip()
-            derivatives[idx] = f"self._evaluate_expression('{equation_single_line}')"
+            # Format the ODE equation for direct Python evaluation within the ODE function's scope
+            # The ODE function's local scope will have state variables as direct names (e.g., 'x', 'y', 'v')
+            # and 't_val'.
+            ode_params_in_scope = state_variable_names + ['t_val']
+            formatted_equation = _format_kx_expr_for_python_lambda_body(
+                equation_single_line, ode_params_in_scope, all_constants, state_variable_names, all_function_names, all_predicate_names
+            )
+            derivatives[idx] = formatted_equation
         else:
             print(f"Warning: ODE for variable '{ode.variable}' not found in state_variable_names. Skipping.")
 
@@ -627,7 +800,7 @@ def _generate_reset_logic(variables: List[VariableDeclarationConfig], preconditi
     defaults = {
         'x': '0.0', 'y': '0.0', 'v': '1.0', 'a': '0.0',
         'dx': '1.0', 'dy': '0.0', 'w': '0.0', 'r': '1.0',
-        'xo': '5.0', 'yo': '0.0', 't': '0.0'
+        'xo': '5.0', 'yo': '0.0', 't': '0.0', 'vxo': '0.0', 'vyo': '0.0'
     }
 
     for var in variables:
@@ -647,46 +820,63 @@ if __name__ == "__main__":
     # This mimics the output of convert_keymaerax_ast_to_intermediate_pyast
     
     # Constants
-    ep_const = ConstantDefinitionConfig(name='ep', type='Real')
-    b_const = ConstantDefinitionConfig(name='b', type='Real')
-    A_const = ConstantDefinitionConfig(name='A', type='Real')
-    W_const = ConstantDefinitionConfig(name='W', type='Real')
+    ep_const = ConstantDefinitionConfig(name='ep', type='Real', value='1.0') # Set a value for testing
+    b_const = ConstantDefinitionConfig(name='b', type='Real', value='0.5') # Set a value for testing
+    A_const = ConstantDefinitionConfig(name='A', type='Real', value='1.0') # Set a value for testing
+    W_const = ConstantDefinitionConfig(name='W', type='Real', value='1.0') # Set a value for testing
+    V_const = ConstantDefinitionConfig(name='V', type='Real', value='1.0') # Added V constant for testing
 
     # Functions
-    stopDist_func = FunctionDefinitionConfig(name='stopDist', return_type='Real', parameters=[('Real', 'v')], body='v^2 / (2*b)')
-    accelComp_func = FunctionDefinitionConfig(name='accelComp', return_type='Real', parameters=[('Real', 'v')], body='(A/b + 1) * (A/2 * ep^2 + ep*v)')
+    # Bodies are now Python-compatible and use self.constants/self.functions
+    stopDist_func = FunctionDefinitionConfig(name='stopDist', return_type='Real', parameters=[('Real', 'v')], body='v^2 / (2*b)') # Use ^ for power
+    accelComp_func = FunctionDefinitionConfig(name='accelComp', return_type='Real', parameters=[('Real', 'v')], body='(A/b + 1) * (A/2 * ep^2 + ep*v)') # Use ^ for power
     admissibleSeparation_func = FunctionDefinitionConfig(name='admissibleSeparation', return_type='Real', parameters=[('Real', 'v')], body='stopDist(v) + accelComp(v)')
 
     # Predicates
-    isWellformedDir_pred = PredicateDefinitionConfig(name='isWellformedDir', parameters=[('Real', 'dx'), ('Real', 'dy')], body='dx^2 + dy^2 = 1')
-    bounds_pred = PredicateDefinitionConfig(name='bounds', parameters=[], body='A >= 0 & b > 0 & ep > 0')
+    # Let's use raw KeYmaera X syntax here to test the _format_kx_expr_for_python_lambda_body
+    isWellformedDir_pred = PredicateDefinitionConfig(name='isWellformedDir', parameters=[('Real', 'dx'), ('Real', 'dy')], body='dx^2 + dy^2 = 1') # Use = for equality
+    bounds_pred = PredicateDefinitionConfig(name='bounds', parameters=[], body='A >= 0 & b > 0 & ep > 0 & V >= 0') # Use & for AND, added V
+    initialState_pred = PredicateDefinitionConfig(name='initialState', parameters=[('Real', 'x'), ('Real', 'y'), ('Real', 'v'), ('Real', 'dx'), ('Real', 'dy'), ('Real', 'xo'), ('Real', 'yo')], body='v = 0 & (x-xo)^2 + (y-yo)^2 > 0 & isWellformedDir(dx,dy)') # Use = and &
+    loopinv_pred = PredicateDefinitionConfig(name='loopinv', parameters=[('Real', 'x'), ('Real', 'y'), ('Real', 'v'), ('Real', 'dx'), ('Real', 'dy'), ('Real', 'xo'), ('Real', 'yo')], body='v >= 0 & isWellformedDir(dx,dy) & (v>0 -> abs(x-xo) > stopDist(v) | abs(y-yo) > stopDist(v))') # Use & and -> and |
+    # Added 'assumptions' predicate from the user's generated code to check its transformation
+    assumptions_pred = PredicateDefinitionConfig(name='assumptions', parameters=[('Real', 'x'), ('Real', 'y'), ('Real', 'v'), ('Real', 'dx'), ('Real', 'dy'), ('Real', 'xo'), ('Real', 'yo')], body='bounds() & initialState(x,y,v,dx,dy,xo,yo)')
+
 
     # controlFunc Action Config
-    # Choice 1: { a := -b; }
-    choice1_actions = SequenceActionConfig(actions=[
-        DeterministicAssignmentActionConfig(variable='a', value='-b')
+    # This structure directly reflects the problem description's controlFunc
+    # Choice 0: Nondeterministic assignment for vxo, vyo with constraint
+    choice0_actions_branch1 = SequenceActionConfig(actions=[
+        NondeterministicAssignmentActionConfig(variable='vxo'),
+        NondeterministicAssignmentActionConfig(variable='vyo'),
+        ActionConstraintConfig(formula='vxo^2+vyo^2<=V^2') # Use ^
     ])
-    # Choice 2: { ?v = 0; a := 0; w := 0; }
-    choice2_actions = SequenceActionConfig(actions=[
-        ActionConstraintConfig(formula='?v = 0'),
-        DeterministicAssignmentActionConfig(variable='a', value='0'),
+    # Choice 1: Nested choice (v := 0; w := 0; OR a := A; w := *; ...)
+    choice0_actions_branch2_choice1 = SequenceActionConfig(actions=[
+        DeterministicAssignmentActionConfig(variable='v', value='0'),
         DeterministicAssignmentActionConfig(variable='w', value='0')
     ])
-    # Choice 3: { a := A; w := *; ?-W<=w & w<=W; r := *; xo := *; yo := *; ?r!=0 & r*w = v; ? abs(x-xo) > admissibleSeparation(v) | abs(y-yo) > admissibleSeparation(v); }
-    choice3_actions = SequenceActionConfig(actions=[
-        DeterministicAssignmentActionConfig(variable='a', value='A'),
+    choice0_actions_branch2_choice2 = SequenceActionConfig(actions=[
+        NondeterministicAssignmentActionConfig(variable='v'),
+        ActionConstraintConfig(formula='0<=v'),
         NondeterministicAssignmentActionConfig(variable='w'),
-        ActionConstraintConfig(formula='-W<=w & w<=W'),
+        ActionConstraintConfig(formula='-W<=w & w<=W'), # Use &
         NondeterministicAssignmentActionConfig(variable='r'),
         NondeterministicAssignmentActionConfig(variable='xo'),
         NondeterministicAssignmentActionConfig(variable='yo'),
-        ActionConstraintConfig(formula='r!=0 & r*w = v'),
-        ActionConstraintConfig(formula='abs(x-xo) > admissibleSeparation(v) | abs(y-yo) > admissibleSeparation(v)')
+        ActionConstraintConfig(formula='r!=0 & r*w = v'), # Use & and =
+        ActionConstraintConfig(formula='abs(x-xo) > admissibleSeparation(v) | abs(y-yo) > admissibleSeparation(v)') # Use |
     ])
+    choice0_actions_branch2 = ChoiceActionConfig(level_name='ChoiceLevel_1', choices=[
+        choice0_actions_branch2_choice1, 
+        choice0_actions_branch2_choice2
+    ])
+
     control_func_action_config = ChoiceActionConfig(level_name='ChoiceLevel_0', choices=[
-        choice1_actions, choice2_actions, choice3_actions
+        choice0_actions_branch1, 
+        choice0_actions_branch2 
     ])
     control_func = ControlFuncConfig(name='controlFunc', action_space_config=control_func_action_config)
+
 
     # stepFunc ODEs and Evolution Domain
     step_func_odes = [
@@ -695,7 +885,12 @@ if __name__ == "__main__":
         ODEConfig(variable='v', equation='a'),
         ODEConfig(variable='dx', equation='-w * dy'),
         ODEConfig(variable='dy', equation='w * dx'),
-        ODEConfig(variable='w', equation='a/r'),
+        ODEConfig(variable='w', equation='0'), # Assuming w is constant unless changed by control
+        ODEConfig(variable='r', equation='0'), # Assuming r is constant unless changed by control
+        ODEConfig(variable='xo', equation='vxo'), # Added xo, yo, vxo, vyo ODEs
+        ODEConfig(variable='yo', equation='vyo'),
+        ODEConfig(variable='vxo', equation='0'),
+        ODEConfig(variable='vyo', equation='0'),
         ODEConfig(variable='t', equation='1')
     ]
     step_func_evolution_domain = EvolutionDomainConfig(constraints=['t <= ep', 'v >= 0'])
@@ -703,9 +898,9 @@ if __name__ == "__main__":
 
     # DefinitionsConfig
     definitions_config = DefinitionsConfig(
-        constants=[ep_const, b_const, A_const, W_const],
+        constants=[ep_const, b_const, A_const, W_const, V_const], # Added V_const
         functions=[stopDist_func, accelComp_func, admissibleSeparation_func],
-        predicates=[isWellformedDir_pred, bounds_pred],
+        predicates=[isWellformedDir_pred, bounds_pred, initialState_pred, loopinv_pred, assumptions_pred], # Added initialState_pred and loopinv_pred
         hybrid_programs=[control_func, step_func]
     )
 
@@ -721,13 +916,15 @@ if __name__ == "__main__":
         VariableDeclarationConfig(name='r', type='Real'),
         VariableDeclarationConfig(name='xo', type='Real'),
         VariableDeclarationConfig(name='yo', type='Real'),
+        VariableDeclarationConfig(name='vxo', type='Real'), # Added vxo, vyo
+        VariableDeclarationConfig(name='vyo', type='Real'),
         VariableDeclarationConfig(name='t', type='Real')
     ]
     variables_config = VariablesConfig(state_variables=state_vars)
 
     # ProblemConfig
-    precondition = PreconditionConfig(formula='assumptions(x, y, v, dx, dy, xo, yo)')
-    postcondition = PostconditionConfig(formula='(x - xo)^2 + (y - yo)^2 > 0')
+    precondition = PreconditionConfig(formula='assumptions(x, y, v, dx, dy, xo, yo)') # Use the new initialState_pred and bounds
+    postcondition = PostconditionConfig(formula='(v>0 -> (x - xo)^2 + (y - yo)^2 > 0)') # Use ^ for power
     
     # Loop body: { { controlFunc; t := 0; } { stepFunc;@invariant(t>=0, isWellformedDir(dx, dy)) } }
     loop_body_actions = SequenceActionConfig(actions=[
@@ -735,11 +932,11 @@ if __name__ == "__main__":
             CallHybridProgramConfig(hp_name='controlFunc'),
             DeterministicAssignmentActionConfig(variable='t', value='0')
         ]),
-        HybridProgramStepConfig(hp_name='stepFunc', invariant_formula='t>=0 & isWellformedDir(dx, dy)')
+        HybridProgramStepConfig(hp_name='stepFunc', invariant_formula='t>=0 & isWellformedDir(dx, dy) & (-t*V <= xo - old(xo) & xo - old(xo) <= t*V) & (-t*V <= yo - old(yo) & yo - old(yo) <= t*V) & (x\'=0*dx -> x = old(x)) & (x\'=0*dx -> y = old(y)) & (x\'=v*dx -> -t * v <= x - old(x) & x - old(x) <= t * v) & (x\'=v*dx -> -t * v <= y - old(y) & y - old(y) <= t * v)') # Use & and include all invariants
     ])
     loop_execution = LoopExecutionConfig(
         iterations='inf',
-        loop_invariant_formula='loopinv(x, y, v, dx, dy, xo, yo)',
+        loop_invariant_formula='loopinv(x, y, v, dx, dy, xo, yo)', # Use the new loopinv_pred
         loop_body=loop_body_actions
     )
     problem_config = ProblemConfig(
@@ -751,7 +948,7 @@ if __name__ == "__main__":
     # Full GymEnvironmentConfig
     # This example env_name will now be sanitized:
     gym_config_example = GymEnvironmentConfig(
-        env_name='IJRR17_Theorem_1_Static_safety', # Original name
+        env_name='IJRR17_Corollary_1_1__Velocity-controlled_passive_safety', # Original name
         definitions=definitions_config,
         variables=variables_config,
         problem=problem_config
@@ -784,7 +981,7 @@ if __name__ == "__main__":
 To use the generated environment:
 
 1.  Make sure `gymnasium`, `numpy`, `scipy`, and `re` are installed (`pip install gymnasium numpy scipy`).
-2.  Save the generated code above as `{output_filename}`.
+2.  **CRITICAL:** Save the generated code above as `{output_filename}`. **Ensure you completely replace your existing generator file with this one.**
 3.  Ensure `ast_config.py` is in the same directory.
 4.  You can then import and use the generated environment in another Python script or interactive session:
 
@@ -802,56 +999,40 @@ print("Observation Space:", env.observation_space)
 print("Action Space:", env.action_space)
 
 # Before stepping, ensure constants like W are set in the environment if needed
-# For this example, constants like W, A, b, ep are initialized to 0.0 if not given a value
-# in the KeYmaera X input. You might want to set them explicitly in your env_config.
-env.constants['W'] = 1.0 # Example: Set W to 1.0
-env.constants['A'] = 1.0 # Example: Set A to 1.0
-env.constants['b'] = 0.5 # Example: Set b to 0.5
-env.constants['ep'] = 1.0 # Example: Set ep to 1.0
+# For this example, constants like W, A, b, ep are initialized with values in the AST.
+# If they were not, they would default to 0.0 or False.
 
-# Example 1: Choose the first branch: {{
-#     'choice_ChoiceLevel_0': 0, # Select the first branch
-#     'assign_w': 0.0,           # Dummy value for unused nondeterministic assignments
-#     'assign_r': 0.0,
-#     'assign_xo': 0.0,
-#     'assign_yo': 0.0,
-# }}
-
-print("\\nTaking 5 steps with action_branch_0 (a := -b;):")
+# Example 1: Choose the first branch of ChoiceLevel_0 (vxo, vyo assignment)
+print("\\nTaking 5 steps with action_branch_0 (vxo, vyo assignment):")
 current_obs = observation
 for i in range(5):
     print(f"Step {{i+1}} (before action): State={{env.state}}")
-    observation, reward, terminated, truncated, info = env.step({{
-        'choice_ChoiceLevel_0': 0, # Select the first branch
-        'assign_w': 0.0,           # Dummy value for unused nondeterministic assignments
-        'assign_r': 0.0,
-        'assign_xo': 0.0,
-        'assign_yo': 0.0,
-    }})
+    action_to_take = {{
+        'choice_ChoiceLevel_0': 0, # Select the first branch (vxo, vyo assignment)
+        'assign_vxo': 0.1,         # Example value for vxo
+        'assign_vyo': 0.2,         # Example value for vyo (constraint vxo^2 + vyo^2 <= V^2, V=1.0, so 0.1^2 + 0.04 = 0.05 <= 1.0)
+    }}
+    observation, reward, terminated, truncated, info = env.step(action_to_take)
     print(f"Step {{i+1}}: Obs={{observation}}, Reward={{reward:.2f}}, Terminated={{terminated}}, Truncated={{truncated}}")
     if terminated or truncated:
         print("Episode finished.")
         break
 env.close()
 
-# Example 2: Reset and choose the third branch: {{ a := A; w := *; ... }} (index 2)
-# This branch requires specific values for w, r, xo, yo.
-print("\\nResetting environment and taking 5 steps with action_branch_2 (a := A; w := *; etc.):")
+# Example 2: Reset and choose the second branch of ChoiceLevel_0, then the second branch of ChoiceLevel_1
+# (a := A; w := *; etc.)
+print("\\nResetting environment and taking 5 steps with action_branch_2_choice2 (a := A; w := *; etc.):")
 env = {sanitized_example_env_name}() # Re-instantiate for a fresh start
 observation, info = env.reset()
 
-# Re-set constants after reset
-env.constants['W'] = 1.0
-env.constants['A'] = 1.0
-env.constants['b'] = 0.5
-env.constants['ep'] = 1.0
-
-# Define action_branch_2
+# Define action for ChoiceLevel_0 branch 1 (index 1), then ChoiceLevel_1 branch 1 (index 1)
 # It's crucial that r != 0 and r*w = v for the constraint to pass.
 # Let's assume v is initially 1.0 (from reset).
 # If w = 0.1, then r must be 1.0 / 0.1 = 10.0
-action_branch_2 = {{
-    'choice_ChoiceLevel_0': 2, # Select the third branch
+action_branch_2_choice2 = {{
+    'choice_ChoiceLevel_0': 1, # Select the second branch of ChoiceLevel_0 (nested choice)
+    'choice_ChoiceLevel_1': 1, # Select the second branch of ChoiceLevel_1 (a := A; w := *; etc.)
+    'assign_v': 1.0,           # Example value for v (constraint 0 <= v)
     'assign_w': 0.1,           # Example value for w (within -W to W, i.e., -1.0 to 1.0)
     'assign_r': 10.0,          # Example value for r (r!=0 and r*w = v, so 10.0 * 0.1 = 1.0)
     'assign_xo': 5.0,          # Example value for xo
@@ -860,7 +1041,7 @@ action_branch_2 = {{
 
 for i in range(5):
     print(f"Step {{i+1}} (before action): State={{env.state}}")
-    observation, reward, terminated, truncated, info = env.step(action_branch_2)
+    observation, reward, terminated, truncated, info = env.step(action_branch_2_choice2)
     print(f"Step {{i+1}}: Obs={{observation}}, Reward={{reward:.2f}}, Terminated={{terminated}}, Truncated={{truncated}}")
     if terminated or truncated:
         print("Episode finished.")

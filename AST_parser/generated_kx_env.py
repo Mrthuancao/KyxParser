@@ -6,9 +6,9 @@ from scipy.integrate import solve_ivp
 import math # For math functions like sqrt, sin, cos, etc.
 import textwrap
 import re # For regex replacements in _evaluate_expression
-from ast_config import (ChoiceActionConfig, SequenceActionConfig, DeterministicAssignmentActionConfig, NondeterministicAssignmentActionConfig, ActionConstraintConfig, CallHybridProgramConfig) # Import AST classes
+from ast_config import (ChoiceActionConfig, SequenceActionConfig, DeterministicAssignmentActionConfig, NondeterministicAssignmentActionConfig, ActionConstraintConfig, CallHybridProgramConfig, HybridProgramStepConfig) # Import AST classes
 
-class IJRR17_Corollary_1_1__Velocity-controlled_passive_safety(gym.Env):
+class IJRR17_Corollary_1_1_Velocity_controlled_passive_safety(gym.Env):
     metadata = {"render_modes": ["human"], "render_fps": 30}
 
     def __init__(self, render_mode=None):
@@ -26,16 +26,16 @@ class IJRR17_Corollary_1_1__Velocity-controlled_passive_safety(gym.Env):
         self.constants['V'] = 0.0
 
         # Functions (lambdas for easy evaluation)
-        self.functions['stopDist'] = lambda v: self._evaluate_expression('0', {'v': v})
-        self.functions['accelComp'] = lambda v: self._evaluate_expression('ep*(v+V)', {'v': v})
-        self.functions['admissibleSeparation'] = lambda v: self._evaluate_expression('stopDist(v) + accelComp(v)', {'v': v})
+        self.functions['stopDist'] = lambda v: 0
+        self.functions['accelComp'] = lambda v: self.constants['ep']*(v+self.constants['V'])
+        self.functions['admissibleSeparation'] = lambda v: self.functions['stopDist'](v) + self.functions['accelComp'](v)
 
         # Predicates (lambdas for easy evaluation)
-        self.predicates['isWellformedDir'] = lambda dx, dy: self._evaluate_expression('dx^2 + dy^2 = 1', {'dx': dx, 'dy': dy})
-        self.predicates['bounds'] = lambda : self._evaluate_expression('ep > 0                                                                                                               & V >= 0', {})
-        self.predicates['initialState'] = lambda x, y, v, dx, dy, xo, yo: self._evaluate_expression('v = 0     & (x-xo)^2 + (y-yo)^2 > 0     & isWellformedDir(dx,dy)', {'x': x, 'y': y, 'v': v, 'dx': dx, 'dy': dy, 'xo': xo, 'yo': yo})
-        self.predicates['assumptions'] = lambda x, y, v, dx, dy, xo, yo: self._evaluate_expression('bounds() & initialState(x,y,v,dx,dy,xo,yo)', {'x': x, 'y': y, 'v': v, 'dx': dx, 'dy': dy, 'xo': xo, 'yo': yo})
-        self.predicates['loopinv'] = lambda x, y, v, dx, dy, xo, yo: self._evaluate_expression('v >= 0     & isWellformedDir(dx,dy)     & (v>0 -> abs(x-xo) > stopDist(v) | abs(y-yo) > stopDist(v))', {'x': x, 'y': y, 'v': v, 'dx': dx, 'dy': dy, 'xo': xo, 'yo': yo})
+        self.predicates['isWellformedDir'] = lambda dx, dy: dx**2 + dy**2 == 1
+        self.predicates['bounds'] = lambda : self.constants['ep'] > 0                                                                                                               and self.constants['V'] >= 0
+        self.predicates['initialState'] = lambda x, y, v, dx, dy, xo, yo: v == 0     and (x-xo)**2 + (y-yo)**2 > 0     and self.predicates['isWellformedDir'](dx,dy)
+        self.predicates['assumptions'] = lambda x, y, v, dx, dy, xo, yo: self.predicates['bounds']() and self.predicates['initialState'](x,y,v,dx,dy,xo,yo)
+        self.predicates['loopinv'] = lambda x, y, v, dx, dy, xo, yo: v >= 0     and self.predicates['isWellformedDir']((not dx,dy)     and (v>0) or np.abs(x-xo) > self.functions['stopDist'](v) or np.abs(y-yo) > self.functions['stopDist'](v))
 
         # --- State Variables ---
         # Mapping of state variable names to their index in the observation array
@@ -69,7 +69,7 @@ class IJRR17_Corollary_1_1__Velocity-controlled_passive_safety(gym.Env):
             SequenceActionConfig(actions=[
                 NondeterministicAssignmentActionConfig(variable='vxo'),
                 NondeterministicAssignmentActionConfig(variable='vyo'),
-                ActionConstraintConfig(formula='vxo^2+vyo^2<=V^2')
+                ActionConstraintConfig(formula='vxo**2+vyo**2<=V**2')
             ]),
             ChoiceActionConfig(level_name='ChoiceLevel_1', choices=[
                 SequenceActionConfig(actions=[
@@ -80,12 +80,12 @@ class IJRR17_Corollary_1_1__Velocity-controlled_passive_safety(gym.Env):
                     NondeterministicAssignmentActionConfig(variable='v'),
                     ActionConstraintConfig(formula='0<=v'),
                     NondeterministicAssignmentActionConfig(variable='w'),
-                    ActionConstraintConfig(formula='-W<=w & w<=W'),
+                    ActionConstraintConfig(formula='-W<=w and w<=W'),
                     NondeterministicAssignmentActionConfig(variable='r'),
                     NondeterministicAssignmentActionConfig(variable='xo'),
                     NondeterministicAssignmentActionConfig(variable='yo'),
-                    ActionConstraintConfig(formula='r!=0 & r*w = v'),
-                    ActionConstraintConfig(formula='abs(x-xo) > admissibleSeparation(v)         | abs(y-yo) > admissibleSeparation(v)')
+                    ActionConstraintConfig(formula='r!=0 and r*w == v'),
+                    ActionConstraintConfig(formula='np.abs(x-xo) > admissibleSeparation(v)         or np.abs(y-yo) > admissibleSeparation(v)')
                 ])
             ])
         ]) # Stored for step logic
@@ -118,19 +118,19 @@ class IJRR17_Corollary_1_1__Velocity-controlled_passive_safety(gym.Env):
 
                 # Calculate derivatives
                 dydt = [
-                    self._evaluate_expression('v * dx'), # dx/dt
-                    self._evaluate_expression('v * dy'), # dy/dt
+                    v * dx, # dx/dt
+                    v * dy, # dy/dt
                     0.0, # dv/dt
                     0.0, # da/dt
-                    self._evaluate_expression('-w * dy'), # ddx/dt
-                    self._evaluate_expression('w * dx'), # ddy/dt
+                    -w * dy, # ddx/dt
+                    w * dx, # ddy/dt
                     0.0, # dw/dt
                     0.0, # dr/dt
-                    self._evaluate_expression('vxo'), # dxo/dt
-                    self._evaluate_expression('vyo'), # dyo/dt
+                    vxo, # dxo/dt
+                    vyo, # dyo/dt
                     0.0, # dvxo/dt
                     0.0, # dvyo/dt
-                    self._evaluate_expression('1'), # dt/dt
+                    1, # dt/dt
                 ]
                 return dydt
         '''
@@ -168,9 +168,9 @@ class IJRR17_Corollary_1_1__Velocity-controlled_passive_safety(gym.Env):
         self.reward_range = (-float('inf'), float('inf'))
 
     def _compile_ode_func(self, func_str):
-        # Create a dictionary for locals that includes 'self'
-        exec_globals = {'np': np, 'math': math}
-        exec_locals = {'self': self}
+        # Create a dictionary for globals that includes 'self'
+        exec_globals = {'np': np, 'math': math, 'self': self} # 'self' in globals
+        exec_locals = {} # No special locals needed, self is in globals
         # Dedent the string before execution, as it was indented for the triple-quote literal
         exec(textwrap.dedent(func_str), exec_globals, exec_locals)
         return exec_locals['ode_func']
@@ -178,8 +178,8 @@ class IJRR17_Corollary_1_1__Velocity-controlled_passive_safety(gym.Env):
     def _compile_ode_events(self, events_str):
         if not events_str.strip():
             return []
-        exec_globals = {'np': np, 'math': math}
-        exec_locals = {'self': self}
+        exec_globals = {'np': np, 'math': math, 'self': self} # 'self' in globals
+        exec_locals = {} # No special locals needed, self is in globals
         # Dedent the string before execution
         exec(textwrap.dedent(events_str), exec_globals, exec_locals)
         return exec_locals['ode_events']
@@ -190,8 +190,11 @@ class IJRR17_Corollary_1_1__Velocity-controlled_passive_safety(gym.Env):
     def _get_info(self):
         return self.state.copy() # Return a copy of the current state dictionary
 
-    def _evaluate_expression(self, expr_str, local_vars=None):
-        # Safe evaluation of expressions using environment's context
+    def _evaluate_expression(self, expr_str, local_vars=None, is_constraint=False):
+
+        # Safe evaluation of expressions using environment's context.
+        # If is_constraint is True, returns False on evaluation error.
+
         if local_vars is None:
             local_vars = {}
 
@@ -203,30 +206,35 @@ class IJRR17_Corollary_1_1__Velocity-controlled_passive_safety(gym.Env):
         eval_globals = {
             'np': np, 'math': math,
             **self.constants,
-            **self.functions,
-            **self.predicates
+            **self.functions, # Include functions for general expressions
+            **self.predicates  # Include predicates for general expressions
         }
         eval_locals = {
             **self.state,
             **local_vars
         }
 
-        # Replace common KeYmaera X syntax with Python
-        expr_py = expr_str.replace('^', '**').replace('abs(', 'np.abs(')
+        # Apply the same transformations as in _format_kx_expr_for_python_lambda_body
+        # to ensure consistency when evaluating expressions at runtime.
+        expr_py = expr_str.strip()
 
-        # Handle logical operators (assuming KeYmaera X uses '&' and '|' for logical AND/OR)
+        # 1. Basic syntax replacements (power, abs)
+        expr_py = expr_py.replace('^', '**').replace('abs(', 'np.abs(')
+
+        # 2. Replace single '=' with '==' for equality comparisons.
+        expr_py = re.sub(r'(?<![<>=!])=(?![=])', '==', expr_py)
+
+        # 3. Handle logical operators (&, |)
         expr_py = expr_py.replace('&', 'and').replace('|', 'or')
 
-        # Handle comparison operators:
-        # These are mostly no-ops if the input already uses Python syntax, but ensures consistency.
-        expr_py = expr_py.replace('==', '==') 
-        expr_py = expr_py.replace('!=', '!=')
-        expr_py = expr_py.replace('>=', '>=')
-        expr_py = expr_py.replace('<=', '<=')
-
-        # Replace standalone '=' with '==' for equality.
-        # This regex ensures that '=' is not part of '<=', '>=', '!=' or '=='
-        expr_py = re.sub(r'(?<![<>=!])=(?![=])', '==', expr_py) # <--- MODIFIED LINE
+        # 4. Handle KeYmaera X implication '->' (A -> B becomes (not (A) or (B)))
+        while True:
+            # Backreferences \1 and \2 are double-escaped because this string
+            # is itself a string literal within the generated Python code.
+            new_expr_py = re.sub(r'\((.*?)\s*->\s*(.*?)\)', r'((not \1) or \2)', expr_py)
+            if new_expr_py == expr_py:
+                break
+            expr_py = new_expr_py
 
         try:
             return eval(expr_py, eval_globals, eval_locals)
@@ -234,7 +242,9 @@ class IJRR17_Corollary_1_1__Velocity-controlled_passive_safety(gym.Env):
             print(f"Error evaluating expression '{expr_str}': {e}")
             print(f"Eval globals: {eval_globals}")
             print(f"Eval locals: {eval_locals}")
-            raise
+            if is_constraint:
+                return False # For constraints, return False on error
+            raise # Re-raise for non-constraint expressions
 
     def _apply_control_action(self, action):
         reward = 0
@@ -253,7 +263,7 @@ class IJRR17_Corollary_1_1__Velocity-controlled_passive_safety(gym.Env):
         for sub_action_config in chosen_branch_config.actions:
             if isinstance(sub_action_config, ActionConstraintConfig):
                 # Evaluate constraint. If false, action is invalid.
-                constraint_met = self._evaluate_expression(sub_action_config.formula)
+                constraint_met = self._evaluate_expression(sub_action_config.formula, is_constraint=True)
                 if not constraint_met:
                     # print(f"Constraint violated: {sub_action_config.formula}")
                     reward -= 100.0 # Penalty for invalid action
@@ -261,6 +271,7 @@ class IJRR17_Corollary_1_1__Velocity-controlled_passive_safety(gym.Env):
                     return reward, terminated, False # False means action was not fully applied
             elif isinstance(sub_action_config, DeterministicAssignmentActionConfig):
                 # Apply deterministic assignment
+                # The value string is already pre-formatted to be Python-compatible
                 assigned_value = self._evaluate_expression(sub_action_config.value)
                 self.state[sub_action_config.variable] = assigned_value
             elif isinstance(sub_action_config, NondeterministicAssignmentActionConfig):
@@ -285,7 +296,7 @@ class IJRR17_Corollary_1_1__Velocity-controlled_passive_safety(gym.Env):
                 # when it returns a SequenceActionConfig for a choice branch.
                 for inner_action in sub_action_config.actions:
                     if isinstance(inner_action, ActionConstraintConfig):
-                        constraint_met = self._evaluate_expression(inner_action.formula)
+                        constraint_met = self._evaluate_expression(inner_action.formula, is_constraint=True)
                         if not constraint_met:
                             reward -= 100.0
                             terminated = True
@@ -419,7 +430,7 @@ class IJRR17_Corollary_1_1__Velocity-controlled_passive_safety(gym.Env):
         # (x - xo)^2 + (y - yo)^2 > 0
         # This means the robot must NOT be at the obstacle's position.
         # If it becomes <= 0, safety is violated.
-        postcondition_satisfied = self._evaluate_expression('(v>0 -> (x - xo)^2 + (y - yo)^2 > 0)')
+        postcondition_satisfied = self._evaluate_expression('((not \1) or \2)**2 + (y - yo)**2 > 0)', is_constraint=True)
         if not postcondition_satisfied:
             reward -= 100.0 # Safety violation
             terminated = True
