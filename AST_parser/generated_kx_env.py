@@ -1,4 +1,3 @@
-
 import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
@@ -6,7 +5,8 @@ from scipy.integrate import solve_ivp
 import math # For math functions like sqrt, sin, cos, etc.
 import textwrap
 import re # For regex replacements in _evaluate_expression
-from ast_config import (ChoiceActionConfig, SequenceActionConfig, DeterministicAssignmentActionConfig, NondeterministicAssignmentActionConfig, ActionConstraintConfig, CallHybridProgramConfig, HybridProgramStepConfig) # Import AST classes
+from typing import (Dict, Any, Tuple) # Import typing hints
+from ast_config import (ActionType, ChoiceActionConfig, SequenceActionConfig, DeterministicAssignmentActionConfig, NondeterministicAssignmentActionConfig, ActionConstraintConfig, CallHybridProgramConfig, HybridProgramStepConfig) # Import AST classes
 
 class IJRR17_Corollary_1_1_Velocity_controlled_passive_safety(gym.Env):
     metadata = {"render_modes": ["human"], "render_fps": 30}
@@ -21,9 +21,9 @@ class IJRR17_Corollary_1_1_Velocity_controlled_passive_safety(gym.Env):
         self.predicates = {}
 
         # Constants
-        self.constants['ep'] = 0.0
-        self.constants['W'] = 0.0
-        self.constants['V'] = 0.0
+        self.constants['ep'] = 1.0
+        self.constants['W'] = 1.0
+        self.constants['V'] = 1.0
 
         # Functions (lambdas for easy evaluation)
         self.functions['stopDist'] = lambda v: 0
@@ -63,32 +63,32 @@ class IJRR17_Corollary_1_1_Velocity_controlled_passive_safety(gym.Env):
                 'assign_r': spaces.Box(low=-np.inf, high=np.inf, shape=(), dtype=np.float32),
                 'assign_xo': spaces.Box(low=-np.inf, high=np.inf, shape=(), dtype=np.float32),
                 'assign_yo': spaces.Box(low=-np.inf, high=np.inf, shape=(), dtype=np.float32),
-                    })
+                })
         self._action_space_keys = ['choice_ChoiceLevel_0', 'assign_vxo', 'assign_vyo', 'choice_ChoiceLevel_1', 'assign_v', 'assign_w', 'assign_r', 'assign_xo', 'assign_yo']
         self._control_func_action_config = ChoiceActionConfig(level_name='ChoiceLevel_0', choices=[
-            SequenceActionConfig(actions=[
-                NondeterministicAssignmentActionConfig(variable='vxo'),
-                NondeterministicAssignmentActionConfig(variable='vyo'),
-                ActionConstraintConfig(formula='vxo**2+vyo**2<=V**2')
-            ]),
-            ChoiceActionConfig(level_name='ChoiceLevel_1', choices=[
                 SequenceActionConfig(actions=[
-                    DeterministicAssignmentActionConfig(variable='v', value='0'),
-                    DeterministicAssignmentActionConfig(variable='w', value='0')
+                    NondeterministicAssignmentActionConfig(variable='vxo'),
+                    NondeterministicAssignmentActionConfig(variable='vyo'),
+                    ActionConstraintConfig(formula='vxo**2+vyo**2<=V**2')
                 ]),
-                SequenceActionConfig(actions=[
-                    NondeterministicAssignmentActionConfig(variable='v'),
-                    ActionConstraintConfig(formula='0<=v'),
-                    NondeterministicAssignmentActionConfig(variable='w'),
-                    ActionConstraintConfig(formula='-W<=w and w<=W'),
-                    NondeterministicAssignmentActionConfig(variable='r'),
-                    NondeterministicAssignmentActionConfig(variable='xo'),
-                    NondeterministicAssignmentActionConfig(variable='yo'),
-                    ActionConstraintConfig(formula='r!=0 and r*w == v'),
-                    ActionConstraintConfig(formula='np.abs(x-xo) > admissibleSeparation(v)         or np.abs(y-yo) > admissibleSeparation(v)')
+                ChoiceActionConfig(level_name='ChoiceLevel_1', choices=[
+                    SequenceActionConfig(actions=[
+                        DeterministicAssignmentActionConfig(variable='v', value='0'),
+                        DeterministicAssignmentActionConfig(variable='w', value='0')
+                    ]),
+                    SequenceActionConfig(actions=[
+                        NondeterministicAssignmentActionConfig(variable='v'),
+                        ActionConstraintConfig(formula='0<=v'),
+                        NondeterministicAssignmentActionConfig(variable='w'),
+                        ActionConstraintConfig(formula='-W<=w and w<=W'),
+                        NondeterministicAssignmentActionConfig(variable='r'),
+                        NondeterministicAssignmentActionConfig(variable='xo'),
+                        NondeterministicAssignmentActionConfig(variable='yo'),
+                        ActionConstraintConfig(formula='r!=0 and r*w == v'),
+                        ActionConstraintConfig(formula='np.abs(x-xo) > admissibleSeparation(v)         or np.abs(y-yo) > admissibleSeparation(v)')
+                    ])
                 ])
-            ])
-        ]) # Stored for step logic
+            ]) # Stored for step logic
 
         # --- ODE Solver Setup (from stepFunc) ---
         # Mapping from state variable names to their index in the ODE solver's y array
@@ -228,10 +228,9 @@ class IJRR17_Corollary_1_1_Velocity_controlled_passive_safety(gym.Env):
         expr_py = expr_py.replace('&', 'and').replace('|', 'or')
 
         # 4. Handle KeYmaera X implication '->' (A -> B becomes (not (A) or (B)))
+        # CORRECTED: Pattern and replacement for re.sub
         while True:
-            # Backreferences \1 and \2 are double-escaped because this string
-            # is itself a string literal within the generated Python code.
-            new_expr_py = re.sub(r'\((.*?)\s*->\s*(.*?)\)', r'((not \1) or \2)', expr_py)
+            new_expr_py = re.sub(r'\((.*?)\s*->\s*(.*?)\)', r'((not ) or )', expr_py)
             if new_expr_py == expr_py:
                 break
             expr_py = new_expr_py
@@ -246,77 +245,102 @@ class IJRR17_Corollary_1_1_Velocity_controlled_passive_safety(gym.Env):
                 return False # For constraints, return False on error
             raise # Re-raise for non-constraint expressions
 
-    def _apply_control_action(self, action):
-        reward = 0
+    def _execute_action_config(self, action_config: ActionType, agent_action: Dict[str, Any]) -> Tuple[float, bool, bool]:
+        """
+        Recursively executes a given action configuration (Choice, Sequence, Assignment, Constraint).
+        Returns (reward, terminated, applied_successfully).
+        """
+        reward = 0.0
         terminated = False
+        applied_successfully = True
 
-        # This structure mirrors the _control_func_action_config generated earlier
-        # It's a ChoiceActionConfig at the top level
+        if isinstance(action_config, ChoiceActionConfig):
+            choice_key = f"choice_{action_config.level_name}"
+            if choice_key not in agent_action:
+                print(f"Error: Choice key '{{choice_key}}' missing from agent action.")
+                reward -= 200.0
+                terminated = True
+                applied_successfully = False
+                return reward, terminated, applied_successfully
 
-        # Get the chosen branch index
-        choice_idx = action['choice_ChoiceLevel_0']
+            choice_idx = agent_action[choice_key]
+            if not (0 <= choice_idx < len(action_config.choices)):
+                print(f"Error: Invalid choice index {{choice_idx}} for '{{choice_key}}'.")
+                reward -= 200.0
+                terminated = True
+                applied_successfully = False
+                return reward, terminated, applied_successfully
 
-        # Access the configuration for the chosen branch
-        chosen_branch_config = self._control_func_action_config.choices[choice_idx]
+            chosen_sub_config = action_config.choices[choice_idx]
+            return self._execute_action_config(chosen_sub_config, agent_action)
 
-        # Process actions within the chosen branch
-        for sub_action_config in chosen_branch_config.actions:
-            if isinstance(sub_action_config, ActionConstraintConfig):
-                # Evaluate constraint. If false, action is invalid.
-                constraint_met = self._evaluate_expression(sub_action_config.formula, is_constraint=True)
-                if not constraint_met:
-                    # print(f"Constraint violated: {sub_action_config.formula}")
-                    reward -= 100.0 # Penalty for invalid action
-                    terminated = True
-                    return reward, terminated, False # False means action was not fully applied
-            elif isinstance(sub_action_config, DeterministicAssignmentActionConfig):
-                # Apply deterministic assignment
-                # The value string is already pre-formatted to be Python-compatible
-                assigned_value = self._evaluate_expression(sub_action_config.value)
-                self.state[sub_action_config.variable] = assigned_value
-            elif isinstance(sub_action_config, NondeterministicAssignmentActionConfig):
-                # Apply nondeterministic assignment from agent's action
-                assign_key = f"assign_{sub_action_config.variable}"
-                if assign_key in action:
-                    self.state[sub_action_config.variable] = action[assign_key]
-                else:
-                    # This should not happen if action space is constructed correctly
-                    # print(f"Warning: Nondeterministic assignment for {sub_action_config.variable} not found in action.")
-                    reward -= 50.0 # Penalty for incomplete action
-                    terminated = True
-                    return reward, terminated, False
-            elif isinstance(sub_action_config, CallHybridProgramConfig):
-                # This environment doesn't support nested HP calls directly in controlFunc
-                # other than the main controlFunc itself.
-                # For this specific example, controlFunc is the top-level discrete action.
-                pass # Or raise an error if unexpected
-            elif isinstance(sub_action_config, SequenceActionConfig):
-                # If there's a sequence within a choice, process its actions
-                # This case handles the structure created by _parse_kx_hp_program_fragment_to_action_config
-                # when it returns a SequenceActionConfig for a choice branch.
-                for inner_action in sub_action_config.actions:
-                    if isinstance(inner_action, ActionConstraintConfig):
-                        constraint_met = self._evaluate_expression(inner_action.formula, is_constraint=True)
-                        if not constraint_met:
-                            reward -= 100.0
-                            terminated = True
-                            return reward, terminated, False
-                    elif isinstance(inner_action, DeterministicAssignmentActionConfig):
-                        assigned_value = self._evaluate_expression(inner_action.value)
-                        self.state[inner_action.variable] = assigned_value
-                    elif isinstance(inner_action, NondeterministicAssignmentActionConfig):
-                        assign_key = f"assign_{inner_action.variable}"
-                        if assign_key in action:
-                            self.state[inner_action.variable] = action[assign_key]
-                        else:
-                            reward -= 50.0
-                            terminated = True
-                            return reward, terminated, False
+        elif isinstance(action_config, SequenceActionConfig):
+            for sub_action in action_config.actions:
+                r, t, s = self._execute_action_config(sub_action, agent_action)
+                reward += r
+                if t: terminated = True
+                if not s:
+                    applied_successfully = False
+                    break # Stop processing sequence if any sub-action fails
+            return reward, terminated, applied_successfully
+
+        elif isinstance(action_config, DeterministicAssignmentActionConfig):
+            try:
+                assigned_value = self._evaluate_expression(action_config.value)
+                self.state[action_config.variable] = assigned_value
+            except Exception as e:
+                print(f"Error evaluating deterministic assignment for {{action_config.variable}}='{{action_config.value}}': {{e}}")
+                reward -= 100.0
+                terminated = True
+                applied_successfully = False
+            return reward, terminated, applied_successfully
+
+        elif isinstance(action_config, NondeterministicAssignmentActionConfig):
+            assign_key = f"assign_{action_config.variable}"
+            if assign_key in agent_action:
+                self.state[action_config.variable] = agent_action[assign_key]
+            else:
+                print(f"Warning: Nondeterministic assignment for '{{action_config.variable}}' (key '{{assign_key}}') not found in agent action.")
+                reward -= 50.0 # Penalty for incomplete action
+                terminated = True
+                applied_successfully = False
+            return reward, terminated, applied_successfully
+
+        elif isinstance(action_config, ActionConstraintConfig):
+            constraint_met = self._evaluate_expression(action_config.formula, is_constraint=True)
+            if not constraint_met:
+                # print(f"Constraint violated: {{action_config.formula}}")
+                reward -= 100.0 # Penalty for invalid action
+                terminated = True
+                applied_successfully = False
+            return reward, terminated, applied_successfully
+
+        elif isinstance(action_config, CallHybridProgramConfig):
+            # This generator assumes controlFunc is the primary action selection.
+            # If CallHybridProgramConfig appears here, it's an unsupported nested HP call within controlFunc.
+            print(f"Warning: CallHybridProgramConfig '{{action_config.hp_name}}' encountered in _execute_action_config. Not fully supported yet.")
+            reward -= 50.0
+            applied_successfully = False
+            return reward, terminated, applied_successfully
+
+        else:
+            print(f"Error: Unknown action config type: {{type(action_config)}}")
+            reward -= 200.0
+            terminated = True
+            applied_successfully = False
+            return reward, terminated, applied_successfully
+
+    def _apply_control_action(self, action):
+        """
+        Applies the agent's chosen action by traversing the control function's AST.
+        """
+        reward, terminated, applied_successfully = self._execute_action_config(self._control_func_action_config, action)
 
         # Apply t := 0; after controlFunc, as specified in the problem loop body
-        self.state['t'] = 0.0
+        if applied_successfully: # Only reset t if the action was valid and applied
+            self.state['t'] = 0.0
 
-        return reward, terminated, True # True means action was successfully applied
+        return reward, terminated, applied_successfully
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -430,7 +454,7 @@ class IJRR17_Corollary_1_1_Velocity_controlled_passive_safety(gym.Env):
         # (x - xo)^2 + (y - yo)^2 > 0
         # This means the robot must NOT be at the obstacle's position.
         # If it becomes <= 0, safety is violated.
-        postcondition_satisfied = self._evaluate_expression('((not \1) or \2)**2 + (y - yo)**2 > 0)', is_constraint=True)
+        postcondition_satisfied = self._evaluate_expression('(v>0 -> (x - xo)**2 + (y - yo)**2 > 0)', is_constraint=True)
         if not postcondition_satisfied:
             reward -= 100.0 # Safety violation
             terminated = True

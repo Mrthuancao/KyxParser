@@ -25,20 +25,14 @@ def _format_kx_expr_for_python_lambda_body(expr_str: str, lambda_param_names: Li
     """
     expr_py = expr_str.strip()
 
-    # --- DEBUGGING PRINT (unconditional for critical transformations) ---
-    print(f"\nDEBUG FORMATTER (lambda body): Processing expression: '{expr_str}'")
-
     # 1. Basic syntax replacements (power, abs) - Highest precedence
     expr_py = expr_py.replace('^', '**').replace('abs(', 'np.abs(')
-    print(f"DEBUG FORMATTER (lambda body): After '^' and 'abs(' replacement: '{expr_py}'")
 
     # 2. Replace single '=' with '==' for equality comparisons.
     expr_py = re.sub(r'(?<![<>=!])=(?![=])', '==', expr_py)
-    print(f"DEBUG FORMATTER (lambda body): After '=' to '==' replacement: '{expr_py}'")
 
     # 3. Handle logical operators (&, |) - Convert to Python 'and', 'or'
     expr_py = expr_py.replace('&', 'and').replace('|', 'or')
-    print(f"DEBUG FORMATTER (lambda body): After '&' and '|' replacement: '{expr_py}'")
 
     # 4. Handle KeYmaera X implication '->' (A -> B becomes (not (A) or (B))) - Lowest precedence
     # This regex specifically targets (A -> B) patterns, assuming implications are grouped.
@@ -49,7 +43,6 @@ def _format_kx_expr_for_python_lambda_body(expr_str: str, lambda_param_names: Li
         if new_expr_py == expr_py: # No more (A -> B) patterns found
             break
         expr_py = new_expr_py
-    print(f"DEBUG FORMATTER (lambda body): After '->' replacement: '{expr_py}'")
     
     # 5. Identify and replace identifiers with their correct scope prefix
     # Build a list of all known identifiers (excluding lambda params)
@@ -88,8 +81,6 @@ def _format_kx_expr_for_python_lambda_body(expr_str: str, lambda_param_names: Li
         # Perform replacements
         expr_py = pattern.sub(replacer, expr_py)
     
-    print(f"DEBUG FORMATTER (lambda body): Final (with scope) expr_py: '{expr_py}'")
-    
     return expr_py
 
 def _format_kx_expr_for_python_eval_context(expr_str: str) -> str:
@@ -110,14 +101,14 @@ def _format_kx_expr_for_python_eval_context(expr_str: str) -> str:
     expr_py = expr_py.replace('&', 'and').replace('|', 'or')
     
     # 4. Handle KeYmaera X implication '->' (A -> B becomes (not (A) or (B)))
-    while True:
-        # Note: The backreferences here need to be double-escaped when this string
-        # is embedded into a triple-quoted Python string literal.
-        new_expr_py = re.sub(r'\((.*?)\s*->\s*(.*?)\)', r'((not \\1) or \\2)', expr_py)
-        if new_expr_py == expr_py:
-            break
-        expr_py = new_expr_py
-    
+    # This function is used to create string literals that will be *evaluated* by _evaluate_expression.
+    # The _evaluate_expression function itself contains the re.sub logic.
+    # Thus, this function should return the expression in its KeYmaera X form,
+    # and _evaluate_expression will perform the '->' conversion at runtime.
+    # For now, I'll remove the implication handling from here, as it's redundant
+    # and potentially confusing if _evaluate_expression also does it.
+    # The _evaluate_expression method will be responsible for the final conversion.
+
     return expr_py
 
 # --- End Helper Functions ---
@@ -162,6 +153,7 @@ def _ast_to_python_code_string(ast_node: ActionType, indent_level: int = 0,
         )
     elif isinstance(ast_node, DeterministicAssignmentActionConfig):
         # Format the value string for direct evaluation by _evaluate_expression
+        # _format_kx_expr_for_python_eval_context ensures it's ready for eval()
         formatted_value = _format_kx_expr_for_python_eval_context(ast_node.value)
         return f"DeterministicAssignmentActionConfig(variable='{ast_node.variable}', value='{formatted_value}')"
     elif isinstance(ast_node, NondeterministicAssignmentActionConfig):
@@ -224,11 +216,17 @@ def generate_gym_environment_code(config: GymEnvironmentConfig) -> str:
                 formatted_value, [], all_constant_names, state_variable_names, all_function_names, all_predicate_names
             )
         else:
-            formatted_value = '0.0' if const.type == 'Real' else 'False'
+            # If no value is provided in the AST, default to a reasonable value
+            # rather than 0.0 which might break dynamics (e.g., ep=0).
+            # This is a heuristic; ideally, the AST parser should ensure critical constants have values.
+            if const.name in ['ep', 'W', 'V', 'A', 'b']: # Critical dynamics constants
+                formatted_value = '1.0' # Default to 1.0 for these if not specified
+            else:
+                formatted_value = '0.0' if const.type == 'Real' else 'False'
 
         constants_init_code_lines.append(f"self.constants['{const.name}'] = {formatted_value}")
     # Pre-indent this block
-    indented_constants_block = textwrap.indent("\n".join(constants_init_code_lines), '            ')
+    indented_constants_block = textwrap.indent("\n".join(constants_init_code_lines), '        ')
 
     functions_init_code_lines = []
     for func in config.definitions.functions:
@@ -243,7 +241,7 @@ def generate_gym_environment_code(config: GymEnvironmentConfig) -> str:
         )
         functions_init_code_lines.append(f"self.functions['{func.name}'] = lambda {params_str}: {formatted_body}")
     # Pre-indent this block
-    indented_functions_block = textwrap.indent("\n".join(functions_init_code_lines), '            ')
+    indented_functions_block = textwrap.indent("\n".join(functions_init_code_lines), '        ')
 
     predicates_init_code_lines = []
     for pred in config.definitions.predicates:
@@ -258,7 +256,7 @@ def generate_gym_environment_code(config: GymEnvironmentConfig) -> str:
         )
         predicates_init_code_lines.append(f"self.predicates['{pred.name}'] = lambda {params_str}: {formatted_body}")
     # Pre-indent this block
-    indented_predicates_block = textwrap.indent("\n".join(predicates_init_code_lines), '            ')
+    indented_predicates_block = textwrap.indent("\n".join(predicates_init_code_lines), '        ')
 
     # --- Generate Action Space ---
     action_space_definition, control_func_ast_object, action_space_keys = _generate_action_space_and_logic(config.definitions.hybrid_programs)
@@ -279,7 +277,7 @@ def generate_gym_environment_code(config: GymEnvironmentConfig) -> str:
     # --- Generate Initial State (reset logic) ---
     reset_initial_state_code_lines = _generate_reset_logic(config.variables.state_variables, config.problem.precondition)
     # Pre-indent this block
-    indented_reset_block = textwrap.indent("\n".join(reset_initial_state_code_lines), '            ')
+    indented_reset_block = textwrap.indent("\n".join(reset_initial_state_code_lines), '        ')
 
     # --- Generate Problem Logic (Postcondition, Loop Invariants) ---
     # Ensure formula is single-line for Python eval
@@ -291,365 +289,396 @@ def generate_gym_environment_code(config: GymEnvironmentConfig) -> str:
 
     # Imports for AST classes needed for _control_func_action_config
     ast_imports = [
+        "ActionType", # Added ActionType
         "ChoiceActionConfig", "SequenceActionConfig", "DeterministicAssignmentActionConfig",
         "NondeterministicAssignmentActionConfig", "ActionConstraintConfig", "CallHybridProgramConfig",
-        "HybridProgramStepConfig" # Added HybridProgramStepConfig for loop_body
+        "HybridProgramStepConfig"
     ]
     ast_import_statement = f"from ast_config import ({', '.join(ast_imports)})"
 
+    # Imports for typing hints
+    typing_imports = ["Dict", "Any", "Tuple"]
+    typing_import_statement = f"from typing import ({', '.join(typing_imports)})"
+
+
     # --- Main Environment Class Structure ---
-    env_code = textwrap.dedent(f"""
-    import gymnasium as gym
-    from gymnasium import spaces
-    import numpy as np
-    from scipy.integrate import solve_ivp
-    import math # For math functions like sqrt, sin, cos, etc.
-    import textwrap
-    import re # For regex replacements in _evaluate_expression
-    {ast_import_statement} # Import AST classes
+    # FIX: Moved the first few import statements to immediately follow f"""
+    env_code = textwrap.dedent(f"""import gymnasium as gym
+from gymnasium import spaces
+import numpy as np
+from scipy.integrate import solve_ivp
+import math # For math functions like sqrt, sin, cos, etc.
+import textwrap
+import re # For regex replacements in _evaluate_expression
+{typing_import_statement} # Import typing hints
+{ast_import_statement} # Import AST classes
 
-    class {env_name_for_class}(gym.Env):
-        metadata = {{"render_modes": ["human"], "render_fps": 30}}
+class {env_name_for_class}(gym.Env):
+    metadata = {{"render_modes": ["human"], "render_fps": 30}}
 
-        def __init__(self, render_mode=None):
-            super().__init__()
-            self.render_mode = render_mode
+    def __init__(self, render_mode=None):
+        super().__init__()
+        self.render_mode = render_mode
 
-            # --- KeYmaera X Definitions ---
-            self.constants = {{}}
-            self.functions = {{}}
-            self.predicates = {{}}
-            
-            # Constants
+        # --- KeYmaera X Definitions ---
+        self.constants = {{}}
+        self.functions = {{}}
+        self.predicates = {{}}
+        
+        # Constants
 {indented_constants_block}
 
-            # Functions (lambdas for easy evaluation)
+        # Functions (lambdas for easy evaluation)
 {indented_functions_block}
 
-            # Predicates (lambdas for easy evaluation)
+        # Predicates (lambdas for easy evaluation)
 {indented_predicates_block}
 
-            # --- State Variables ---
-            # Mapping of state variable names to their index in the observation array
-            self._state_keys = {state_variable_names}
-            # Current state values (dictionary for easy access by name)
-            self.state = {{key: 0.0 for key in self._state_keys}} 
-            # Initial state values are set in reset()
+        # --- State Variables ---
+        # Mapping of state variable names to their index in the observation array
+        self._state_keys = {state_variable_names}
+        # Current state values (dictionary for easy access by name)
+        self.state = {{key: 0.0 for key in self._state_keys}} 
+        # Initial state values are set in reset()
 
-            # --- Observation Space ---
-            # All state variables are Real, so Box space is appropriate.
-            # Bounds are infinite by default, as not specified in KeYmaera X input.
-            low_bounds = np.array([-np.inf] * len(self._state_keys), dtype=np.float32)
-            high_bounds = np.array([np.inf] * len(self._state_keys), dtype=np.float32)
-            self.observation_space = spaces.Box(low_bounds, high_bounds, shape=(len(self._state_keys),), dtype=np.float32)
+        # --- Observation Space ---
+        # All state variables are Real, so Box space is appropriate.
+        # Bounds are infinite by default, as not specified in KeYmaera X input.
+        low_bounds = np.array([-np.inf] * len(self._state_keys), dtype=np.float32)
+        high_bounds = np.array([np.inf] * len(self._state_keys), dtype=np.float32)
+        self.observation_space = spaces.Box(low_bounds, high_bounds, shape=(len(self._state_keys),), dtype=np.float32)
 
-            # --- Action Space (from controlFunc) ---
-            # The action space is a Dict to handle choices and nondeterministic assignments.
-{textwrap.indent(action_space_definition, '            ')}
-            self._action_space_keys = {list(action_space_keys.keys())}
-            self._control_func_action_config = {control_func_ast_code_str} # Stored for step logic
+        # --- Action Space (from controlFunc) ---
+        # The action space is a Dict to handle choices and nondeterministic assignments.
+{textwrap.indent(action_space_definition, '        ')}
+        self._action_space_keys = {list(action_space_keys.keys())}
+        self._control_func_action_config = {control_func_ast_code_str} # Stored for step logic
 
-            # --- ODE Solver Setup (from stepFunc) ---
-            # Mapping from state variable names to their index in the ODE solver's y array
-            self._ode_state_map = {ode_state_map}
-            self._ode_state_idx_map = {ode_state_idx_map} # Map index to name
-            
-            self._ode_func_str = '''
-{textwrap.indent(ode_func_code, '                ')}
-            '''
-            self._ode_events_str = '''
-{textwrap.indent(ode_event_code, '                ')}
-            '''
-            
-            # Compile ODE function and events dynamically
-            # This allows the ODE function to use self.state and other environment properties
-            # We need to pass the environment instance to the dynamically created function
-            # For safety, we'll use a wrapper
-            self._ode_func_compiled = self._compile_ode_func(self._ode_func_str)
-            self._ode_events_compiled = self._compile_ode_events(self._ode_events_str)
+        # --- ODE Solver Setup (from stepFunc) ---
+        # Mapping from state variable names to their index in the ODE solver's y array
+        self._ode_state_map = {ode_state_map}
+        self._ode_state_idx_map = {ode_state_idx_map} # Map index to name
+        
+        self._ode_func_str = '''
+{textwrap.indent(ode_func_code, '            ')}
+        '''
+        self._ode_events_str = '''
+{textwrap.indent(ode_event_code, '            ')}
+        '''
+        
+        # Compile ODE function and events dynamically
+        # This allows the ODE function to use self.state and other environment properties
+        # We need to pass the environment instance to the dynamically created function
+        # For safety, we'll use a wrapper
+        self._ode_func_compiled = self._compile_ode_func(self._ode_func_str)
+        self._ode_events_compiled = self._compile_ode_events(self._ode_events_str)
 
-            # --- Episode Management ---
-            self.current_step = 0
-            self.max_episode_steps = 200 # Default max steps for an episode
-            self.reward_range = (-float('inf'), float('inf'))
+        # --- Episode Management ---
+        self.current_step = 0
+        self.max_episode_steps = 200 # Default max steps for an episode
+        self.reward_range = (-float('inf'), float('inf'))
 
-        def _compile_ode_func(self, func_str):
-            # Create a dictionary for globals that includes 'self'
-            exec_globals = {{'np': np, 'math': math, 'self': self}} # 'self' in globals
-            exec_locals = {{}} # No special locals needed, self is in globals
-            # Dedent the string before execution, as it was indented for the triple-quote literal
-            exec(textwrap.dedent(func_str), exec_globals, exec_locals)
-            return exec_locals['ode_func']
+    def _compile_ode_func(self, func_str):
+        # Create a dictionary for globals that includes 'self'
+        exec_globals = {{'np': np, 'math': math, 'self': self}} # 'self' in globals
+        exec_locals = {{}} # No special locals needed, self is in globals
+        # Dedent the string before execution, as it was indented for the triple-quote literal
+        exec(textwrap.dedent(func_str), exec_globals, exec_locals)
+        return exec_locals['ode_func']
 
-        def _compile_ode_events(self, events_str):
-            if not events_str.strip():
-                return []
-            exec_globals = {{'np': np, 'math': math, 'self': self}} # 'self' in globals
-            exec_locals = {{}} # No special locals needed, self is in globals
-            # Dedent the string before execution
-            exec(textwrap.dedent(events_str), exec_globals, exec_locals)
-            return exec_locals['ode_events']
+    def _compile_ode_events(self, events_str):
+        if not events_str.strip():
+            return []
+        exec_globals = {{'np': np, 'math': math, 'self': self}} # 'self' in globals
+        exec_locals = {{}} # No special locals needed, self is in globals
+        # Dedent the string before execution
+        exec(textwrap.dedent(events_str), exec_globals, exec_locals)
+        return exec_locals['ode_events']
 
-        def _get_obs(self):
-            return np.array([self.state[key] for key in self._state_keys], dtype=np.float32)
+    def _get_obs(self):
+        return np.array([self.state[key] for key in self._state_keys], dtype=np.float32)
 
-        def _get_info(self):
-            return self.state.copy() # Return a copy of the current state dictionary
+    def _get_info(self):
+        return self.state.copy() # Return a copy of the current state dictionary
 
-        def _evaluate_expression(self, expr_str, local_vars=None, is_constraint=False):
-            
-            # Safe evaluation of expressions using environment's context.
-            # If is_constraint is True, returns False on evaluation error.
-            
-            if local_vars is None:
-                local_vars = {{}}
-            
-            # Strip KeYmaera X constraint prefix '?' if present
-            if expr_str.startswith('?'):
-                expr_str = expr_str[1:].strip()
+    def _evaluate_expression(self, expr_str, local_vars=None, is_constraint=False):
+        
+        # Safe evaluation of expressions using environment's context.
+        # If is_constraint is True, returns False on evaluation error.
+        
+        if local_vars is None:
+            local_vars = {{}}
+        
+        # Strip KeYmaera X constraint prefix '?' if present
+        if expr_str.startswith('?'):
+            expr_str = expr_str[1:].strip()
 
-            # Combine all available variables for evaluation context
-            eval_globals = {{
-                'np': np, 'math': math,
-                **self.constants,
-                **self.functions, # Include functions for general expressions
-                **self.predicates  # Include predicates for general expressions
-            }}
-            eval_locals = {{
-                **self.state,
-                **local_vars
-            }}
-            
-            # Apply the same transformations as in _format_kx_expr_for_python_lambda_body
-            # to ensure consistency when evaluating expressions at runtime.
-            expr_py = expr_str.strip()
-            
-            # 1. Basic syntax replacements (power, abs)
-            expr_py = expr_py.replace('^', '**').replace('abs(', 'np.abs(')
-            
-            # 2. Replace single '=' with '==' for equality comparisons.
-            expr_py = re.sub(r'(?<![<>=!])=(?![=])', '==', expr_py)
+        # Combine all available variables for evaluation context
+        eval_globals = {{
+            'np': np, 'math': math,
+            **self.constants,
+            **self.functions, # Include functions for general expressions
+            **self.predicates  # Include predicates for general expressions
+        }}
+        eval_locals = {{
+            **self.state,
+            **local_vars
+        }}
+        
+        # Apply the same transformations as in _format_kx_expr_for_python_lambda_body
+        # to ensure consistency when evaluating expressions at runtime.
+        expr_py = expr_str.strip()
+        
+        # 1. Basic syntax replacements (power, abs)
+        expr_py = expr_py.replace('^', '**').replace('abs(', 'np.abs(')
+        
+        # 2. Replace single '=' with '==' for equality comparisons.
+        expr_py = re.sub(r'(?<![<>=!])=(?![=])', '==', expr_py)
 
-            # 3. Handle logical operators (&, |)
-            expr_py = expr_py.replace('&', 'and').replace('|', 'or')
-            
-            # 4. Handle KeYmaera X implication '->' (A -> B becomes (not (A) or (B)))
-            while True:
-                # Backreferences \\1 and \\2 are double-escaped because this string
-                # is itself a string literal within the generated Python code.
-                new_expr_py = re.sub(r'\\((.*?)\\s*->\\s*(.*?)\\)', r'((not \\1) or \\2)', expr_py)
-                if new_expr_py == expr_py:
-                    break
-                expr_py = new_expr_py
-            
-            try:
-                return eval(expr_py, eval_globals, eval_locals)
-            except Exception as e:
-                print(f"Error evaluating expression '{{expr_str}}': {{e}}")
-                print(f"Eval globals: {{eval_globals}}")
-                print(f"Eval locals: {{eval_locals}}")
-                if is_constraint:
-                    return False # For constraints, return False on error
-                raise # Re-raise for non-constraint expressions
+        # 3. Handle logical operators (&, |)
+        expr_py = expr_py.replace('&', 'and').replace('|', 'or')
+        
+        # 4. Handle KeYmaera X implication '->' (A -> B becomes (not (A) or (B)))
+        # CORRECTED: Pattern and replacement for re.sub
+        while True:
+            new_expr_py = re.sub(r'\((.*?)\s*->\s*(.*?)\)', r'((not \1) or \2)', expr_py)
+            if new_expr_py == expr_py:
+                break
+            expr_py = new_expr_py
+        
+        try:
+            return eval(expr_py, eval_globals, eval_locals)
+        except Exception as e:
+            print(f"Error evaluating expression '{{expr_str}}': {{e}}")
+            print(f"Eval globals: {{eval_globals}}")
+            print(f"Eval locals: {{eval_locals}}")
+            if is_constraint:
+                return False # For constraints, return False on error
+            raise # Re-raise for non-constraint expressions
 
-        def _apply_control_action(self, action):
-            reward = 0
-            terminated = False
-            
-            # This structure mirrors the _control_func_action_config generated earlier
-            # It's a ChoiceActionConfig at the top level
-            
-            # Get the chosen branch index
-            choice_idx = action['choice_ChoiceLevel_0']
-            
-            # Access the configuration for the chosen branch
-            chosen_branch_config = self._control_func_action_config.choices[choice_idx]
-            
-            # Process actions within the chosen branch
-            for sub_action_config in chosen_branch_config.actions:
-                if isinstance(sub_action_config, ActionConstraintConfig):
-                    # Evaluate constraint. If false, action is invalid.
-                    constraint_met = self._evaluate_expression(sub_action_config.formula, is_constraint=True)
-                    if not constraint_met:
-                        # print(f"Constraint violated: {{sub_action_config.formula}}")
-                        reward -= 100.0 # Penalty for invalid action
-                        terminated = True
-                        return reward, terminated, False # False means action was not fully applied
-                elif isinstance(sub_action_config, DeterministicAssignmentActionConfig):
-                    # Apply deterministic assignment
-                    # The value string is already pre-formatted to be Python-compatible
-                    assigned_value = self._evaluate_expression(sub_action_config.value)
-                    self.state[sub_action_config.variable] = assigned_value
-                elif isinstance(sub_action_config, NondeterministicAssignmentActionConfig):
-                    # Apply nondeterministic assignment from agent's action
-                    assign_key = f"assign_{{sub_action_config.variable}}"
-                    if assign_key in action:
-                        self.state[sub_action_config.variable] = action[assign_key]
-                    else:
-                        # This should not happen if action space is constructed correctly
-                        # print(f"Warning: Nondeterministic assignment for {{sub_action_config.variable}} not found in action.")
-                        reward -= 50.0 # Penalty for incomplete action
-                        terminated = True
-                        return reward, terminated, False
-                elif isinstance(sub_action_config, CallHybridProgramConfig):
-                    # This environment doesn't support nested HP calls directly in controlFunc
-                    # other than the main controlFunc itself.
-                    # For this specific example, controlFunc is the top-level discrete action.
-                    pass # Or raise an error if unexpected
-                elif isinstance(sub_action_config, SequenceActionConfig):
-                    # If there's a sequence within a choice, process its actions
-                    # This case handles the structure created by _parse_kx_hp_program_fragment_to_action_config
-                    # when it returns a SequenceActionConfig for a choice branch.
-                    for inner_action in sub_action_config.actions:
-                        if isinstance(inner_action, ActionConstraintConfig):
-                            constraint_met = self._evaluate_expression(inner_action.formula, is_constraint=True)
-                            if not constraint_met:
-                                reward -= 100.0
-                                terminated = True
-                                return reward, terminated, False
-                        elif isinstance(inner_action, DeterministicAssignmentActionConfig):
-                            assigned_value = self._evaluate_expression(inner_action.value)
-                            self.state[inner_action.variable] = assigned_value
-                        elif isinstance(inner_action, NondeterministicAssignmentActionConfig):
-                            assign_key = f"assign_{{inner_action.variable}}"
-                            if assign_key in action:
-                                self.state[inner_action.variable] = action[assign_key]
-                            else:
-                                reward -= 50.0
-                                terminated = True
-                                return reward, terminated, False
-            
-            # Apply t := 0; after controlFunc, as specified in the problem loop body
-            self.state['t'] = 0.0
-            
-            return reward, terminated, True # True means action was successfully applied
+    def _execute_action_config(self, action_config: ActionType, agent_action: Dict[str, Any]) -> Tuple[float, bool, bool]:
+        \"\"\"
+        Recursively executes a given action configuration (Choice, Sequence, Assignment, Constraint).
+        Returns (reward, terminated, applied_successfully).
+        \"\"\"
+        reward = 0.0
+        terminated = False
+        applied_successfully = True
 
-        def reset(self, seed=None, options=None):
-            super().reset(seed=seed)
-            self.current_step = 0
-
-            # --- Initial State (based on Problem Precondition and defaults) ---
-{indented_reset_block}
-            
-            # Ensure dx, dy represent a unit vector initially
-            # This is a common requirement for orientation vectors
-            norm = np.sqrt(self.state['dx']**2 + self.state['dy']**2)
-            if norm > 1e-6: # Avoid division by zero
-                self.state['dx'] /= norm
-                self.state['dy'] /= norm
-            else: # Default to (1,0) if initial dx, dy are too small
-                self.state['dx'] = 1.0
-                self.state['dy'] = 0.0
-            
-            observation = self._get_obs()
-            info = self._get_info()
-            return observation, info
-
-        def step(self, action):
-            self.current_step += 1
-            reward = 0.0
-            terminated = False
-            truncated = False
-            info = self._get_info()
-
-            # --- 1. Apply Control Function (Discrete Action) ---
-            control_reward, control_terminated, control_applied = self._apply_control_action(action)
-            reward += control_reward
-            terminated = control_terminated
-
-            if not control_applied:
-                # Invalid action chosen or constraint violated during control phase
-                # print("Control action not applied due to constraint violation or missing assignment.")
-                return self._get_obs(), reward, terminated, truncated, info
-
-            # --- 2. Simulate Differential Equations (Continuous Dynamics) ---
-            # Prepare initial state for ODE solver
-            y0 = np.array([self.state[var_name] for var_name in self._ode_state_map.keys()], dtype=np.float64)
-            t_span = (0, self.constants['ep']) # Integrate up to time limit 'ep'
-
-            # Set up ODE events for domain constraints
-            # Events are functions that return 0 when an event occurs.
-            # terminal=True means integration stops. direction=-1 means event triggers when value goes from + to -
-            
-            # Ensure self.state reflects current values for ODE func/events
-            # The ODE func and events will get 'self' and use self.state
-            
-            try:
-                solution = solve_ivp(
-                    self._ode_func_compiled, 
-                    t_span, 
-                    y0, 
-                    events=self._ode_events_compiled, 
-                    dense_output=True,
-                    rtol=1e-6, atol=1e-8
-                )
-
-                if solution.status == 0: # Integration completed successfully
-                    # Update state with final values from ODE solver
-                    final_y = solution.y[:, -1]
-                    for i, var_name in enumerate(self._ode_state_map.keys()):
-                        self.state[var_name] = final_y[i]
-                elif solution.status == 1: # An event occurred
-                    # Update state to the point where the event occurred
-                    # Check if y_events is not empty before accessing
-                    if solution.y_events and solution.y_events[0].size > 0:
-                        final_y = solution.y_events[0][0] 
-                    else:
-                        final_y = solution.y[:, -1] # Fallback if event data is missing
-
-                    for i, var_name in enumerate(self._ode_state_map.keys()):
-                        self.state[var_name] = final_y[i]
-                    
-                    # Check which event terminated it
-                    # For this problem, events are domain constraints (t <= ep, v >= 0)
-                    # If v < 0, it's a domain violation -> termination
-                    # We need to re-evaluate after updating self.state
-                    if self.state['v'] < 0:
-                        reward -= 100.0 # Penalty for v < 0
-                        terminated = True
-                    # If t > ep, it means the time limit was reached, which is expected behavior
-                    # so no additional penalty for that specific event, as it's part of the evolution domain.
-                else: # Integration failed (status 2)
-                    # print(f"ODE integration failed: {{solution.message}}")
-                    reward -= 150.0 # Severe penalty for integration failure
-                    terminated = True
-
-            except Exception as e:
-                # print(f"Error during ODE integration: {{e}}")
-                reward -= 200.0 # Very severe penalty for unexpected errors
+        if isinstance(action_config, ChoiceActionConfig):
+            choice_key = f"choice_{{action_config.level_name}}"
+            if choice_key not in agent_action:
+                print(f"Error: Choice key '{{{{choice_key}}}}' missing from agent action.")
+                reward -= 200.0
                 terminated = True
+                applied_successfully = False
+                return reward, terminated, applied_successfully
 
-            # --- 3. Check Problem Postcondition ---
-            # (x - xo)^2 + (y - yo)^2 > 0
-            # This means the robot must NOT be at the obstacle's position.
-            # If it becomes <= 0, safety is violated.
-            postcondition_satisfied = self._evaluate_expression('{postcondition_formula_py}', is_constraint=True)
-            if not postcondition_satisfied:
-                reward -= 100.0 # Safety violation
+            choice_idx = agent_action[choice_key]
+            if not (0 <= choice_idx < len(action_config.choices)):
+                print(f"Error: Invalid choice index {{{{choice_idx}}}} for '{{{{choice_key}}}}'.")
+                reward -= 200.0
                 terminated = True
+                applied_successfully = False
+                return reward, terminated, applied_successfully
+
+            chosen_sub_config = action_config.choices[choice_idx]
+            return self._execute_action_config(chosen_sub_config, agent_action)
+
+        elif isinstance(action_config, SequenceActionConfig):
+            for sub_action in action_config.actions:
+                r, t, s = self._execute_action_config(sub_action, agent_action)
+                reward += r
+                if t: terminated = True
+                if not s:
+                    applied_successfully = False
+                    break # Stop processing sequence if any sub-action fails
+            return reward, terminated, applied_successfully
+
+        elif isinstance(action_config, DeterministicAssignmentActionConfig):
+            try:
+                assigned_value = self._evaluate_expression(action_config.value)
+                self.state[action_config.variable] = assigned_value
+            except Exception as e:
+                print(f"Error evaluating deterministic assignment for {{{{action_config.variable}}}}='{{{{action_config.value}}}}': {{{{e}}}}")
+                reward -= 100.0
+                terminated = True
+                applied_successfully = False
+            return reward, terminated, applied_successfully
+
+        elif isinstance(action_config, NondeterministicAssignmentActionConfig):
+            assign_key = f"assign_{{action_config.variable}}"
+            if assign_key in agent_action:
+                self.state[action_config.variable] = agent_action[assign_key]
             else:
-                # Small positive reward for staying safe, or for making progress
-                reward += 0.1 # Small survival reward
+                print(f"Warning: Nondeterministic assignment for '{{{{action_config.variable}}}}' (key '{{{{assign_key}}}}') not found in agent action.")
+                reward -= 50.0 # Penalty for incomplete action
+                terminated = True
+                applied_successfully = False
+            return reward, terminated, applied_successfully
 
-            # --- 4. Check Truncation ---
-            if self.current_step >= self.max_episode_steps:
-                truncated = True
-                reward -= 10.0 # Small penalty for truncating without reaching goal
+        elif isinstance(action_config, ActionConstraintConfig):
+            constraint_met = self._evaluate_expression(action_config.formula, is_constraint=True)
+            if not constraint_met:
+                # print(f"Constraint violated: {{{{action_config.formula}}}}")
+                reward -= 100.0 # Penalty for invalid action
+                terminated = True
+                applied_successfully = False
+            return reward, terminated, applied_successfully
 
-            observation = self._get_obs()
-            info = self._get_info()
-            return observation, reward, terminated, truncated, info
+        elif isinstance(action_config, CallHybridProgramConfig):
+            # This generator assumes controlFunc is the primary action selection.
+            # If CallHybridProgramConfig appears here, it's an unsupported nested HP call within controlFunc.
+            print(f"Warning: CallHybridProgramConfig '{{{{action_config.hp_name}}}}' encountered in _execute_action_config. Not fully supported yet.")
+            reward -= 50.0
+            applied_successfully = False
+            return reward, terminated, applied_successfully
 
-        def render(self):
-            if self.render_mode == "human":
-                # In a real environment, this would draw the robot, obstacle, etc.
-                # For now, just print state for demonstration.
-                print(f"Render: Step={{self.current_step}}, State={{self.state}}")
+        else:
+            print(f"Error: Unknown action config type: {{{{type(action_config)}}}}")
+            reward -= 200.0
+            terminated = True
+            applied_successfully = False
+            return reward, terminated, applied_successfully
 
-        def close(self):
-            # No specific resources to close for this environment
-            pass
-    """)
+    def _apply_control_action(self, action):
+        \"\"\"
+        Applies the agent's chosen action by traversing the control function's AST.
+        \"\"\"
+        reward, terminated, applied_successfully = self._execute_action_config(self._control_func_action_config, action)
+        
+        # Apply t := 0; after controlFunc, as specified in the problem loop body
+        if applied_successfully: # Only reset t if the action was valid and applied
+            self.state['t'] = 0.0
+        
+        return reward, terminated, applied_successfully
+
+    def reset(self, seed=None, options=None):
+        super().reset(seed=seed)
+        self.current_step = 0
+
+        # --- Initial State (based on Problem Precondition and defaults) ---
+{indented_reset_block}
+        
+        # Ensure dx, dy represent a unit vector initially
+        # This is a common requirement for orientation vectors
+        norm = np.sqrt(self.state['dx']**2 + self.state['dy']**2)
+        if norm > 1e-6: # Avoid division by zero
+            self.state['dx'] /= norm
+            self.state['dy'] /= norm
+        else: # Default to (1,0) if initial dx, dy are too small
+            self.state['dx'] = 1.0
+            self.state['dy'] = 0.0
+        
+        observation = self._get_obs()
+        info = self._get_info()
+        return observation, info
+
+    def step(self, action):
+        self.current_step += 1
+        reward = 0.0
+        terminated = False
+        truncated = False
+        info = self._get_info()
+
+        # --- 1. Apply Control Function (Discrete Action) ---
+        control_reward, control_terminated, control_applied = self._apply_control_action(action)
+        reward += control_reward
+        terminated = control_terminated
+
+        if not control_applied:
+            # Invalid action chosen or constraint violated during control phase
+            # print("Control action not applied due to constraint violation or missing assignment.")
+            return self._get_obs(), reward, terminated, truncated, info
+
+        # --- 2. Simulate Differential Equations (Continuous Dynamics) ---
+        # Prepare initial state for ODE solver
+        y0 = np.array([self.state[var_name] for var_name in self._ode_state_map.keys()], dtype=np.float64)
+        t_span = (0, self.constants['ep']) # Integrate up to time limit 'ep'
+
+        # Set up ODE events for domain constraints
+        # Events are functions that return 0 when an event occurs.
+        # terminal=True means integration stops. direction=-1 means event triggers when value goes from + to -
+        
+        # Ensure self.state reflects current values for ODE func/events
+        # The ODE func and events will get 'self' and use self.state
+        
+        try:
+            solution = solve_ivp(
+                self._ode_func_compiled, 
+                t_span, 
+                y0, 
+                events=self._ode_events_compiled, 
+                dense_output=True,
+                rtol=1e-6, atol=1e-8
+            )
+
+            if solution.status == 0: # Integration completed successfully
+                # Update state with final values from ODE solver
+                final_y = solution.y[:, -1]
+                for i, var_name in enumerate(self._ode_state_map.keys()):
+                    self.state[var_name] = final_y[i]
+            elif solution.status == 1: # An event occurred
+                # Update state to the point where the event occurred
+                # Check if y_events is not empty before accessing
+                if solution.y_events and solution.y_events[0].size > 0:
+                    final_y = solution.y_events[0][0] 
+                else:
+                    final_y = solution.y[:, -1] # Fallback if event data is missing
+
+                for i, var_name in enumerate(self._ode_state_map.keys()):
+                    self.state[var_name] = final_y[i]
+                
+                # Check which event terminated it
+                # For this problem, events are domain constraints (t <= ep, v >= 0)
+                # If v < 0, it's a domain violation -> termination
+                # We need to re-evaluate after updating self.state
+                if self.state['v'] < 0:
+                    reward -= 100.0 # Penalty for v < 0
+                    terminated = True
+                # If t > ep, it means the time limit was reached, which is expected behavior
+                # so no additional penalty for that specific event, as it's part of the evolution domain.
+            else: # Integration failed (status 2)
+                # print(f"ODE integration failed: {{solution.message}}")
+                reward -= 150.0 # Severe penalty for integration failure
+                terminated = True
+
+        except Exception as e:
+            # print(f"Error during ODE integration: {{e}}")
+            reward -= 200.0 # Very severe penalty for unexpected errors
+            terminated = True
+
+        # --- 3. Check Problem Postcondition ---
+        # (x - xo)^2 + (y - yo)^2 > 0
+        # This means the robot must NOT be at the obstacle's position.
+        # If it becomes <= 0, safety is violated.
+        postcondition_satisfied = self._evaluate_expression('{postcondition_formula_py}', is_constraint=True)
+        if not postcondition_satisfied:
+            reward -= 100.0 # Safety violation
+            terminated = True
+        else:
+            # Small positive reward for staying safe, or for making progress
+            reward += 0.1 # Small survival reward
+
+        # --- 4. Check Truncation ---
+        if self.current_step >= self.max_episode_steps:
+            truncated = True
+            reward -= 10.0 # Small penalty for truncating without reaching goal
+
+        observation = self._get_obs()
+        info = self._get_info()
+        return observation, reward, terminated, truncated, info
+
+    def render(self):
+        if self.render_mode == "human":
+            # In a real environment, this would draw the robot, obstacle, etc.
+            # For now, just print state for demonstration.
+            print(f"Render: Step={{self.current_step}}, State={{self.state}}")
+
+    def close(self):
+        # No specific resources to close for this environment
+        pass
+""")
     return env_code
 
 def _generate_action_space_and_logic(hps: List[HybridProgramConfig]):
@@ -682,6 +711,8 @@ def _generate_action_space_and_logic(hps: List[HybridProgramConfig]):
             if assign_key not in action_space_dict:
                 action_space_dict[assign_key] = "spaces.Box(low=-np.inf, high=np.inf, shape=(), dtype=np.float32)"
                 action_space_keys[assign_key] = "Box"
+        # DeterministicAssignmentActionConfig, ActionConstraintConfig, CallHybridProgramConfig
+        # do not add to the action space directly, as they are not agent inputs.
 
     _recursive_build_action_space(control_func_config.action_space_config)
 
@@ -694,7 +725,7 @@ def _generate_action_space_and_logic(hps: List[HybridProgramConfig]):
     else:
         # Indent the dictionary items correctly
         indented_items = textwrap.indent("\n".join(action_space_str_parts), ' ' * 8)
-        action_space_definition = f"self.action_space = spaces.Dict({{\n{indented_items}\n            }})"
+        action_space_definition = f"self.action_space = spaces.Dict({{\n{indented_items}\n        }})" # Adjusted indentation for closing brace
 
     # Return the actual AST object for the control function
     return action_space_definition, control_func_config.action_space_config, action_space_keys
