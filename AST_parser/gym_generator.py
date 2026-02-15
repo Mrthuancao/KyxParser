@@ -586,59 +586,71 @@ class {env_name_for_class}(gym.Env):
         # --- 2. Simulate Differential Equations (Continuous Dynamics) ---
         # Prepare initial state for ODE solver
         y0 = np.array([self.state[var_name] for var_name in self._ode_state_map.keys()], dtype=np.float64)
-        t_span = (0, self.constants['ep']) # Integrate up to time limit 'ep'
-
-        # Set up ODE events for domain constraints
-        # Events are functions that return 0 when an event occurs.
-        # terminal=True means integration stops. direction=-1 means event triggers when value goes from + to -
         
-        # Ensure self.state reflects current values for ODE func/events
-        # The ODE func and events will get 'self' and use self.state
-        
-        try:
-            solution = solve_ivp(
-                self._ode_func_compiled, 
-                t_span, 
-                y0, 
-                events=self._ode_events_compiled, 
-                dense_output=True,
-                rtol=1e-6, atol=1e-8
-            )
+        ep_val = self.constants['ep'] # Get the 'ep' constant value
+        t_span = (0, ep_val) # Integrate up to time limit 'ep'
 
-            if solution.status == 0: # Integration completed successfully
-                # Update state with final values from ODE solver
-                final_y = solution.y[:, -1]
-                for i, var_name in enumerate(self._ode_state_map.keys()):
-                    self.state[var_name] = final_y[i]
-            elif solution.status == 1: # An event occurred
-                # Update state to the point where the event occurred
-                # Check if y_events is not empty before accessing
-                if solution.y_events and solution.y_events[0].size > 0:
-                    final_y = solution.y_events[0][0] 
-                else:
-                    final_y = solution.y[:, -1] # Fallback if event data is missing
-
-                for i, var_name in enumerate(self._ode_state_map.keys()):
-                    self.state[var_name] = final_y[i]
-                
-                # Check which event terminated it
-                # For this problem, events are domain constraints (t <= ep, v >= 0)
-                # If v < 0, it's a domain violation -> termination
-                # We need to re-evaluate after updating self.state
-                if self.state['v'] < 0:
-                    reward -= 100.0 # Penalty for v < 0
-                    terminated = True
-                # If t > ep, it means the time limit was reached, which is expected behavior
-                # so no additional penalty for that specific event, as it's part of the evolution domain.
-            else: # Integration failed (status 2)
-                # print(f"ODE integration failed: {{solution.message}}")
-                reward -= 150.0 # Severe penalty for integration failure
+        if ep_val <= 0:
+            # If ep is non-positive, no meaningful time evolution occurs.
+            # This might indicate an invalid control action or problem setup.
+            self.state['t'] = 0.0 # Time does not advance or is reset
+            if ep_val < 0:
+                print(f"Warning: 'ep' constant is negative ({{ep_val}}). Skipping ODE integration and penalizing.")
+                reward -= 100.0 # Penalty for invalid time duration
                 terminated = True
+            # else (ep_val == 0): No time passes, but not necessarily an error if intended.
+        else:
+            # Set up ODE events for domain constraints
+            # Events are functions that return 0 when an event occurs.
+            # terminal=True means integration stops. direction=-1 means event triggers when value goes from + to -
+            
+            # Ensure self.state reflects current values for ODE func/events
+            # The ODE func and events will get 'self' and use self.state
+            
+            try:
+                solution = solve_ivp(
+                    self._ode_func_compiled, 
+                    t_span, 
+                    y0, 
+                    events=self._ode_events_compiled, 
+                    dense_output=True,
+                    rtol=1e-6, atol=1e-8
+                )
 
-        except Exception as e:
-            # print(f"Error during ODE integration: {{e}}")
-            reward -= 200.0 # Very severe penalty for unexpected errors
-            terminated = True
+                if solution.status == 0: # Integration completed successfully
+                    # Update state with final values from ODE solver
+                    final_y = solution.y[:, -1]
+                    for i, var_name in enumerate(self._ode_state_map.keys()):
+                        self.state[var_name] = final_y[i]
+                elif solution.status == 1: # An event occurred
+                    # Update state to the point where the event occurred
+                    # Check if y_events is not empty before accessing
+                    if solution.y_events and solution.y_events[0].size > 0:
+                        final_y = solution.y_events[0][0] 
+                    else:
+                        final_y = solution.y[:, -1] # Fallback if event data is missing
+
+                    for i, var_name in enumerate(self._ode_state_map.keys()):
+                        self.state[var_name] = final_y[i]
+                    
+                    # Check which event terminated it
+                    # For this problem, events are domain constraints (t <= ep, v >= 0)
+                    # If v < 0, it's a domain violation -> termination
+                    # We need to re-evaluate after updating self.state
+                    if self.state['v'] < 0:
+                        reward -= 100.0 # Penalty for v < 0
+                        terminated = True
+                    # If t > ep, it means the time limit was reached, which is expected behavior
+                    # so no additional penalty for that specific event, as it's part of the evolution domain.
+                else: # Integration failed (status 2)
+                    # print(f"ODE integration failed: {{solution.message}}")
+                    reward -= 150.0 # Severe penalty for integration failure
+                    terminated = True
+
+            except Exception as e:
+                # print(f"Error during ODE integration: {{e}}")
+                reward -= 200.0 # Very severe penalty for unexpected errors
+                terminated = True
 
         # --- 3. Check Problem Postcondition ---
         # (x - xo)^2 + (y - yo)^2 > 0
