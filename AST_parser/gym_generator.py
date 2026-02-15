@@ -29,6 +29,8 @@ def _format_kx_expr_for_python_lambda_body(expr_str: str, lambda_param_names: Li
     expr_py = expr_py.replace('^', '**').replace('abs(', 'np.abs(')
 
     # 2. Replace single '=' with '==' for equality comparisons.
+    # This is done here for lambda bodies, as they are directly evaluated Python code.
+    # For expressions passed to _evaluate_expression, that function handles it.
     expr_py = re.sub(r'(?<![<>=!])=(?![=])', '==', expr_py)
 
     # 3. Handle logical operators (&, |) - Convert to Python 'and', 'or'
@@ -39,6 +41,7 @@ def _format_kx_expr_for_python_lambda_body(expr_str: str, lambda_param_names: Li
     # It will repeatedly apply until no more such patterns are found, ensuring inner implications are handled first.
     # The `.*?` is non-greedy, matching the smallest possible content for A and B.
     while True:
+        # FIX: Corrected regex backreferences from ,  to \1, \2
         new_expr_py = re.sub(r'\((.*?)\s*->\s*(.*?)\)', r'((not \1) or \2)', expr_py)
         if new_expr_py == expr_py: # No more (A -> B) patterns found
             break
@@ -48,7 +51,7 @@ def _format_kx_expr_for_python_lambda_body(expr_str: str, lambda_param_names: Li
     # Build a list of all known identifiers (excluding lambda params)
     # Order matters: longer names first, then constants, then state, then functions/preds
     all_env_identifiers = sorted(
-        list(set(all_constants + all_state_vars + all_functions + all_predicates)),
+        list(set(all_constants + all_state_vars + all_functions + all_predicates + ['np'])), # Added 'np' to ensure it's not prefixed
         key=len, reverse=True # Longest names first
     )
 
@@ -76,6 +79,8 @@ def _format_kx_expr_for_python_lambda_body(expr_str: str, lambda_param_names: Li
                 return f"self.functions['{ident}']"
             elif ident in all_predicates:
                 return f"self.predicates['{ident}']"
+            elif ident == 'np': # 'np' should not be prefixed
+                return 'np'
             return ident # Should not be reached if pattern is correct
 
         # Perform replacements
@@ -87,28 +92,16 @@ def _format_kx_expr_for_python_eval_context(expr_str: str) -> str:
     """
     Converts a KeYmaera X expression string into a Python expression string
     suitable for evaluation within a general context (like _evaluate_expression).
-    Handles operator conversions. Identifier prefixing is handled by eval_globals/locals.
+    Handles only basic operator conversions (power, abs) that are not handled
+    by _evaluate_expression's regex.
     """
     expr_py = expr_str.strip()
 
     # 1. Basic syntax replacements (power, abs)
     expr_py = expr_py.replace('^', '**').replace('abs(', 'np.abs(')
     
-    # 2. Replace single '=' with '==' for equality comparisons.
-    expr_py = re.sub(r'(?<![<>=!])=(?![=])', '==', expr_py)
-
-    # 3. Handle logical operators (&, |)
-    expr_py = expr_py.replace('&', 'and').replace('|', 'or')
-    
-    # 4. Handle KeYmaera X implication '->' (A -> B becomes (not (A) or (B)))
-    # This function is used to create string literals that will be *evaluated* by _evaluate_expression.
-    # The _evaluate_expression function itself contains the re.sub logic.
-    # Thus, this function should return the expression in its KeYmaera X form,
-    # and _evaluate_expression will perform the '->' conversion at runtime.
-    # For now, I'll remove the implication handling from here, as it's redundant
-    # and potentially confusing if _evaluate_expression also does it.
-    # The _evaluate_expression method will be responsible for the final conversion.
-
+    # Other conversions (e.g., '=', '&', '|', '->') are handled by _evaluate_expression
+    # itself when it processes the string at runtime.
     return expr_py
 
 # --- End Helper Functions ---
@@ -222,7 +215,7 @@ def generate_gym_environment_code(config: GymEnvironmentConfig) -> str:
             if const.name in ['ep', 'W', 'V', 'A', 'b']: # Critical dynamics constants
                 formatted_value = '1.0' # Default to 1.0 for these if not specified
             else:
-                formatted_value = '0.0' if const.type == 'Real' else 'False'
+                formatted_value = '0.0' # Default for other unspecified constants
 
         constants_init_code_lines.append(f"self.constants['{const.name}'] = {formatted_value}")
     # Pre-indent this block
@@ -289,7 +282,7 @@ def generate_gym_environment_code(config: GymEnvironmentConfig) -> str:
 
     # Imports for AST classes needed for _control_func_action_config
     ast_imports = [
-        "ActionType", # Added ActionType
+        "ActionType", 
         "ChoiceActionConfig", "SequenceActionConfig", "DeterministicAssignmentActionConfig",
         "NondeterministicAssignmentActionConfig", "ActionConstraintConfig", "CallHybridProgramConfig",
         "HybridProgramStepConfig"
@@ -302,7 +295,6 @@ def generate_gym_environment_code(config: GymEnvironmentConfig) -> str:
 
 
     # --- Main Environment Class Structure ---
-    # FIX: Moved the first few import statements to immediately follow f"""
     env_code = textwrap.dedent(f"""import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
@@ -864,11 +856,13 @@ if __name__ == "__main__":
     admissibleSeparation_func = FunctionDefinitionConfig(name='admissibleSeparation', return_type='Real', parameters=[('Real', 'v')], body='stopDist(v) + accelComp(v)')
 
     # Predicates
-    # Let's use raw KeYmaera X syntax here to test the _format_kx_expr_for_python_lambda_body
-    isWellformedDir_pred = PredicateDefinitionConfig(name='isWellformedDir', parameters=[('Real', 'dx'), ('Real', 'dy')], body='dx^2 + dy^2 = 1') # Use = for equality
+    # FIX: Use np.isclose for floating-point equality where appropriate
+    isWellformedDir_pred = PredicateDefinitionConfig(name='isWellformedDir', parameters=[('Real', 'dx'), ('Real', 'dy')], body='np.isclose(dx^2 + dy^2, 1.0, atol=1e-6)')
     bounds_pred = PredicateDefinitionConfig(name='bounds', parameters=[], body='A >= 0 & b > 0 & ep > 0 & V >= 0') # Use & for AND, added V
-    initialState_pred = PredicateDefinitionConfig(name='initialState', parameters=[('Real', 'x'), ('Real', 'y'), ('Real', 'v'), ('Real', 'dx'), ('Real', 'dy'), ('Real', 'xo'), ('Real', 'yo')], body='v = 0 & (x-xo)^2 + (y-yo)^2 > 0 & isWellformedDir(dx,dy)') # Use = and &
-    loopinv_pred = PredicateDefinitionConfig(name='loopinv', parameters=[('Real', 'x'), ('Real', 'y'), ('Real', 'v'), ('Real', 'dx'), ('Real', 'dy'), ('Real', 'xo'), ('Real', 'yo')], body='v >= 0 & isWellformedDir(dx,dy) & (v>0 -> abs(x-xo) > stopDist(v) | abs(y-yo) > stopDist(v))') # Use & and -> and |
+    # FIX: Use np.isclose for floating-point equality in initialState
+    initialState_pred = PredicateDefinitionConfig(name='initialState', parameters=[('Real', 'x'), ('Real', 'y'), ('Real', 'v'), ('Real', 'dx'), ('Real', 'dy'), ('Real', 'xo'), ('Real', 'yo')], body='np.isclose(v, 0.0, atol=1e-6) & (x-xo)^2 + (y-yo)^2 > 0 & isWellformedDir(dx,dy)') # Use &
+    # FIX: Correct loopinv formula and use np.isclose
+    loopinv_pred = PredicateDefinitionConfig(name='loopinv', parameters=[('Real', 'x'), ('Real', 'y'), ('Real', 'v'), ('Real', 'dx'), ('Real', 'dy'), ('Real', 'xo'), ('Real', 'yo')], body='v >= 0 & isWellformedDir(dx,dy) & (v>0 -> np.abs(x-xo) > stopDist(v) | np.abs(y-yo) > stopDist(v))') # Use & and -> and |
     # Added 'assumptions' predicate from the user's generated code to check its transformation
     assumptions_pred = PredicateDefinitionConfig(name='assumptions', parameters=[('Real', 'x'), ('Real', 'y'), ('Real', 'v'), ('Real', 'dx'), ('Real', 'dy'), ('Real', 'xo'), ('Real', 'yo')], body='bounds() & initialState(x,y,v,dx,dy,xo,yo)')
 
@@ -894,7 +888,8 @@ if __name__ == "__main__":
         NondeterministicAssignmentActionConfig(variable='r'),
         NondeterministicAssignmentActionConfig(variable='xo'),
         NondeterministicAssignmentActionConfig(variable='yo'),
-        ActionConstraintConfig(formula='r!=0 & r*w = v'), # Use & and =
+        # FIX: Use np.isclose for floating-point equality in ActionConstraintConfig
+        ActionConstraintConfig(formula='r!=0 & np.isclose(r*w, v, atol=1e-6)'),
         ActionConstraintConfig(formula='abs(x-xo) > admissibleSeparation(v) | abs(y-yo) > admissibleSeparation(v)') # Use |
     ])
     choice0_actions_branch2 = ChoiceActionConfig(level_name='ChoiceLevel_1', choices=[

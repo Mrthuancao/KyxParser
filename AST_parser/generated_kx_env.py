@@ -80,12 +80,12 @@ class IJRR17_Corollary_1_1_Velocity_controlled_passive_safety(gym.Env):
                         NondeterministicAssignmentActionConfig(variable='v'),
                         ActionConstraintConfig(formula='0<=v'),
                         NondeterministicAssignmentActionConfig(variable='w'),
-                        ActionConstraintConfig(formula='-W<=w and w<=W'),
+                        ActionConstraintConfig(formula='-W<=w & w<=W'),
                         NondeterministicAssignmentActionConfig(variable='r'),
                         NondeterministicAssignmentActionConfig(variable='xo'),
                         NondeterministicAssignmentActionConfig(variable='yo'),
-                        ActionConstraintConfig(formula='r!=0 and r*w == v'),
-                        ActionConstraintConfig(formula='np.abs(x-xo) > admissibleSeparation(v)         or np.abs(y-yo) > admissibleSeparation(v)')
+                        ActionConstraintConfig(formula='r!=0 & r*w = v'),
+                        ActionConstraintConfig(formula='np.abs(x-xo) > admissibleSeparation(v)         | np.abs(y-yo) > admissibleSeparation(v)')
                     ])
                 ])
             ]) # Stored for step logic
