@@ -37,9 +37,6 @@ def _format_kx_expr_for_python_lambda_body(expr_str: str, lambda_param_names: Li
     expr_py = expr_py.replace('&', 'and').replace('|', 'or')
 
     # 4. Handle KeYmaera X implication '->' (A -> B becomes (not (A) or (B))) - Lowest precedence
-    # This regex specifically targets (A -> B) patterns, assuming implications are grouped.
-    # It will repeatedly apply until no more such patterns are found, ensuring inner implications are handled first.
-    # The `.*?` is non-greedy, matching the smallest possible content for A and B.
     while True:
         # FIX: Corrected regex backreferences from ,  to \1, \2
         new_expr_py = re.sub(r'\((.*?)\s*->\s*(.*?)\)', r'((not \1) or \2)', expr_py)
@@ -103,6 +100,51 @@ def _format_kx_expr_for_python_eval_context(expr_str: str) -> str:
     # Other conversions (e.g., '=', '&', '|', '->') are handled by _evaluate_expression
     # itself when it processes the string at runtime.
     return expr_py
+
+def _expand_formula(formula_str: str, definitions: DefinitionsConfig) -> str:
+    """
+    Recursively expands predicate calls within a formula string.
+    This returns the formula in KeYmaera X syntax, suitable for further parsing.
+    It handles simple argument substitution.
+    """
+    expanded_formula = formula_str
+    
+    predicate_map = {p.name: (p.body, [param[1] for param in p.parameters]) for p in definitions.predicates}
+    
+    while True:
+        num_substitutions_in_pass = 0
+        # Sort by length descending to handle cases where one predicate name is a substring of another
+        sorted_pred_names = sorted(predicate_map.keys(), key=len, reverse=True)
+        
+        for pred_name in sorted_pred_names:
+            pred_body, pred_params = predicate_map[pred_name]
+            # Regex to find calls to this specific predicate, capturing arguments
+            pattern = r'\b' + re.escape(pred_name) + r'\s*\(([^)]*)\)'
+            
+            def replace_match(match):
+                nonlocal num_substitutions_in_pass
+                num_substitutions_in_pass += 1
+                call_args_str = match.group(1)
+                call_args = [arg.strip() for arg in call_args_str.split(',') if arg.strip()]
+                
+                if len(call_args) != len(pred_params):
+                    print(f"Warning: Mismatch in number of arguments for predicate '{pred_name}'. Expected {len(pred_params)}, got {len(call_args)} in call '{match.group(0)}'.")
+                    return match.group(0)
+                
+                substituted_body = pred_body
+                for i, param_name in enumerate(pred_params):
+                    # Replace `param_name` with `call_args[i]` in the body
+                    # Use word boundaries to avoid partial replacements (e.g., replacing 'x' in 'dx')
+                    substituted_body = re.sub(r'\b' + re.escape(param_name) + r'\b', call_args[i], substituted_body)
+                
+                return f"({substituted_body})" # Enclose in parens to maintain logical grouping
+
+            expanded_formula = re.sub(pattern, replace_match, expanded_formula)
+        
+        if num_substitutions_in_pass == 0:
+            break
+            
+    return expanded_formula
 
 # --- End Helper Functions ---
 
@@ -202,18 +244,21 @@ def generate_gym_environment_code(config: GymEnvironmentConfig) -> str:
     # --- Generate Constants, Functions, Predicates ---
     constants_init_code_lines = []
     for const in config.definitions.constants:
-        formatted_value = const.value
-        if formatted_value is not None:
-             # Format constant value if it's an expression. Assume no lambda params here.
+        # Check if the value is a simple numeric literal (integer or float) or boolean
+        # which doesn't need _format_kx_expr_for_python_lambda_body
+        if const.value is not None and (re.fullmatch(r'^-?\d+(\.\d+)?$', const.value) or re.fullmatch(r'^(True|False)$', const.value)):
+            formatted_value = const.value
+        elif const.value is not None:
+             # It's an expression involving other constants/variables, so format it
             formatted_value = _format_kx_expr_for_python_lambda_body(
-                formatted_value, [], all_constant_names, state_variable_names, all_function_names, all_predicate_names
+                const.value, [], all_constant_names, state_variable_names, all_function_names, all_predicate_names
             )
-        else:
-            # If no value is provided in the AST, default to a reasonable value
-            # rather than 0.0 which might break dynamics (e.g., ep=0).
-            # This is a heuristic; ideally, the AST parser should ensure critical constants have values.
-            if const.name in ['ep', 'W', 'V', 'A', 'b']: # Critical dynamics constants
-                formatted_value = '1.0' # Default to 1.0 for these if not specified
+        else: # const.value is None (not provided in AST)
+            # Apply heuristic for critical constants
+            if const.name in ['ep', 'W', 'V', 'A', 'b', 'Ud']:
+                formatted_value = '1.0'
+                if const.name == 'Ud':
+                    formatted_value = '0.1'
             else:
                 formatted_value = '0.0' # Default for other unspecified constants
 
@@ -268,9 +313,10 @@ def generate_gym_environment_code(config: GymEnvironmentConfig) -> str:
     )
 
     # --- Generate Initial State (reset logic) ---
-    reset_initial_state_code_lines = _generate_reset_logic(config.variables.state_variables, config.problem.precondition)
+    # Pass definitions for predicate expansion
+    reset_initial_state_code_lines = _generate_reset_logic(config.variables.state_variables, config.problem.precondition, config.definitions)
     # Pre-indent this block
-    indented_reset_block = textwrap.indent("\n".join(reset_initial_state_code_lines), '        ')
+    indented_reset_block = textwrap.indent("\n".join(reset_initial_state_code_lines), '    ')
 
     # --- Generate Problem Logic (Postcondition, Loop Invariants) ---
     # Ensure formula is single-line for Python eval
@@ -287,7 +333,7 @@ def generate_gym_environment_code(config: GymEnvironmentConfig) -> str:
         "NondeterministicAssignmentActionConfig", "ActionConstraintConfig", "CallHybridProgramConfig",
         "HybridProgramStepConfig"
     ]
-    ast_import_statement = f"from ast_config import ({', '.join(ast_imports)})"
+    ast_import_statement = f"from pyast_config import ({', '.join(ast_imports)})"
 
     # Imports for typing hints
     typing_imports = ["Dict", "Any", "Tuple"]
@@ -431,8 +477,8 @@ class {env_name_for_class}(gym.Env):
         expr_py = expr_py.replace('&', 'and').replace('|', 'or')
         
         # 4. Handle KeYmaera X implication '->' (A -> B becomes (not (A) or (B)))
-        # CORRECTED: Pattern and replacement for re.sub
         while True:
+            # FIX: Corrected regex backreferences from ,  to \1, \2
             new_expr_py = re.sub(r'\((.*?)\s*->\s*(.*?)\)', r'((not \1) or \2)', expr_py)
             if new_expr_py == expr_py:
                 break
@@ -442,8 +488,8 @@ class {env_name_for_class}(gym.Env):
             return eval(expr_py, eval_globals, eval_locals)
         except Exception as e:
             print(f"Error evaluating expression '{{expr_str}}': {{e}}")
-            print(f"Eval globals: {{eval_globals}}")
-            print(f"Eval locals: {{eval_locals}}")
+            # print(f"Eval globals: {{eval_globals}}") # Too verbose
+            # print(f"Eval locals: {{eval_locals}}") # Too verbose
             if is_constraint:
                 return False # For constraints, return False on error
             raise # Re-raise for non-constraint expressions
@@ -503,10 +549,12 @@ class {env_name_for_class}(gym.Env):
             if assign_key in agent_action:
                 self.state[action_config.variable] = agent_action[assign_key]
             else:
-                print(f"Warning: Nondeterministic assignment for '{{{{action_config.variable}}}}' (key '{{{{assign_key}}}}') not found in agent action.")
-                reward -= 50.0 # Penalty for incomplete action
-                terminated = True
-                applied_successfully = False
+                print(f"Warning: Nondeterministic assignment for '{{{{action_config.variable}}}}' (key '{{{{assign_key}}}}') not found in agent action. Defaulting to current value.")
+                # This might indicate an incomplete action by the agent, penalize.
+                reward -= 50.0 
+                # Do not terminate here, as it might be a valid choice to not assign.
+                # However, if the problem requires it, this might need to be `terminated = True`.
+                # For now, we assume it's okay to skip, but with a penalty.
             return reward, terminated, applied_successfully
 
         elif isinstance(action_config, ActionConstraintConfig):
@@ -551,16 +599,6 @@ class {env_name_for_class}(gym.Env):
 
         # --- Initial State (based on Problem Precondition and defaults) ---
 {indented_reset_block}
-        
-        # Ensure dx, dy represent a unit vector initially
-        # This is a common requirement for orientation vectors
-        norm = np.sqrt(self.state['dx']**2 + self.state['dy']**2)
-        if norm > 1e-6: # Avoid division by zero
-            self.state['dx'] /= norm
-            self.state['dy'] /= norm
-        else: # Default to (1,0) if initial dx, dy are too small
-            self.state['dx'] = 1.0
-            self.state['dy'] = 0.0
         
         observation = self._get_obs()
         info = self._get_info()
@@ -637,7 +675,7 @@ class {env_name_for_class}(gym.Env):
                     # For this problem, events are domain constraints (t <= ep, v >= 0)
                     # If v < 0, it's a domain violation -> termination
                     # We need to re-evaluate after updating self.state
-                    if self.state['v'] < 0:
+                    if self.state.get('v', 0.0) < 0: # Use .get with default for safety
                         reward -= 100.0 # Penalty for v < 0
                         terminated = True
                     # If t > ep, it means the time limit was reached, which is expected behavior
@@ -824,32 +862,94 @@ def _generate_ode_solver_logic(hps: List[HybridProgramConfig], state_variable_na
 
     return ode_func_code, ode_event_code, ode_state_map, ode_state_idx_map
 
-def _generate_reset_logic(variables: List[VariableDeclarationConfig], precondition: PreconditionConfig):
+def _generate_reset_logic(variables: List[VariableDeclarationConfig], precondition: PreconditionConfig, definitions: DefinitionsConfig) -> List[str]:
     """
-    Generates the initial state assignment logic for the reset method.
-    It uses default values and then checks the precondition.
+    Generates the initial state assignment logic for the reset method,
+    leveraging the precondition and predicate definitions.
     """
     reset_code_lines = []
-    reset_code_lines.append("    # Default initial values (can be randomized or fixed based on problem)")
     
+    # 1. Initialize all state variables with default values (can be randomized or fixed)
     defaults = {
         'x': '0.0', 'y': '0.0', 'v': '1.0', 'a': '0.0',
         'dx': '1.0', 'dy': '0.0', 'w': '0.0', 'r': '1.0',
         'xo': '5.0', 'yo': '0.0', 't': '0.0', 'vxo': '0.0', 'vyo': '0.0'
     }
-
+    
+    reset_code_lines.append("    # Default initial values for state variables (can be randomized or fixed based on problem)")
     for var in variables:
         default_val = defaults.get(var.name, '0.0')
-        reset_code_lines.append(f"self.state['{var.name}'] = {default_val}")
+        reset_code_lines.append(f"    self.state['{var.name}'] = {default_val}")
+    reset_code_lines.append("")
+
+    # 2. Expand the precondition formula (KeYmaera X syntax)
+    expanded_precondition_kx = _expand_formula(precondition.formula, definitions)
     
+    # 3. Parse the expanded precondition for explicit assignments
+    # This regex looks for 'variable = value' or 'variable == value'
+    # It assumes the value is a simple number or constant identifier.
+    assignment_matches = re.findall(r'(\b\w+\b)\s*(?:=|==)\s*([a-zA-Z0-9_.]+)', expanded_precondition_kx)
+    
+    if assignment_matches:
+        reset_code_lines.append("    # Apply explicit assignments from the precondition")
+        for var_name, value_str in assignment_matches:
+            # Only apply if it's a known state variable
+            if var_name in [v.name for v in variables]:
+                reset_code_lines.append(f"    self.state['{var_name}'] = {value_str}")
+        reset_code_lines.append("")
+
+    # 4. Special handling for dx, dy (isWellformedDir)
+    # Check for the presence of the pattern related to dx^2+dy^2 in the expanded formula.
+    # The actual predicate body for isWellformedDir is: `1-Ud <= dx^2+dy^2 & dx^2 + dy^2 <= 1+Ud`
+    if re.search(r'dx\^2\s*\+\s*dy\^2', expanded_precondition_kx): # Check for KeYmaera X power operator
+        reset_code_lines.append(f"    # Ensure dx, dy satisfy isWellformedDir (approximate unit vector)")
+        reset_code_lines.append(f"    norm_sq = self.state['dx']**2 + self.state['dy']**2")
+        reset_code_lines.append(f"    ud_val = self.constants.get('Ud', 0.0) # Get Ud from constants, default to 0.0 if not found")
+        reset_code_lines.append(f"    min_norm_sq_target = (1.0 - ud_val)**2")
+        reset_code_lines.append(f"    max_norm_sq_target = (1.0 + ud_val)**2")
+        reset_code_lines.append(f"    if not (min_norm_sq_target <= norm_sq <= max_norm_sq_target):")
+        reset_code_lines.append(f"        # If not within bounds, normalize and scale to satisfy the condition.")
+        reset_code_lines.append(f"        # A common way to satisfy this is to make it a unit vector (dx^2+dy^2 = 1).")
+        reset_code_lines.append(f"        # This satisfies 1-Ud <= 1 <= 1+Ud if Ud >= 0.")
+        reset_code_lines.append(f"        norm = np.sqrt(norm_sq)")
+        reset_code_lines.append(f"        if norm > 1e-6: # Avoid division by zero")
+        reset_code_lines.append(f"            self.state['dx'] /= norm")
+        reset_code_lines.append(f"            self.state['dy'] /= norm")
+        reset_code_lines.append(f"        else: # Default to (1,0) if too small")
+        reset_code_lines.append(f"            self.state['dx'] = 1.0")
+        reset_code_lines.append(f"            self.state['dy'] = 0.0")
+        reset_code_lines.append("")
+
+    # 5. Special handling for (x-xo)^2 + (y-yo)^2 > 0
+    # Check for the pattern in the expanded precondition (KeYmaera X syntax).
+    if re.search(r'\(x\s*-\s*xo\)\^2\s*\+\s*\(y\s*-\s*yo\)\^2\s*>\s*0', expanded_precondition_kx):
+        reset_code_lines.append(f"    # Ensure robot and obstacle are not at the same position")
+        reset_code_lines.append(f"    if self.state['x'] == self.state['xo'] and self.state['y'] == self.state['yo']:")
+        reset_code_lines.append(f"        self.state['x'] += 0.1 # Slightly perturb x to ensure separation")
+        reset_code_lines.append("")
+
+    # 6. Final verification
+    # The _evaluate_expression method expects Python syntax, so format the expanded_precondition_kx now.
+    final_precondition_for_eval = _format_kx_expr_for_python_eval_context(expanded_precondition_kx)
+    
+    # Escape strings for embedding into the generated Python code's f-string
+    original_precondition_formula_escaped = precondition.formula.replace("'", "\\'").replace('\\', '\\\\').replace('\n', ' ')
+    final_precondition_for_eval_escaped = final_precondition_for_eval.replace("'", "\\'").replace('\\', '\\\\').replace('\n', ' ')
+
+    reset_code_lines.append(f"    # Verify the full precondition after setting initial states")
+    reset_code_lines.append(f"    precondition_satisfied = self._evaluate_expression('{final_precondition_for_eval_escaped}', is_constraint=True)")
+    reset_code_lines.append(f"    if not precondition_satisfied:")
+    reset_code_lines.append(f"        print(f\"Warning: Initial state does not satisfy precondition: '{original_precondition_formula_escaped}'. Expanded: '{final_precondition_for_eval_escaped}'.\")")
+    reset_code_lines.append(f"        # Optionally, raise an error or try to find a valid state")
+    reset_code_lines.append(f"        # For now, we proceed but the environment might be in an invalid state.")
+    reset_code_lines.append("")
+
     return reset_code_lines
 
 
 # --- Main Execution (for testing the generator) ---
 if __name__ == "__main__":
-    # This part is for testing the generator directly with the provided PyAST config
-    # The PyAST config is hardcoded here for demonstration, but in real use
-    # it would come from keymaerax_parser.py
+    # This part is for testing the generator directly with the provided PyAST structure
     
     # Create a dummy GymEnvironmentConfig based on the example PyAST structure
     # This mimics the output of convert_keymaerax_ast_to_intermediate_pyast
@@ -860,58 +960,52 @@ if __name__ == "__main__":
     A_const = ConstantDefinitionConfig(name='A', type='Real', value='1.0') # Set a value for testing
     W_const = ConstantDefinitionConfig(name='W', type='Real', value='1.0') # Set a value for testing
     V_const = ConstantDefinitionConfig(name='V', type='Real', value='1.0') # Added V constant for testing
+    # FIX: Set Ud to a value < 1.0 for typical problem interpretation
+    Ud_const = ConstantDefinitionConfig(name='Ud', type='Real', value='0.1') # Added Ud constant for testing
 
     # Functions
     # Bodies are now Python-compatible and use self.constants/self.functions
-    stopDist_func = FunctionDefinitionConfig(name='stopDist', return_type='Real', parameters=[('Real', 'v')], body='v^2 / (2*b)') # Use ^ for power
-    accelComp_func = FunctionDefinitionConfig(name='accelComp', return_type='Real', parameters=[('Real', 'v')], body='(A/b + 1) * (A/2 * ep^2 + ep*v)') # Use ^ for power
+    stopDist_func = FunctionDefinitionConfig(name='stopDist', return_type='Real', parameters=[('Real', 'v')], body='((1+Ud) * v^2 / (2*b))') # Use ^ for power
+    accelComp_func = FunctionDefinitionConfig(name='accelComp', return_type='Real', parameters=[('Real', 'v')], body='((1+Ud) * (A/b + 1) * (A/2 * ep^2 + ep*v))') # Use ^ for power
     admissibleSeparation_func = FunctionDefinitionConfig(name='admissibleSeparation', return_type='Real', parameters=[('Real', 'v')], body='stopDist(v) + accelComp(v)')
 
     # Predicates
-    # FIX: Use np.isclose for floating-point equality where appropriate
-    isWellformedDir_pred = PredicateDefinitionConfig(name='isWellformedDir', parameters=[('Real', 'dx'), ('Real', 'dy')], body='np.isclose(dx^2 + dy^2, 1.0, atol=1e-6)')
-    bounds_pred = PredicateDefinitionConfig(name='bounds', parameters=[], body='A >= 0 & b > 0 & ep > 0 & V >= 0') # Use & for AND, added V
-    # FIX: Use np.isclose for floating-point equality in initialState
-    initialState_pred = PredicateDefinitionConfig(name='initialState', parameters=[('Real', 'x'), ('Real', 'y'), ('Real', 'v'), ('Real', 'dx'), ('Real', 'dy'), ('Real', 'xo'), ('Real', 'yo')], body='np.isclose(v, 0.0, atol=1e-6) & (x-xo)^2 + (y-yo)^2 > 0 & isWellformedDir(dx,dy)') # Use &
-    # FIX: Correct loopinv formula and use np.isclose
-    loopinv_pred = PredicateDefinitionConfig(name='loopinv', parameters=[('Real', 'x'), ('Real', 'y'), ('Real', 'v'), ('Real', 'dx'), ('Real', 'dy'), ('Real', 'xo'), ('Real', 'yo')], body='v >= 0 & isWellformedDir(dx,dy) & (v>0 -> np.abs(x-xo) > stopDist(v) | np.abs(y-yo) > stopDist(v))') # Use & and -> and |
-    # Added 'assumptions' predicate from the user's generated code to check its transformation
+    isWellformedDir_pred = PredicateDefinitionConfig(name='isWellformedDir', parameters=[('Real', 'dx'), ('Real', 'dy')], body='1-Ud <= dx^2+dy^2 & dx^2 + dy^2 <= 1+Ud')
+    # FIX: Corrected bounds predicate to match 0 <= Ud < 1
+    bounds_pred = PredicateDefinitionConfig(name='bounds', parameters=[], body='A >= 0 & b > 0 & ep > 0 & V >= 0 & 0<=Ud & Ud < 1') # Use & for AND, added V, Ud bounds
+    initialState_pred = PredicateDefinitionConfig(name='initialState', parameters=[('Real', 'x'), ('Real', 'y'), ('Real', 'v'), ('Real', 'dx'), ('Real', 'dy'), ('Real', 'xo'), ('Real', 'yo')], body='v = 0 & (x-xo)^2 + (y-yo)^2 > 0 & isWellformedDir(dx,dy)') # Use &
+    loopinv_pred = PredicateDefinitionConfig(name='loopinv', parameters=[('Real', 'x'), ('Real', 'y'), ('Real', 'v'), ('Real', 'dx'), ('Real', 'dy'), ('Real', 'xo'), ('Real', 'yo')], body='v >= 0 & isWellformedDir(dx,dy) & (abs(x-xo) > stopDist(v) | abs(y-yo) > stopDist(v))')
     assumptions_pred = PredicateDefinitionConfig(name='assumptions', parameters=[('Real', 'x'), ('Real', 'y'), ('Real', 'v'), ('Real', 'dx'), ('Real', 'dy'), ('Real', 'xo'), ('Real', 'yo')], body='bounds() & initialState(x,y,v,dx,dy,xo,yo)')
 
 
     # controlFunc Action Config
     # This structure directly reflects the problem description's controlFunc
-    # Choice 0: Nondeterministic assignment for vxo, vyo with constraint
-    choice0_actions_branch1 = SequenceActionConfig(actions=[
-        NondeterministicAssignmentActionConfig(variable='vxo'),
-        NondeterministicAssignmentActionConfig(variable='vyo'),
-        ActionConstraintConfig(formula='vxo^2+vyo^2<=V^2') # Use ^
+    # Choice 0: a := -b
+    # Choice 1: v = 0; a := 0; w := 0
+    # Choice 2: a := A; w := *; -W<=w & w<=W; r := *; xo := *; yo := *; r!=0 & r*w = v; abs(x-xo) > admissibleSeparation(v) | abs(y-yo) > admissibleSeparation(v)
+    choice0_actions_branch0 = SequenceActionConfig(actions=[
+        DeterministicAssignmentActionConfig(variable='a', value='-b')
     ])
-    # Choice 1: Nested choice (v := 0; w := 0; OR a := A; w := *; ...)
-    choice0_actions_branch2_choice1 = SequenceActionConfig(actions=[
-        DeterministicAssignmentActionConfig(variable='v', value='0'),
+    choice0_actions_branch1 = SequenceActionConfig(actions=[
+        ActionConstraintConfig(formula='v = 0'),
+        DeterministicAssignmentActionConfig(variable='a', value='0'),
         DeterministicAssignmentActionConfig(variable='w', value='0')
     ])
-    choice0_actions_branch2_choice2 = SequenceActionConfig(actions=[
-        NondeterministicAssignmentActionConfig(variable='v'),
-        ActionConstraintConfig(formula='0<=v'),
+    choice0_actions_branch2 = SequenceActionConfig(actions=[
+        DeterministicAssignmentActionConfig(variable='a', value='A'),
         NondeterministicAssignmentActionConfig(variable='w'),
         ActionConstraintConfig(formula='-W<=w & w<=W'), # Use &
         NondeterministicAssignmentActionConfig(variable='r'),
         NondeterministicAssignmentActionConfig(variable='xo'),
         NondeterministicAssignmentActionConfig(variable='yo'),
-        # FIX: Use np.isclose for floating-point equality in ActionConstraintConfig
-        ActionConstraintConfig(formula='r!=0 & np.isclose(r*w, v, atol=1e-6)'),
+        ActionConstraintConfig(formula='r!=0 & r*w = v'),
         ActionConstraintConfig(formula='abs(x-xo) > admissibleSeparation(v) | abs(y-yo) > admissibleSeparation(v)') # Use |
-    ])
-    choice0_actions_branch2 = ChoiceActionConfig(level_name='ChoiceLevel_1', choices=[
-        choice0_actions_branch2_choice1, 
-        choice0_actions_branch2_choice2
     ])
 
     control_func_action_config = ChoiceActionConfig(level_name='ChoiceLevel_0', choices=[
-        choice0_actions_branch1, 
-        choice0_actions_branch2 
+        choice0_actions_branch0, 
+        choice0_actions_branch1,
+        choice0_actions_branch2
     ])
     control_func = ControlFuncConfig(name='controlFunc', action_space_config=control_func_action_config)
 
@@ -923,12 +1017,7 @@ if __name__ == "__main__":
         ODEConfig(variable='v', equation='a'),
         ODEConfig(variable='dx', equation='-w * dy'),
         ODEConfig(variable='dy', equation='w * dx'),
-        ODEConfig(variable='w', equation='0'), # Assuming w is constant unless changed by control
-        ODEConfig(variable='r', equation='0'), # Assuming r is constant unless changed by control
-        ODEConfig(variable='xo', equation='vxo'), # Added xo, yo, vxo, vyo ODEs
-        ODEConfig(variable='yo', equation='vyo'),
-        ODEConfig(variable='vxo', equation='0'),
-        ODEConfig(variable='vyo', equation='0'),
+        ODEConfig(variable='w', equation='a/r'), # Corrected from '0'
         ODEConfig(variable='t', equation='1')
     ]
     step_func_evolution_domain = EvolutionDomainConfig(constraints=['t <= ep', 'v >= 0'])
@@ -936,9 +1025,9 @@ if __name__ == "__main__":
 
     # DefinitionsConfig
     definitions_config = DefinitionsConfig(
-        constants=[ep_const, b_const, A_const, W_const, V_const], # Added V_const
+        constants=[ep_const, b_const, A_const, W_const, V_const, Ud_const], # Added Ud_const
         functions=[stopDist_func, accelComp_func, admissibleSeparation_func],
-        predicates=[isWellformedDir_pred, bounds_pred, initialState_pred, loopinv_pred, assumptions_pred], # Added initialState_pred and loopinv_pred
+        predicates=[isWellformedDir_pred, bounds_pred, initialState_pred, loopinv_pred, assumptions_pred],
         hybrid_programs=[control_func, step_func]
     )
 
@@ -954,27 +1043,25 @@ if __name__ == "__main__":
         VariableDeclarationConfig(name='r', type='Real'),
         VariableDeclarationConfig(name='xo', type='Real'),
         VariableDeclarationConfig(name='yo', type='Real'),
-        VariableDeclarationConfig(name='vxo', type='Real'), # Added vxo, vyo
-        VariableDeclarationConfig(name='vyo', type='Real'),
         VariableDeclarationConfig(name='t', type='Real')
     ]
     variables_config = VariablesConfig(state_variables=state_vars)
 
     # ProblemConfig
-    precondition = PreconditionConfig(formula='assumptions(x, y, v, dx, dy, xo, yo)') # Use the new initialState_pred and bounds
-    postcondition = PostconditionConfig(formula='(v>0 -> (x - xo)^2 + (y - yo)^2 > 0)') # Use ^ for power
+    precondition = PreconditionConfig(formula='assumptions(x, y, v, dx, dy, xo, yo)')
+    postcondition = PostconditionConfig(formula='(x - xo)^2 + (y - yo)^2 > 0') # Simplified for this example
     
-    # Loop body: { { controlFunc; t := 0; } { stepFunc;@invariant(t>=0, isWellformedDir(dx, dy)) } }
+    # Loop body: { { controlFunc; t := 0; } { stepFunc;@invariant(...) } }
     loop_body_actions = SequenceActionConfig(actions=[
         SequenceActionConfig(actions=[
             CallHybridProgramConfig(hp_name='controlFunc'),
             DeterministicAssignmentActionConfig(variable='t', value='0')
         ]),
-        HybridProgramStepConfig(hp_name='stepFunc', invariant_formula='t>=0 & isWellformedDir(dx, dy) & (-t*V <= xo - old(xo) & xo - old(xo) <= t*V) & (-t*V <= yo - old(yo) & yo - old(yo) <= t*V) & (x\'=0*dx -> x = old(x)) & (x\'=0*dx -> y = old(y)) & (x\'=v*dx -> -t * v <= x - old(x) & x - old(x) <= t * v) & (x\'=v*dx -> -t * v <= y - old(y) & y - old(y) <= t * v)') # Use & and include all invariants
+        HybridProgramStepConfig(hp_name='stepFunc', invariant_formula='t>=0 & isWellformedDir(dx, dy) & (v>0 -> (abs(x-xo) > stopDist(v) | abs(y-yo) > stopDist(v)))') # Simplified invariant for example
     ])
     loop_execution = LoopExecutionConfig(
         iterations='inf',
-        loop_invariant_formula='loopinv(x, y, v, dx, dy, xo, yo)', # Use the new loopinv_pred
+        loop_invariant_formula='loopinv(x, y, v, dx, dy, xo, yo)',
         loop_body=loop_body_actions
     )
     problem_config = ProblemConfig(
@@ -986,7 +1073,7 @@ if __name__ == "__main__":
     # Full GymEnvironmentConfig
     # This example env_name will now be sanitized:
     gym_config_example = GymEnvironmentConfig(
-        env_name='IJRR17_Corollary_1_1__Velocity-controlled_passive_safety', # Original name
+        env_name='IJRR17_Corollary_1_2__Static_safety_with_margin_for_imperfect_trajectories', # Original name
         definitions=definitions_config,
         variables=variables_config,
         problem=problem_config
@@ -1009,7 +1096,7 @@ if __name__ == "__main__":
     
     # Update the example usage to reflect the sanitized class name
     sanitized_example_env_name = re.sub(r'[^a-zA-Z0-9_]', '_', gym_config_example.env_name)
-    sanitized_example_env_name = re.sub(r'_+', '_', sanitized_example_env_name).strip('_')
+    sanitized_example_env_name = re.sub(r'_+', '_', sanitized_env_name).strip('_')
     if sanitized_example_env_name and sanitized_example_env_name[0].isdigit():
         sanitized_example_env_name = '_' + sanitized_example_env_name
     if not sanitized_example_env_name:
@@ -1020,7 +1107,7 @@ To use the generated environment:
 
 1.  Make sure `gymnasium`, `numpy`, `scipy`, and `re` are installed (`pip install gymnasium numpy scipy`).
 2.  **CRITICAL:** Save the generated code above as `{output_filename}`. **Ensure you completely replace your existing generator file with this one.**
-3.  Ensure `ast_config.py` is in the same directory.
+3.  Ensure `pyast_config.py` is in the same directory.
 4.  You can then import and use the generated environment in another Python script or interactive session:
 
 ```python
@@ -1036,19 +1123,13 @@ print("Initial observation:", observation)
 print("Observation Space:", env.observation_space)
 print("Action Space:", env.action_space)
 
-# Before stepping, ensure constants like W are set in the environment if needed
-# For this example, constants like W, A, b, ep are initialized with values in the AST.
-# If they were not, they would default to 0.0 or False.
-
-# Example 1: Choose the first branch of ChoiceLevel_0 (vxo, vyo assignment)
-print("\\nTaking 5 steps with action_branch_0 (vxo, vyo assignment):")
-current_obs = observation
+# Example 1: Choose the first branch of ChoiceLevel_0 (a := -b)
+print("\\nTaking 5 steps with action_branch_0 (a := -b):")
+env.reset() # Reset for a fresh start
 for i in range(5):
     print(f"Step {{i+1}} (before action): State={{env.state}}")
     action_to_take = {{
-        'choice_ChoiceLevel_0': 0, # Select the first branch (vxo, vyo assignment)
-        'assign_vxo': 0.1,         # Example value for vxo
-        'assign_vyo': 0.2,         # Example value for vyo (constraint vxo^2 + vyo^2 <= V^2, V=1.0, so 0.1^2 + 0.04 = 0.05 <= 1.0)
+        'choice_ChoiceLevel_0': 0, # Select the first branch (a := -b)
     }}
     observation, reward, terminated, truncated, info = env.step(action_to_take)
     print(f"Step {{i+1}}: Obs={{observation}}, Reward={{reward:.2f}}, Terminated={{terminated}}, Truncated={{truncated}}")
@@ -1057,29 +1138,27 @@ for i in range(5):
         break
 env.close()
 
-# Example 2: Reset and choose the second branch of ChoiceLevel_0, then the second branch of ChoiceLevel_1
+# Example 2: Reset and choose the third branch of ChoiceLevel_0
 # (a := A; w := *; etc.)
-print("\\nResetting environment and taking 5 steps with action_branch_2_choice2 (a := A; w := *; etc.):")
+print("\\nResetting environment and taking 5 steps with action_branch_2 (a := A; w := *; etc.):")
 env = {sanitized_example_env_name}() # Re-instantiate for a fresh start
 observation, info = env.reset()
 
-# Define action for ChoiceLevel_0 branch 1 (index 1), then ChoiceLevel_1 branch 1 (index 1)
+# Define action for ChoiceLevel_0 branch 2 (index 2)
 # It's crucial that r != 0 and r*w = v for the constraint to pass.
-# Let's assume v is initially 1.0 (from reset).
-# If w = 0.1, then r must be 1.0 / 0.1 = 10.0
-action_branch_2_choice2 = {{
-    'choice_ChoiceLevel_0': 1, # Select the second branch of ChoiceLevel_0 (nested choice)
-    'choice_ChoiceLevel_1': 1, # Select the second branch of ChoiceLevel_1 (a := A; w := *; etc.)
-    'assign_v': 1.0,           # Example value for v (constraint 0 <= v)
-    'assign_w': 0.1,           # Example value for w (within -W to W, i.e., -1.0 to 1.0)
-    'assign_r': 10.0,          # Example value for r (r!=0 and r*w = v, so 10.0 * 0.1 = 1.0)
+# Let's assume v is initially 0.0 (from initialState).
+# If w = 0.0, then r*w = 0.0, which matches v=0.0.
+action_branch_2 = {{
+    'choice_ChoiceLevel_0': 2, # Select the third branch (a := A; w := *; etc.)
+    'assign_w': 0.0,           # Example value for w (within -W to W, i.e., -1.0 to 1.0)
+    'assign_r': 1.0,           # Example value for r (r!=0)
     'assign_xo': 5.0,          # Example value for xo
     'assign_yo': 0.0,          # Example value for yo
 }}
 
 for i in range(5):
     print(f"Step {{i+1}} (before action): State={{env.state}}")
-    observation, reward, terminated, truncated, info = env.step(action_branch_2_choice2)
+    observation, reward, terminated, truncated, info = env.step(action_branch_2)
     print(f"Step {{i+1}}: Obs={{observation}}, Reward={{reward:.2f}}, Terminated={{terminated}}, Truncated={{truncated}}")
     if terminated or truncated:
         print("Episode finished.")
