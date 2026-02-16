@@ -1,3 +1,4 @@
+# test_parser.py (or whatever your test file is named)
 import unittest
 import os
 from pathlib import Path
@@ -39,15 +40,10 @@ print(f"Test Output Directory: {TEST_OUTPUT_DIR.resolve()}")
 
 # Import your parser and converter functions
 try:
+    # keymaerax_parser now imports ast_node internally.
     from keymaerax_parser import KeYmaeraXParser, convert_keymaerax_ast_to_intermediate_pyast
-    # It's good practice to also import the PyAST classes themselves if their __repr__
-    # methods are being tested, to ensure they are properly loaded.
-    # Based on common AST structures, these might be defined in ast_config.py
-    # NOTE: These imports are still useful if convert_keymaerax_ast_to_intermediate_pyast
-    # is called elsewhere or if you plan to add tests for the PyAST conversion later.
-    # For *this specific test* comparing to output_AST, they are not strictly needed
-    # but don't hurt.
-    from ast_config import GymEnvironmentConfig, DefinitionsConfig, VariablesConfig, ProblemConfig, \
+    # pyast_config is assumed to be in the same AST_parser directory
+    from pyast_config import GymEnvironmentConfig, DefinitionsConfig, VariablesConfig, ProblemConfig, \
                            ConstantDefinitionConfig, FunctionDefinitionConfig, PredicateDefinitionConfig, \
                            HybridProgramConfig, ControlFuncConfig, StepFuncConfig, ODEConfig, EvolutionDomainConfig, \
                            VariableDeclarationConfig, PreconditionConfig, PostconditionConfig, LoopExecutionConfig, \
@@ -57,7 +53,7 @@ try:
     print("Successfully imported parser components and AST configurations.")
 except ImportError as e:
     print(f"Error importing parser components: {e}")
-    print(f"Please ensure 'keymaerax_parser.py' and 'ast_config.py' are in '{parser_module_dir}'")
+    print(f"Please ensure 'keymaerax_parser.py' and 'pyast_config.py' are in '{parser_module_dir}'")
     print(f"Current sys.path: {sys.path}")
     sys.exit(1)
 
@@ -100,7 +96,7 @@ class TestKeYmaeraXParser(unittest.TestCase):
         # Parse the KeYmaera X source code into its AST
         kx_ast_root = parser.parse()
         
-        # CORRECTED: Use the __repr__() of the KeYmaeraX AST directly for comparison
+        # Use the __repr__() of the KeYmaeraX AST directly for comparison
         actual_ast_str = kx_ast_root.__repr__().strip()
 
         print("\n--- Actual Output ---")
@@ -111,22 +107,16 @@ class TestKeYmaeraXParser(unittest.TestCase):
 
         if actual_ast_str != expected_ast_str:
             print("--- DETAILED DIFFERENCES FOUND ---")
-            # difflib.unified_diff generates a diff in the unified format (like 'diff -u')
-            # It expects lists of lines, so we split the strings.
-            # `keepends=True` ensures that newlines are part of the lines, which is often
-            # better for diffing tools to correctly show changes at line endings.
             diff = difflib.unified_diff(
                 expected_ast_str.splitlines(keepends=True),
                 actual_ast_str.splitlines(keepends=True),
-                fromfile=f'Expected KeYmaeraX AST ({test_name})', # Label for the expected content
-                tofile=f'Actual KeYmaeraX AST ({test_name})',     # Label for the actual content
-                lineterm=''              # Prevent extra newlines in output if lines already have them
+                fromfile=f'Expected KeYmaeraX AST ({test_name})',
+                tofile=f'Actual KeYmaeraX AST ({test_name})',
+                lineterm=''
             )
-            # Join the diff lines back into a single string for printing
             print("".join(diff))
             print("----------------------------------\n")
 
-        # Finally, assert for equality. If the test fails, the diff will already be printed.
         self.assertEqual(actual_ast_str, expected_ast_str,
                          f"AST representations for '{test_name}' do not match. See detailed diff above.")
 

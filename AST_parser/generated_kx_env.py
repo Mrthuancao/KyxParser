@@ -6,7 +6,7 @@ import math # For math functions like sqrt, sin, cos, etc.
 import textwrap
 import re # For regex replacements in _evaluate_expression
 from typing import (Dict, Any, Tuple) # Import typing hints
-from ast_config import (ActionType, ChoiceActionConfig, SequenceActionConfig, DeterministicAssignmentActionConfig, NondeterministicAssignmentActionConfig, ActionConstraintConfig, CallHybridProgramConfig, HybridProgramStepConfig) # Import AST classes
+from AST_parser.pyast_config import (ActionType, ChoiceActionConfig, SequenceActionConfig, DeterministicAssignmentActionConfig, NondeterministicAssignmentActionConfig, ActionConstraintConfig, CallHybridProgramConfig, HybridProgramStepConfig) # Import AST classes
 
 class IJRR17_Corollary_1_1_Velocity_controlled_passive_safety(gym.Env):
     metadata = {"render_modes": ["human"], "render_fps": 30}

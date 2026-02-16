@@ -1,206 +1,19 @@
-#keymaerax_parser.py
-#this file contain the building block for AST and also the parser for parsing KeymaeraX file into AST
+# keymaerax_parser.py
 from __future__ import annotations
 import re
-import logging # Import the logging module
-from ast_config import * # Import ast_config and its helper functions
+import logging
+from typing import Optional
+
+# Import AST node definitions
+from ast_config import ASTNode, Definition, HybridProgram, Variable, ProblemStatement
+
+# Import ast_config and its helper functions
+from pyast_config import *
 
 # Configure logging (you might want to customize this further in a real application)
-logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s') # Changed to INFO for less verbose default
-
-# --- AST Node Definitions ---
-# Tested: please dont touch
-class ASTNode:
-    """Base class for all nodes in the Abstract Syntax Tree."""
-    def __init__(self, node_type, value=None, children=None):
-        self.node_type = node_type
-        self.value = value
-        self.children = children if children is not None else []
-
-    def add_child(self, child):
-        self.children.append(child)
-
-    def __repr__(self, level=0):
-        """Generates a readable, indented representation of the tree."""
-        indent = "  " * level
-        value_str = ":"
-        if self.value is not None:
-            value_str += f" {self.value}"
-        s = f"{indent}[{self.node_type}]{value_str}\n"
-        for child in self.children:
-            s += child.__repr__(level + 1)
-        return s
-
-class Definition(ASTNode):
-    """Represents a constant, function, or predicate definition."""
-    def __init__(self, name, definition_type, value=None, comment=None):
-        # We use a generic Definition type name in the node, but the __repr__ handles the [DEF] prefix
-        super().__init__("Definition", name)
-        self.name = name
-        self.definition_type = definition_type
-        self.definition_value = value # Stores the full, raw value
-        self.comment = comment
-
-    def __repr__(self, level=0):
-        indent = "  " * level
-
-        value_str = ""
-        if self.definition_value is not None:
-            # Clean up whitespace for display in KeYmaeraX AST
-            cleaned_value = ' '.join(self.definition_value.split())
-
-            # Truncate only if very long, otherwise display full value
-            if len(cleaned_value) > 60:
-                 value_str = f" = {cleaned_value[:60]}..."
-            else:
-                 value_str = f" = {cleaned_value}"
-
-        comment_str = f" /* {self.comment} */" if self.comment else ""
-
-        # Output format: [DEF] Type Name = Value
-        s = f"{indent}[DEF]: {self.definition_type} {self.name}{value_str}{comment_str}\n"
-        for child in self.children:
-            s += child.__repr__(level + 1)
-        return s
-
-
-class HybridProgram(Definition):
-    """
-    Represents a Hybrid Program (HP) definition.
-    It parses the internal structure (choices, sequences, ODEs).
-    """
-    def __init__(self, name, body, parser_ref=None): # Added parser_ref
-        super().__init__(name, "HP", value=body)
-        self.name = name # Store name for specific parsing logic
-        self.body = body # Stores the raw body string
-        self._parser_ref = parser_ref # Store reference to the parser instance
-
-    def _parse_hp_structure(self):
-        """
-        Parses the body of a Hybrid Program structure based on its name.
-        This method is part of the ASTNode class.
-        """
-        logging.debug(f"HybridProgram '{self.name}' calling _parse_hp_structure.")
-        body_content = self.body.strip()
-
-        if self.name == 'controlFunc':
-            if self._parser_ref: # Call the parser's method
-                self._parser_ref._parse_program_fragment(body_content, self)
-            else:
-                logging.warning(f"No parser reference available for HybridProgram '{self.name}'. Cannot parse program fragment.")
-
-        elif self.name == 'stepFunc':
-            logging.debug(f"Parsing stepFunc structure for '{self.name}'. Raw body: {body_content[:100]}...")
-            ode_node = ASTNode("OrdinaryDifferentialEquations")
-            domain_node = ASTNode("EvolutionDomain")
-
-            # --- FIX: Remove outer braces from body_content before splitting ---
-            clean_body_no_braces = body_content
-            if clean_body_no_braces.startswith('{') and clean_body_no_braces.endswith('}'):
-                clean_body_no_braces = clean_body_no_braces[1:-1].strip()
-            clean_body = re.sub(r'\s+', ' ', clean_body_no_braces).strip()
-            logging.debug(f"stepFunc body after cleaning: {clean_body[:100]}...")
-            # --- END FIX ---
-
-            # Use split_by_operator for comma, as ODEs can have nested structures
-            split_by_operator = KeYmaeraXParser.split_by_operator_outside_braces # Direct call to static method
-            parts = [p.strip() for p in split_by_operator(clean_body, ',') if p.strip()]
-            logging.debug(f"stepFunc parts after splitting by comma: {parts}")
-
-            for part in parts:
-                if not part: continue
-
-                # Check for evolution domain constraints (using &)
-                sub_parts = split_by_operator(part, '&')
-                logging.debug(f"stepFunc sub-parts for '{part}' after splitting by '&': {sub_parts}")
-
-
-                if not sub_parts: # Should not happen if part is not empty, but for safety
-                    continue
-
-                # The first part is an ODE or a formula that might be an ODE/constraint
-                # All subsequent parts (if any) are domain constraints
-                ode_or_formula = sub_parts[0]
-                if "'" in ode_or_formula: # Simple heuristic to identify an ODE (contains derivative)
-                    ode_node.add_child(ASTNode("ODE", value=ode_or_formula))
-                    logging.debug(f"Added ODE: {ode_or_formula}")
-                else: # Treat as a constraint if it doesn't look like an ODE
-                    domain_node.add_child(ASTNode("Constraint", value=ode_or_formula))
-                    logging.debug(f"Added Constraint (from ODE/formula part): {ode_or_formula}")
-
-                for domain_constraint in sub_parts[1:]:
-                    if domain_constraint:
-                        domain_node.add_child(ASTNode("Constraint", value=domain_constraint))
-                        logging.debug(f"Added Constraint (from domain part): {domain_constraint}")
-
-            self.add_child(ode_node)
-            if domain_node.children:
-                self.add_child(domain_node)
-            logging.debug(f"Finished parsing stepFunc structure for '{self.name}'. ODE nodes: {len(ode_node.children)}, Domain nodes: {len(domain_node.children)}")
-
-
-    def __repr__(self, level=0):
-        indent = "  " * level
-
-        # Clean up body display and truncate
-        cleaned_body = ' '.join(self.body.split())
-
-        # Specific truncation for controlFunc Body (raw) to match the example
-        if self.name == 'controlFunc':
-            body_display = cleaned_body[:80] + "..."
-        # Specific truncation for stepFunc Body (raw) to match the example
-        elif self.name == 'stepFunc':
-            # Truncate after t' = 1
-            idx = cleaned_body.find("t' = 1")
-            if idx != -1:
-                body_display = cleaned_body[:idx + len("t' = 1")] + " ..."
-            else:
-                body_display = cleaned_body[:80] + "..." if len(cleaned_body) > 80 else cleaned_body
-        else:
-            body_display = cleaned_body[:80] + "..." if len(cleaned_body) > 80 else cleaned_body
-
-        if self.name:
-            s = f"{indent}[HP]: {self.name}\n"
-        else:
-            s = f"{indent}[HP]:\n"
-        s += f"{indent}  Body (raw): {body_display}\n"
-
-        # Print children (parsed structure)
-        for child in self.children:
-            s += child.__repr__(level + 1)
-        return s
-
-
-class Variable(ASTNode):
-    """Represents a variable declaration in the ProgramVariables block."""
-    def __init__(self, name, var_type, comment=None):
-        super().__init__("Variable", name)
-        self.var_type = var_type
-        self.comment = comment
-
-    def __repr__(self, level=0):
-        indent = "  " * level
-        comment_str = f" /* {self.comment} */" if self.comment else ""
-        return f"{indent}[VAR]: {self.var_type} {self.value}{comment_str}\n"
-
-class ProblemStatement(ASTNode):
-    """Represents the main Problem formula (P -> [HP] Q)."""
-    def __init__(self, formula):
-        super().__init__("ProblemStatement")
-        self.formula = formula
-
-    def __repr__(self, level=0):
-        indent = "  " * level
-        s = f"{indent}[PROBLEM]:\n"
-        for child in self.children:
-            s += child.__repr__(level + 1)
-        return s
-
-
-
+logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
 # --- Parser Implementation ---
-
 class KeYmaeraXParser:
     def __init__(self, source_code):
         self.source_code = source_code
@@ -431,10 +244,56 @@ class KeYmaeraXParser:
                          mutable_definitions_block[full_hp_block_end_idx] == ';':
                         full_hp_block_end_idx += 1
 
-                    hp_node = HybridProgram(hp_name, hp_body_raw, parser_ref=self)
-                    hp_node._parse_hp_structure()
+                    hp_node = HybridProgram(hp_name, hp_body_raw)
                     defs_node.add_child(hp_node)
                     logging.debug(f"Added HybridProgram ASTNode for '{hp_name}' to DefinitionsBlock.")
+
+                    # --- New: Parse HP body directly here ---
+                    body_content = hp_body_raw.strip()
+                    if hp_name == 'controlFunc':
+                        self._parse_program_fragment(body_content, hp_node)
+                        logging.debug(f"Parsed controlFunc structure for '{hp_name}'.")
+                    elif hp_name == 'stepFunc':
+                        logging.debug(f"Parsing stepFunc structure for '{hp_name}'. Raw body: {body_content[:100]}...")
+                        ode_node = ASTNode("OrdinaryDifferentialEquations")
+                        domain_node = ASTNode("EvolutionDomain")
+
+                        clean_body_no_braces = body_content
+                        if clean_body_no_braces.startswith('{') and clean_body_no_braces.endswith('}'):
+                            clean_body_no_braces = clean_body_no_braces[1:-1].strip()
+                        clean_body = re.sub(r'\s+', ' ', clean_body_no_braces).strip()
+                        logging.debug(f"stepFunc body after cleaning: {clean_body[:100]}...")
+
+                        parts = [p.strip() for p in KeYmaeraXParser.split_by_operator_outside_braces(clean_body, ',') if p.strip()]
+                        logging.debug(f"stepFunc parts after splitting by comma: {parts}")
+
+                        for part in parts:
+                            if not part: continue
+
+                            sub_parts = KeYmaeraXParser.split_by_operator_outside_braces(part, '&')
+                            logging.debug(f"stepFunc sub-parts for '{part}' after splitting by '&': {sub_parts}")
+
+                            if not sub_parts:
+                                continue
+
+                            ode_or_formula = sub_parts[0]
+                            if "'" in ode_or_formula:
+                                ode_node.add_child(ASTNode("ODE", value=ode_or_formula))
+                                logging.debug(f"Added ODE: {ode_or_formula}")
+                            else:
+                                domain_node.add_child(ASTNode("Constraint", value=ode_or_formula))
+                                logging.debug(f"Added Constraint (from ODE/formula part): {ode_or_formula}")
+
+                            for domain_constraint in sub_parts[1:]:
+                                if domain_constraint:
+                                    domain_node.add_child(ASTNode("Constraint", value=domain_constraint))
+                                    logging.debug(f"Added Constraint (from domain part): {domain_constraint}")
+
+                        hp_node.add_child(ode_node)
+                        if domain_node.children:
+                            hp_node.add_child(domain_node)
+                        logging.debug(f"Finished parsing stepFunc structure for '{hp_name}'. ODE nodes: {len(ode_node.children)}, Domain nodes: {len(domain_node.children)}")
+                    # --- End HP body parsing ---
 
                     for i in range(hp_header_start_idx, full_hp_block_end_idx):
                         if i < len(mutable_definitions_block):
@@ -643,7 +502,7 @@ class KeYmaeraXParser:
                     return
 
                 continuous_end_idx = self._find_matching_brace_span(loop_body_inner_content, continuous_start_idx)
-                if continuous_end_idx == None: # Changed from -1 to None
+                if continuous_end_idx == None:
                     logging.warning(f"Unmatched braces in continuous block of loop body: '{loop_body_inner_content}'")
                     program_node.add_child(ASTNode("Raw Loop Body Content", loop_body_raw))
                     program_node.add_child(ASTNode("Invariant", loop_invariant_raw))
@@ -690,7 +549,6 @@ class KeYmaeraXParser:
             logging.debug("Failed to parse P -> [HP] Q structure.")
         logging.debug("Finished _parse_problem.")
 
-# Not tested from this point on
 # --- Helper to convert KeYmaeraX AST to Intermediate PyAST ---
 def convert_keymaerax_ast_to_intermediate_pyast(kx_ast_root: ASTNode) -> GymEnvironmentConfig:
     """
@@ -964,8 +822,6 @@ def _parse_kx_hp_program_fragment_to_action_config(kx_node: ASTNode, choice_leve
         sequence_block = SequenceActionConfig()
         for child_kx in kx_node.children:
             parsed_child_block = _parse_kx_hp_program_fragment_to_action_config(child_kx, choice_level)
-            # The original code had 'parsed_sub_block' here, which was likely a copy-paste error.
-            # It should be 'parsed_child_block' to refer to the result of the recursive call.
             if isinstance(parsed_child_block, SequenceActionConfig):
                 sequence_block.actions.extend(parsed_child_block.actions)
             else:
@@ -973,4 +829,3 @@ def _parse_kx_hp_program_fragment_to_action_config(kx_node: ASTNode, choice_leve
         return sequence_block
 
     logging.debug(f"Unhandled or empty kx_node type '{kx_node.node_type}'. Returning empty SequenceActionConfig.")
-    return SequenceActionConfig()

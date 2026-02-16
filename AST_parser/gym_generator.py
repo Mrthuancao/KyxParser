@@ -3,7 +3,7 @@ from typing import List, Dict, Any, Optional, Tuple, Union
 import re
 
 # Assuming ast_config.py is in the same directory and contains the ASTConfigNode classes
-from ast_config import (
+from pyast_config import (
     GymEnvironmentConfig, DefinitionsConfig, VariablesConfig, ProblemConfig,
     ConstantDefinitionConfig, FunctionDefinitionConfig, PredicateDefinitionConfig,
     HybridProgramConfig,
