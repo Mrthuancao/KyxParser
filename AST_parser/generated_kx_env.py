@@ -339,7 +339,7 @@ class IJRR17_Corollary_1_2_Static_safety_with_margin_for_imperfect_trajectories(
         self.current_step = 0
 
         # --- Initial State (based on Problem Precondition and defaults) ---
-        # Default initial values for state variables (can be randomized or fixed based on problem)
+        # Default initial values for state variables
         self.state['x'] = 0.0
         self.state['y'] = 0.0
         self.state['v'] = 1.0
@@ -352,18 +352,17 @@ class IJRR17_Corollary_1_2_Static_safety_with_margin_for_imperfect_trajectories(
         self.state['yo'] = 0.0
         self.state['t'] = 0.0
 
-        # Apply explicit assignments from the precondition
+        # Z3 could not find a satisfying initial state or encountered an error.
+        # Falling back to heuristic defaults and adjustments.
+        # Apply explicit assignments from the precondition (fallback)
         self.state['v'] = 0
 
-        # Ensure dx, dy satisfy isWellformedDir (approximate unit vector)
+        # Ensure dx, dy satisfy isWellformedDir (approximate unit vector) (fallback)
         norm_sq = self.state['dx']**2 + self.state['dy']**2
         ud_val = self.constants.get('Ud', 0.0) # Get Ud from constants, default to 0.0 if not found
         min_norm_sq_target = (1.0 - ud_val)**2
         max_norm_sq_target = (1.0 + ud_val)**2
         if not (min_norm_sq_target <= norm_sq <= max_norm_sq_target):
-            # If not within bounds, normalize and scale to satisfy the condition.
-            # A common way to satisfy this is to make it a unit vector (dx^2+dy^2 = 1).
-            # This satisfies 1-Ud <= 1 <= 1+Ud if Ud >= 0.
             norm = np.sqrt(norm_sq)
             if norm > 1e-6: # Avoid division by zero
                 self.state['dx'] /= norm
@@ -372,7 +371,7 @@ class IJRR17_Corollary_1_2_Static_safety_with_margin_for_imperfect_trajectories(
                 self.state['dx'] = 1.0
                 self.state['dy'] = 0.0
 
-        # Ensure robot and obstacle are not at the same position
+        # Ensure robot and obstacle are not at the same position (fallback)
         if self.state['x'] == self.state['xo'] and self.state['y'] == self.state['yo']:
             self.state['x'] += 0.1 # Slightly perturb x to ensure separation
 
@@ -380,8 +379,7 @@ class IJRR17_Corollary_1_2_Static_safety_with_margin_for_imperfect_trajectories(
         precondition_satisfied = self._evaluate_expression('((A >= 0                                                                                                                     & b > 0                                                                                                                      & ep > 0                                                                                                                     & 0<=Ud & Ud <= 1) & (v = 0         & (x-xo)**2 + (y-yo)**2 > 0         & (1-Ud <= dx**2+dy**2 & dx**2 + dy**2 <= 1+Ud)))', is_constraint=True)
         if not precondition_satisfied:
             print(f"Warning: Initial state does not satisfy precondition: 'assumptions(x, y, v, dx, dy, xo, yo)'. Expanded: '((A >= 0                                                                                                                     & b > 0                                                                                                                      & ep > 0                                                                                                                     & 0<=Ud & Ud <= 1) & (v = 0         & (x-xo)**2 + (y-yo)**2 > 0         & (1-Ud <= dx**2+dy**2 & dx**2 + dy**2 <= 1+Ud)))'.")
-            # Optionally, raise an error or try to find a valid state
-            # For now, we proceed but the environment might be in an invalid state.
+            # If Z3 failed or heuristics didn't fully satisfy, this warning is crucial.
 
 
         observation = self._get_obs()
