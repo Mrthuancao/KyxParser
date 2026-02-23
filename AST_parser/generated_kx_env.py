@@ -15,6 +15,9 @@ class IJRR17_Corollary_1_2_Static_safety_with_margin_for_imperfect_trajectories(
         super().__init__()
         self.render_mode = render_mode
 
+        # --- Semantic Gap Bridging: Floating Point Equality Tolerance ---
+        self.equality_tolerance = 1e-9 # Default absolute tolerance for np.isclose
+
         # --- KeYmaera X Definitions ---
         self.constants = {}
         self.functions = {}
@@ -35,7 +38,7 @@ class IJRR17_Corollary_1_2_Static_safety_with_margin_for_imperfect_trajectories(
         # Predicates (lambdas for easy evaluation)
         self.predicates['isWellformedDir'] = lambda dx, dy: 1-self.constants['Ud'] <= dx**2+dy**2 and dx**2 + dy**2 <= 1+self.constants['Ud']
         self.predicates['bounds'] = lambda : self.constants['A'] >= 0                                                                                                                     and self.constants['b'] > 0                                                                                                                      and self.constants['ep'] > 0                                                                                                                     and 0<=self.constants['Ud'] and self.constants['Ud'] <= 1
-        self.predicates['initialState'] = lambda x, y, v, dx, dy, xo, yo: v == 0         and (x-xo)**2 + (y-yo)**2 > 0         and self.predicates['isWellformedDir'](dx,dy)
+        self.predicates['initialState'] = lambda x, y, v, dx, dy, xo, yo: self._approx_eq(v, 0)         and (x-xo)**2 + (y-yo)**2 > 0         and self.predicates['isWellformedDir'](dx,dy)
         self.predicates['assumptions'] = lambda x, y, v, dx, dy, xo, yo: self.predicates['bounds']() and self.predicates['initialState'](x, y, v, dx, dy, xo, yo)
         self.predicates['loopinv'] = lambda x, y, v, dx, dy, xo, yo: v >= 0         and self.predicates['isWellformedDir'](dx,dy)         and (np.abs(x-xo) > self.functions['stopDist'](v) or np.abs(y-yo) > self.functions['stopDist'](v))
 
@@ -180,6 +183,13 @@ class IJRR17_Corollary_1_2_Static_safety_with_margin_for_imperfect_trajectories(
     def _get_info(self):
         return self.state.copy() # Return a copy of the current state dictionary
 
+    def _approx_eq(self, a, b):
+        """
+        Performs an approximate equality check using numpy.isclose.
+        This bridges the semantic gap between formal exact equality and float approximation.
+        """
+        return np.isclose(a, b, atol=self.equality_tolerance)
+
     def _evaluate_expression(self, expr_str, local_vars=None, is_constraint=False):
 
         # Safe evaluation of expressions using environment's context.
@@ -197,7 +207,8 @@ class IJRR17_Corollary_1_2_Static_safety_with_margin_for_imperfect_trajectories(
             'np': np, 'math': math,
             **self.constants,
             **self.functions, # Include functions for general expressions
-            **self.predicates  # Include predicates for general expressions
+            **self.predicates,  # Include predicates for general expressions
+            '_approx_eq': self._approx_eq # Make approximate equality available
         }
         eval_locals = {
             **self.state,
@@ -211,16 +222,35 @@ class IJRR17_Corollary_1_2_Static_safety_with_margin_for_imperfect_trajectories(
         # 1. Basic syntax replacements (power, abs)
         expr_py = expr_py.replace('^', '**').replace('abs(', 'np.abs(')
 
-        # 2. Replace single '=' with '==' for equality comparisons.
-        expr_py = re.sub(r'(?<![<>=!])=(?![=])', '==', expr_py)
+        # 2. Replace single '=' (KeYmaera X equality) with self._approx_eq(LHS, RHS).
+        #    This is a heuristic due to not having a full parser, but addresses the semantic gap.
+        #    The regex attempts to capture the left and right operands of '='.
+        #    It assumes operands are either simple identifiers/numbers or non-nested parenthesized expressions.
+        #    It must be applied iteratively to handle multiple equalities in an expression.
+
+        # Define a pattern for a "simple term" which can be an identifier, a number,
+        # or a non-nested parenthesized expression.
+        simple_term_pattern = r'(?:[a-zA-Z_][a-zA-Z0-9_.]*\b|-?\d+(?:\.\d+)?|\([^)]*\))' # Interpolate the string literal here
+
+        # Pattern to find 'LHS = RHS' where LHS and RHS are simple terms.
+        # We need to ensure it's a single '=' and not part of '!=', '<=', '>='.
+        # Construct equality_regex using string concatenation to avoid f-string nesting issues.
+        equality_regex = r'(' + simple_term_pattern + r')\s*(?<![<>=!])=(?![=])\s*(' + simple_term_pattern + r')'
+
+        # Apply this replacement iteratively until no more matches are found.
+        # This helps with multiple simple equalities in a single expression.
+        while True:
+            new_expr_py = re.sub(equality_regex, r'_approx_eq(\1, \2)', expr_py)
+            if new_expr_py == expr_py:
+                break
+            expr_py = new_expr_py
 
         # 3. Handle logical operators (&, |)
         expr_py = expr_py.replace('&', 'and').replace('|', 'or')
 
         # 4. Handle KeYmaera X implication '->' (A -> B becomes (not (A) or (B)))
         while True:
-            # FIX: Corrected regex backreferences from ,  to , 
-            new_expr_py = re.sub(r'\((.*?)\s*->\s*(.*?)\)', r'((not ) or )', expr_py)
+            new_expr_py = re.sub(r'\((.*?)\s*->\s*(.*?)\)', r'((not \1) or \2)', expr_py)
             if new_expr_py == expr_py:
                 break
             expr_py = new_expr_py
@@ -228,7 +258,7 @@ class IJRR17_Corollary_1_2_Static_safety_with_margin_for_imperfect_trajectories(
         try:
             return eval(expr_py, eval_globals, eval_locals)
         except Exception as e:
-            print(f"Error evaluating expression '{expr_str}': {e}")
+            print(f"Error evaluating expression '{expr_str}' (transformed: '{expr_py}'): {e}")
             # print(f"Eval globals: {eval_globals}") # Too verbose
             # print(f"Eval locals: {eval_locals}") # Too verbose
             if is_constraint:
@@ -286,6 +316,7 @@ class IJRR17_Corollary_1_2_Static_safety_with_margin_for_imperfect_trajectories(
             return reward, terminated, applied_successfully
 
         elif isinstance(action_config, NondeterministicAssignmentActionConfig):
+            # FIX: Corrected indentation for the following line
             assign_key = f"assign_{action_config.variable}"
             if assign_key in agent_action:
                 self.state[action_config.variable] = agent_action[assign_key]
@@ -299,6 +330,7 @@ class IJRR17_Corollary_1_2_Static_safety_with_margin_for_imperfect_trajectories(
             return reward, terminated, applied_successfully
 
         elif isinstance(action_config, ActionConstraintConfig):
+            # Constraints should use approximate equality
             constraint_met = self._evaluate_expression(action_config.formula, is_constraint=True)
             if not constraint_met:
                 # print(f"Constraint violated: {{action_config.formula}}")
@@ -362,9 +394,9 @@ class IJRR17_Corollary_1_2_Static_safety_with_margin_for_imperfect_trajectories(
         ud_val = self.constants.get('Ud', 0.0) # Get Ud from constants, default to 0.0 if not found
         min_norm_sq_target = (1.0 - ud_val)**2
         max_norm_sq_target = (1.0 + ud_val)**2
-        if not (min_norm_sq_target <= norm_sq <= max_norm_sq_target):
+        if not (min_norm_sq_target - self.equality_tolerance <= norm_sq <= max_norm_sq_target + self.equality_tolerance):
             norm = np.sqrt(norm_sq)
-            if norm > 1e-6: # Avoid division by zero
+            if norm > self.equality_tolerance: # Avoid division by zero with tolerance
                 self.state['dx'] /= norm
                 self.state['dy'] /= norm
             else: # Default to (1,0) if too small
@@ -372,13 +404,13 @@ class IJRR17_Corollary_1_2_Static_safety_with_margin_for_imperfect_trajectories(
                 self.state['dy'] = 0.0
 
         # Ensure robot and obstacle are not at the same position (fallback)
-        if self.state['x'] == self.state['xo'] and self.state['y'] == self.state['yo']:
+        if self._approx_eq(self.state['x'], self.state['xo']) and self._approx_eq(self.state['y'], self.state['yo']):
             self.state['x'] += 0.1 # Slightly perturb x to ensure separation
 
         # Verify the full precondition after setting initial states
-        precondition_satisfied = self._evaluate_expression('((A >= 0                                                                                                                     & b > 0                                                                                                                      & ep > 0                                                                                                                     & 0<=Ud & Ud <= 1) & (v = 0         & (x-xo)**2 + (y-yo)**2 > 0         & (1-Ud <= dx**2+dy**2 & dx**2 + dy**2 <= 1+Ud)))', is_constraint=True)
+        precondition_satisfied = self._evaluate_expression('((A >= 0                                                                                                                     & b > 0                                                                                                                      & ep > 0                                                                                                                     & 0<=Ud & Ud <= 1) & (v = 0         & (x-xo)^2 + (y-yo)^2 > 0         & (1-Ud <= dx^2+dy^2 & dx^2 + dy^2 <= 1+Ud)))', is_constraint=True)
         if not precondition_satisfied:
-            print(f"Warning: Initial state does not satisfy precondition: 'assumptions(x, y, v, dx, dy, xo, yo)'. Expanded: '((A >= 0                                                                                                                     & b > 0                                                                                                                      & ep > 0                                                                                                                     & 0<=Ud & Ud <= 1) & (v = 0         & (x-xo)**2 + (y-yo)**2 > 0         & (1-Ud <= dx**2+dy**2 & dx**2 + dy**2 <= 1+Ud)))'.")
+            print(f"Warning: Initial state does not satisfy precondition: 'assumptions(x, y, v, dx, dy, xo, yo)'. Expanded: '((A >= 0                                                                                                                     & b > 0                                                                                                                      & ep > 0                                                                                                                     & 0<=Ud & Ud <= 1) & (v = 0         & (x-xo)^2 + (y-yo)^2 > 0         & (1-Ud <= dx^2+dy^2 & dx^2 + dy^2 <= 1+Ud)))'.")
             # If Z3 failed or heuristics didn't fully satisfy, this warning is crucial.
 
 
@@ -457,7 +489,9 @@ class IJRR17_Corollary_1_2_Static_safety_with_margin_for_imperfect_trajectories(
                     # For this problem, events are domain constraints (t <= ep, v >= 0)
                     # If v < 0, it's a domain violation -> termination
                     # We need to re-evaluate after updating self.state
-                    if self.state.get('v', 0.0) < 0: # Use .get with default for safety
+                    # Note: ODE events themselves use floating-point comparisons internally.
+                    # This check here is a re-evaluation after the fact.
+                    if self.state.get('v', 0.0) < -self.equality_tolerance: # Use tolerance for v < 0 check
                         reward -= 100.0 # Penalty for v < 0
                         terminated = True
                     # If t > ep, it means the time limit was reached, which is expected behavior
@@ -476,6 +510,7 @@ class IJRR17_Corollary_1_2_Static_safety_with_margin_for_imperfect_trajectories(
         # (x - xo)^2 + (y - yo)^2 > 0
         # This means the robot must NOT be at the obstacle's position.
         # If it becomes <= 0, safety is violated.
+        # Postcondition should use approximate equality for any '=' it contains.
         postcondition_satisfied = self._evaluate_expression('(x - xo)**2 + (y - yo)**2 > 0', is_constraint=True)
         if not postcondition_satisfied:
             reward -= 100.0 # Safety violation

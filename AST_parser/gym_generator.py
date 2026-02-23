@@ -23,46 +23,62 @@ def _format_kx_expr_for_python_lambda_body(expr_str: str, lambda_param_names: Li
     Converts a KeYmaera X expression string into a Python expression string
     suitable for direct use in a lambda body. Handles operator conversions and
     prefixes identifiers with their correct scope (self.constants, self.state, etc.).
+    Crucially, it converts KeYmaera X's '=' for equality to 'self._approx_eq(LHS, RHS)'.
     """
     expr_py = expr_str.strip()
 
-    # 1. Basic syntax replacements (power, abs) - Highest precedence
+    # 1. Basic syntax replacements (power, abs)
     expr_py = expr_py.replace('^', '**').replace('abs(', 'np.abs(')
 
-    # 2. Replace single '=' with '==' for equality comparisons.
-    # This is done here for lambda bodies, as they are directly evaluated Python code.
-    # For expressions passed to _evaluate_expression, that function handles it.
-    expr_py = re.sub(r'(?<![<>=!])=(?![=])', '==', expr_py)
-
-    # 3. Handle logical operators (&, |) - Convert to Python 'and', 'or'
+    # 2. Handle logical operators (&, |) - Convert to Python 'and', 'or'
     expr_py = expr_py.replace('&', 'and').replace('|', 'or')
 
-    # 4. Handle KeYmaera X implication '->' (A -> B becomes (not (A) or (B))) - Lowest precedence
+    # 3. Handle KeYmaera X implication '->' (A -> B becomes (not (A) or (B))) - Lowest precedence
     while True:
-        # FIX: Corrected regex backreferences from ,  to \1, \2
         new_expr_py = re.sub(r'\((.*?)\s*->\s*(.*?)\)', r'((not \1) or \2)', expr_py)
         if new_expr_py == expr_py: # No more (A -> B) patterns found
             break
         expr_py = new_expr_py
     
+    # --- START OF FIX ---
+    # 4. Replace single '=' (KeYmaera X equality) with self._approx_eq(LHS, RHS).
+    #    This is crucial for predicate and function lambdas to be syntactically valid.
+    
+    # Define a pattern for a "simple term" which can be an identifier, a number,
+    # or a non-nested parenthesized expression.
+    simple_term_pattern = r'(?:[a-zA-Z_][a-zA-Z0-9_.]*\b|-?\d+(?:\.\d+)?|\([^)]*\))'
+    
+    # Pattern to find 'LHS = RHS' where LHS and RHS are simple terms.
+    # We need to ensure it's a single '=' and not part of '!=', '<=', '>='.
+    equality_regex = rf'({simple_term_pattern})\s*(?<![<>=!])=(?![=])\s*({simple_term_pattern})'
+
+    # Apply this replacement iteratively until no more matches are found.
+    while True:
+        # Use 'self._approx_eq' for the lambda body
+        new_expr_py = re.sub(equality_regex, r'self._approx_eq(\1, \2)', expr_py)
+        if new_expr_py == expr_py:
+            break
+        expr_py = new_expr_py
+    # --- END OF FIX ---
+
     # 5. Identify and replace identifiers with their correct scope prefix
     # Build a list of all known identifiers (excluding lambda params)
     # Order matters: longer names first, then constants, then state, then functions/preds
-    all_env_identifiers = sorted(
-        list(set(all_constants + all_state_vars + all_functions + all_predicates + ['np'])), # Added 'np' to ensure it's not prefixed
+    # Note: 'self._approx_eq' is already inserted with 'self.' prefix, so it should not be
+    # included in the list for general prefixing, to avoid double-prefixing.
+    all_env_identifiers_for_prefixing = sorted(
+        list(set(all_constants + all_state_vars + all_functions + all_predicates + ['np'])), # Removed '_approx_eq'
         key=len, reverse=True # Longest names first
     )
 
-    # Create a regex pattern to match these identifiers as whole words
-    # Ensure lambda_param_names are not replaced
-    identifiers_to_replace = [
-        ident for ident in all_env_identifiers if ident not in lambda_param_names
+    identifiers_to_replace_for_prefixing = [
+        ident for ident in all_env_identifiers_for_prefixing if ident not in lambda_param_names
     ]
     
-    if identifiers_to_replace: # Only apply if there are identifiers to replace
+    if identifiers_to_replace_for_prefixing: # Only apply if there are identifiers to replace
         # Escape identifiers for regex and join them with '|'
         # Add lookarounds to ensure whole word matching for identifiers
-        pattern_str = r'\b(' + '|'.join(re.escape(ident) for ident in identifiers_to_replace) + r')\b'
+        pattern_str = r'\b(' + '|'.join(re.escape(ident) for ident in identifiers_to_replace_for_prefixing) + r')\b'
         pattern = re.compile(pattern_str)
 
         def replacer(match):
@@ -90,8 +106,11 @@ def _format_kx_expr_for_python_eval_context(expr_str: str) -> str:
     """
     Converts a KeYmaera X expression string into a Python expression string
     suitable for evaluation within a general context (like _evaluate_expression).
-    Handles only basic operator conversions (power, abs) that are not handled
-    by _evaluate_expression's regex.
+    Handles only basic operator conversions (power, abs).
+    
+    IMPORTANT: This function is used for assignment values and for expressions
+    that will be passed to _evaluate_expression. It does NOT convert
+    KeYmaera X's '=' to '==' or '_approx_eq', as _evaluate_expression will handle it.
     """
     expr_py = expr_str.strip()
 
@@ -173,7 +192,7 @@ def _kx_expr_to_z3_formula(kx_expr: str, z3_symbol_map: Dict[str, Any]) -> Any:
     # This must be done iteratively to resolve nested implications.
     while True:
         # Find innermost (A -> B)
-        new_expr = re.sub(r'\(([^()]*?)\s*->\s*([^()]*?)\)', r'z3.Implies(\1, \2)', expr_transformed)
+        new_expr = re.sub(r'\(([^()]*?)\s*->\s*(.*?)\)', r'z3.Implies(\1, \2)', expr_transformed)
         if new_expr == expr_transformed:
             break
         expr_transformed = new_expr
@@ -204,6 +223,7 @@ def _kx_expr_to_z3_formula(kx_expr: str, z3_symbol_map: Dict[str, Any]) -> Any:
     expr_transformed = expr_transformed.replace('abs(', 'z3.Abs(') # Use z3.Abs for Z3 context
 
     # 6. Equality operator '=' (KeYmaera X uses '=' for equality, Python uses '==')
+    # For Z3, '==' means exact equality, which is correct for the formal model.
     expr_transformed = re.sub(r'(?<![<>=!])=(?![=])', '==', expr_transformed)
 
     # Remove any remaining outermost parentheses if they were just for grouping the whole expression
@@ -243,7 +263,7 @@ def _solve_initial_state_with_z3(
     # but appear in the formula, or use their fixed value if provided and consistent)
     for const_decl in definitions.constants:
         # If a constant has a specific value, add it as a Z3 constant
-        if const_decl.value is not None and re.fullmatch(r'^-?\d+(\.\d+)?$', const_decl.value):
+        if const_decl.value is not None and re.fullmatch(r'^-?\d+(?:\.\d+)?$', const_decl.value):
             z3_symbol_map[const_decl.name] = float(const_decl.value) # Use Python float directly
         else:
             # Otherwise, treat it as a Z3 Real variable that can be solved for
@@ -336,6 +356,7 @@ def _ast_to_python_code_string(ast_node: ActionType, indent_level: int = 0,
         # Ensure formula is single-line for string literal
         formula_single_line = ast_node.formula.replace('\n', ' ').strip()
         # Format the formula string for direct evaluation by _evaluate_expression
+        # Note: This function does NOT convert '=' to '=='. _evaluate_expression will handle it.
         formatted_formula = _format_kx_expr_for_python_eval_context(formula_single_line)
         return f"ActionConstraintConfig(formula='{formatted_formula}')"
     elif isinstance(ast_node, CallHybridProgramConfig):
@@ -344,6 +365,7 @@ def _ast_to_python_code_string(ast_node: ActionType, indent_level: int = 0,
         # Ensure invariant formula is single-line for string literal
         invariant_single_line = ast_node.invariant_formula.replace('\n', ' ').strip()
         # Format the invariant formula string for direct evaluation by _evaluate_expression
+        # Note: This function does NOT convert '=' to '=='. _evaluate_expression will handle it.
         formatted_invariant = _format_kx_expr_for_python_eval_context(invariant_single_line)
         return f"HybridProgramStepConfig(hp_name='{ast_node.hp_name}', invariant_formula='{formatted_invariant}')"
     else:
@@ -389,6 +411,7 @@ def generate_gym_environment_code(config: GymEnvironmentConfig) -> str:
             formatted_value = const.value
         elif const.value is not None:
              # It's an expression involving other constants/variables, so format it
+            # _format_kx_expr_for_python_lambda_body will now convert '=' to self._approx_eq
             formatted_value = _format_kx_expr_for_python_lambda_body(
                 const.value, [], all_constant_names, state_variable_names, all_function_names, all_predicate_names
             )
@@ -413,6 +436,7 @@ def generate_gym_environment_code(config: GymEnvironmentConfig) -> str:
         body_single_line = func.body.replace('\n', ' ').strip()
         
         # Format the body for direct Python lambda evaluation
+        # _format_kx_expr_for_python_lambda_body will now convert '=' to self._approx_eq
         formatted_body = _format_kx_expr_for_python_lambda_body(
             body_single_line, param_names_list, all_constant_names, state_variable_names, all_function_names, all_predicate_names
         )
@@ -428,6 +452,7 @@ def generate_gym_environment_code(config: GymEnvironmentConfig) -> str:
         body_single_line = pred.body.replace('\n', ' ').strip()
         
         # Format the body for direct Python lambda evaluation
+        # _format_kx_expr_for_python_lambda_body will now convert '=' to self._approx_eq
         formatted_body = _format_kx_expr_for_python_lambda_body(
             body_single_line, param_names_list, all_constant_names, state_variable_names, all_function_names, all_predicate_names
         )
@@ -442,7 +467,7 @@ def generate_gym_environment_code(config: GymEnvironmentConfig) -> str:
     control_func_ast_code_str = _ast_to_python_code_string(
         control_func_ast_object, indent_level=3,
         all_constants=all_constant_names, all_state_vars=state_variable_names,
-        all_functions=all_function_names, all_predicates=all_predicate_names
+        all_functions=all_function_names, all_predicates=all_predicate_names # <-- CORRECTED HERE
     ) # Indent for __init__ method
 
     # --- Generate ODEs and Evolution Domain ---
@@ -478,7 +503,11 @@ def generate_gym_environment_code(config: GymEnvironmentConfig) -> str:
     typing_imports = ["Dict", "Any", "Tuple"]
     typing_import_statement = f"from typing import ({', '.join(typing_imports)})"
 
-
+    # Define the simple_term_pattern regex string once in the generator's scope.
+    # This string will be embedded verbatim into the generated Python code.
+    # It's used within the generated _evaluate_expression method.
+    _simple_term_pattern_str = r'(?:[a-zA-Z_][a-zA-Z0-9_.]*\b|-?\d+(?:\.\d+)?|\([^)]*\))'
+    
     # --- Main Environment Class Structure ---
     env_code = textwrap.dedent(f"""import gymnasium as gym
 from gymnasium import spaces
@@ -497,6 +526,9 @@ class {env_name_for_class}(gym.Env):
         super().__init__()
         self.render_mode = render_mode
 
+        # --- Semantic Gap Bridging: Floating Point Equality Tolerance ---
+        self.equality_tolerance = 1e-9 # Default absolute tolerance for np.isclose
+        
         # --- KeYmaera X Definitions ---
         self.constants = {{}}
         self.functions = {{}}
@@ -578,6 +610,13 @@ class {env_name_for_class}(gym.Env):
     def _get_info(self):
         return self.state.copy() # Return a copy of the current state dictionary
 
+    def _approx_eq(self, a, b):
+        \"\"\"
+        Performs an approximate equality check using numpy.isclose.
+        This bridges the semantic gap between formal exact equality and float approximation.
+        \"\"\"
+        return np.isclose(a, b, atol=self.equality_tolerance)
+
     def _evaluate_expression(self, expr_str, local_vars=None, is_constraint=False):
         
         # Safe evaluation of expressions using environment's context.
@@ -595,7 +634,8 @@ class {env_name_for_class}(gym.Env):
             'np': np, 'math': math,
             **self.constants,
             **self.functions, # Include functions for general expressions
-            **self.predicates  # Include predicates for general expressions
+            **self.predicates,  # Include predicates for general expressions
+            '_approx_eq': self._approx_eq # Make approximate equality available
         }}
         eval_locals = {{
             **self.state,
@@ -609,16 +649,35 @@ class {env_name_for_class}(gym.Env):
         # 1. Basic syntax replacements (power, abs)
         expr_py = expr_py.replace('^', '**').replace('abs(', 'np.abs(')
         
-        # 2. Replace single '=' with '==' for equality comparisons.
-        expr_py = re.sub(r'(?<![<>=!])=(?![=])', '==', expr_py)
+        # 2. Replace single '=' (KeYmaera X equality) with self._approx_eq(LHS, RHS).
+        #    This is a heuristic due to not having a full parser, but addresses the semantic gap.
+        #    The regex attempts to capture the left and right operands of '='.
+        #    It assumes operands are either simple identifiers/numbers or non-nested parenthesized expressions.
+        #    It must be applied iteratively to handle multiple equalities in an expression.
+        
+        # Define a pattern for a "simple term" which can be an identifier, a number,
+        # or a non-nested parenthesized expression.
+        simple_term_pattern = r'{_simple_term_pattern_str}' # Interpolate the string literal here
+        
+        # Pattern to find 'LHS = RHS' where LHS and RHS are simple terms.
+        # We need to ensure it's a single '=' and not part of '!=', '<=', '>='.
+        # Construct equality_regex using string concatenation to avoid f-string nesting issues.
+        equality_regex = r'(' + simple_term_pattern + r')\s*(?<![<>=!])=(?![=])\s*(' + simple_term_pattern + r')'
+
+        # Apply this replacement iteratively until no more matches are found.
+        # This helps with multiple simple equalities in a single expression.
+        while True:
+            new_expr_py = re.sub(equality_regex, r'_approx_eq(\\1, \\2)', expr_py)
+            if new_expr_py == expr_py:
+                break
+            expr_py = new_expr_py
 
         # 3. Handle logical operators (&, |)
         expr_py = expr_py.replace('&', 'and').replace('|', 'or')
         
         # 4. Handle KeYmaera X implication '->' (A -> B becomes (not (A) or (B)))
         while True:
-            # FIX: Corrected regex backreferences from ,  to \1, \2
-            new_expr_py = re.sub(r'\((.*?)\s*->\s*(.*?)\)', r'((not \1) or \2)', expr_py)
+            new_expr_py = re.sub(r'\((.*?)\s*->\s*(.*?)\)', r'((not \\1) or \\2)', expr_py)
             if new_expr_py == expr_py:
                 break
             expr_py = new_expr_py
@@ -626,7 +685,7 @@ class {env_name_for_class}(gym.Env):
         try:
             return eval(expr_py, eval_globals, eval_locals)
         except Exception as e:
-            print(f"Error evaluating expression '{{expr_str}}': {{e}}")
+            print(f"Error evaluating expression '{{expr_str}}' (transformed: '{{expr_py}}'): {{e}}")
             # print(f"Eval globals: {{eval_globals}}") # Too verbose
             # print(f"Eval locals: {{eval_locals}}") # Too verbose
             if is_constraint:
@@ -684,6 +743,7 @@ class {env_name_for_class}(gym.Env):
             return reward, terminated, applied_successfully
 
         elif isinstance(action_config, NondeterministicAssignmentActionConfig):
+            # FIX: Corrected indentation for the following line
             assign_key = f"assign_{{action_config.variable}}"
             if assign_key in agent_action:
                 self.state[action_config.variable] = agent_action[assign_key]
@@ -697,6 +757,7 @@ class {env_name_for_class}(gym.Env):
             return reward, terminated, applied_successfully
 
         elif isinstance(action_config, ActionConstraintConfig):
+            # Constraints should use approximate equality
             constraint_met = self._evaluate_expression(action_config.formula, is_constraint=True)
             if not constraint_met:
                 # print(f"Constraint violated: {{{{action_config.formula}}}}")
@@ -814,7 +875,9 @@ class {env_name_for_class}(gym.Env):
                     # For this problem, events are domain constraints (t <= ep, v >= 0)
                     # If v < 0, it's a domain violation -> termination
                     # We need to re-evaluate after updating self.state
-                    if self.state.get('v', 0.0) < 0: # Use .get with default for safety
+                    # Note: ODE events themselves use floating-point comparisons internally.
+                    # This check here is a re-evaluation after the fact.
+                    if self.state.get('v', 0.0) < -self.equality_tolerance: # Use tolerance for v < 0 check
                         reward -= 100.0 # Penalty for v < 0
                         terminated = True
                     # If t > ep, it means the time limit was reached, which is expected behavior
@@ -833,6 +896,7 @@ class {env_name_for_class}(gym.Env):
         # (x - xo)^2 + (y - yo)^2 > 0
         # This means the robot must NOT be at the obstacle's position.
         # If it becomes <= 0, safety is violated.
+        # Postcondition should use approximate equality for any '=' it contains.
         postcondition_satisfied = self._evaluate_expression('{postcondition_formula_py}', is_constraint=True)
         if not postcondition_satisfied:
             reward -= 100.0 # Safety violation
@@ -938,6 +1002,8 @@ def _generate_ode_solver_logic(hps: List[HybridProgramConfig], state_variable_na
 
     ode_func_lines.append("    # Calculate derivatives")
     derivatives = ['0.0'] * len(state_variable_names)
+    # The parameters in scope for ODE equations are the state variables themselves and 't_val'
+    ode_params_in_scope = list(ode_state_map.keys()) + ['t_val']
     for ode in step_func_config.odes:
         idx = ode_state_map.get(ode.variable)
         if idx is not None:
@@ -946,7 +1012,7 @@ def _generate_ode_solver_logic(hps: List[HybridProgramConfig], state_variable_na
             # Format the ODE equation for direct Python evaluation within the ODE function's scope
             # The ODE function's local scope will have state variables as direct names (e.g., 'x', 'y', 'v')
             # and 't_val'.
-            ode_params_in_scope = state_variable_names + ['t_val']
+            # _format_kx_expr_for_python_lambda_body will now convert '=' to self._approx_eq
             formatted_equation = _format_kx_expr_for_python_lambda_body(
                 equation_single_line, ode_params_in_scope, all_constants, state_variable_names, all_function_names, all_predicate_names
             )
@@ -1048,7 +1114,9 @@ def _generate_reset_logic(variables: List[VariableDeclarationConfig], preconditi
 
         # 2. Parse the expanded precondition for explicit assignments (fallback if Z3 fails)
         expanded_precondition_kx = _expand_formula(precondition.formula, definitions)
-        assignment_matches = re.findall(r'(\b\w+\b)\s*(?:=|==)\s*([a-zA-Z0-9_.]+)', expanded_precondition_kx)
+        # We need to be careful here. If the precondition uses '=', it's an equality.
+        # The regex below looks for 'var = value' patterns.
+        assignment_matches = re.findall(r'(\b\w+\b)\s*=\s*([a-zA-Z0-9_.]+)', expanded_precondition_kx)
         
         if assignment_matches:
             reset_code_lines.append("    # Apply explicit assignments from the precondition (fallback)")
@@ -1058,15 +1126,16 @@ def _generate_reset_logic(variables: List[VariableDeclarationConfig], preconditi
             reset_code_lines.append("")
 
         # 3. Special handling for dx, dy (isWellformedDir) (fallback if Z3 fails)
+        # Note: 'dx^2+dy^2' equality check will now use approximate equality via _evaluate_expression
         if re.search(r'dx\^2\s*\+\s*dy\^2', expanded_precondition_kx):
             reset_code_lines.append(f"    # Ensure dx, dy satisfy isWellformedDir (approximate unit vector) (fallback)")
             reset_code_lines.append(f"    norm_sq = self.state['dx']**2 + self.state['dy']**2")
             reset_code_lines.append(f"    ud_val = self.constants.get('Ud', 0.0) # Get Ud from constants, default to 0.0 if not found")
             reset_code_lines.append(f"    min_norm_sq_target = (1.0 - ud_val)**2")
             reset_code_lines.append(f"    max_norm_sq_target = (1.0 + ud_val)**2")
-            reset_code_lines.append(f"    if not (min_norm_sq_target <= norm_sq <= max_norm_sq_target):")
+            reset_code_lines.append(f"    if not (min_norm_sq_target - self.equality_tolerance <= norm_sq <= max_norm_sq_target + self.equality_tolerance):") # Use tolerance for bounds check
             reset_code_lines.append(f"        norm = np.sqrt(norm_sq)")
-            reset_code_lines.append(f"        if norm > 1e-6: # Avoid division by zero")
+            reset_code_lines.append(f"        if norm > self.equality_tolerance: # Avoid division by zero with tolerance")
             reset_code_lines.append(f"            self.state['dx'] /= norm")
             reset_code_lines.append(f"            self.state['dy'] /= norm")
             reset_code_lines.append(f"        else: # Default to (1,0) if too small")
@@ -1077,13 +1146,14 @@ def _generate_reset_logic(variables: List[VariableDeclarationConfig], preconditi
         # 4. Special handling for (x-xo)^2 + (y-yo)^2 > 0 (fallback if Z3 fails)
         if re.search(r'\(x\s*-\s*xo\)\^2\s*\+\s*\(y\s*-\s*yo\)\^2\s*>\s*0', expanded_precondition_kx):
             reset_code_lines.append(f"    # Ensure robot and obstacle are not at the same position (fallback)")
-            reset_code_lines.append(f"    if self.state['x'] == self.state['xo'] and self.state['y'] == self.state['yo']:")
+            reset_code_lines.append(f"    if self._approx_eq(self.state['x'], self.state['xo']) and self._approx_eq(self.state['y'], self.state['yo']):")
             reset_code_lines.append(f"        self.state['x'] += 0.1 # Slightly perturb x to ensure separation")
             reset_code_lines.append("")
 
     # 5. Final verification (always runs)
-    # The _evaluate_expression method expects Python syntax, so format the expanded_precondition_kx now.
-    final_precondition_for_eval = _format_kx_expr_for_python_eval_context(_expand_formula(precondition.formula, definitions))
+    # The _evaluate_expression method expects KeYmaera X syntax (with '=' for equality).
+    # It will internally convert '=' to self._approx_eq.
+    final_precondition_for_eval = _expand_formula(precondition.formula, definitions)
     
     # Escape strings for embedding into the generated Python code's f-string
     original_precondition_formula_escaped = precondition.formula.replace("'", "\\'").replace('\\', '\\\\').replace('\n', ' ')
@@ -1122,6 +1192,7 @@ if __name__ == "__main__":
     admissibleSeparation_func = FunctionDefinitionConfig(name='admissibleSeparation', return_type='Real', parameters=[('Real', 'v')], body='stopDist(v) + accelComp(v)')
 
     # Predicates
+    # Note: 'isWellformedDir' and 'initialState' use '=', which will now be approx.
     isWellformedDir_pred = PredicateDefinitionConfig(name='isWellformedDir', parameters=[('Real', 'dx'), ('Real', 'dy')], body='1-Ud <= dx^2+dy^2 & dx^2 + dy^2 <= 1+Ud')
     # FIX: Corrected bounds predicate to match 0 <= Ud < 1
     bounds_pred = PredicateDefinitionConfig(name='bounds', parameters=[], body='A >= 0 & b > 0 & ep > 0 & V >= 0 & 0<=Ud & Ud < 1') # Use & for AND, added V, Ud bounds
@@ -1139,7 +1210,7 @@ if __name__ == "__main__":
         DeterministicAssignmentActionConfig(variable='a', value='-b')
     ])
     choice0_actions_branch1 = SequenceActionConfig(actions=[
-        ActionConstraintConfig(formula='v = 0'),
+        ActionConstraintConfig(formula='v = 0'), # This '=' will now be approximate
         DeterministicAssignmentActionConfig(variable='a', value='0'),
         DeterministicAssignmentActionConfig(variable='w', value='0')
     ])
@@ -1150,7 +1221,7 @@ if __name__ == "__main__":
         NondeterministicAssignmentActionConfig(variable='r'),
         NondeterministicAssignmentActionConfig(variable='xo'),
         NondeterministicAssignmentActionConfig(variable='yo'),
-        ActionConstraintConfig(formula='r!=0 & r*w = v'),
+        ActionConstraintConfig(formula='r!=0 & r*w = v'), # This '=' will now be approximate
         ActionConstraintConfig(formula='abs(x-xo) > admissibleSeparation(v) | abs(y-yo) > admissibleSeparation(v)') # Use |
     ])
 
@@ -1248,7 +1319,7 @@ if __name__ == "__main__":
     
     # Update the example usage to reflect the sanitized class name
     sanitized_example_env_name = re.sub(r'[^a-zA-Z0-9_]', '_', gym_config_example.env_name)
-    sanitized_example_env_name = re.sub(r'_+', '_', sanitized_env_name).strip('_')
+    sanitized_example_env_name = re.sub(r'_+', '_', sanitized_example_env_name).strip('_')
     if sanitized_example_env_name and sanitized_example_env_name[0].isdigit():
         sanitized_example_env_name = '_' + sanitized_example_env_name
     if not sanitized_example_env_name:
