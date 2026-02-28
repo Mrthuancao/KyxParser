@@ -23,6 +23,7 @@ Definitions
     v = 0
     & (x-xo)^2 + (y-yo)^2 > 0
     & isWellformedDir(dx, dy)
+    & r != 0
   );
 
   Bool assumptions(Real x, Real y, Real v, Real dx, Real dy, Real xo, Real yo) <->

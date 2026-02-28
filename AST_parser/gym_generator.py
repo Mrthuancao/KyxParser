@@ -703,7 +703,8 @@ def generate_gym_environment_code(config: GymEnvironmentConfig, envName: str = "
             # Only local_vars are truly 'local' to the eval call.
             # All other references are now explicit (self.state['x'], self.constants['A'], etc.)
             eval_globals_for_eval = {'np': np, 'math': math, '_approx_eq': self._approx_eq, 'self': self}
-            return eval(expr_py_final, eval_globals_for_eval, local_vars)
+            result = eval(expr_py_final, eval_globals_for_eval, local_vars)
+            return result
         except Exception as e:
             print(f"Error evaluating expression '{expr_str}' (transformed: '{expr_py_final}'): {e}")
             if is_constraint:

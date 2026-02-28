@@ -91,7 +91,7 @@ class GeneratedKXEnv(gym.Env):
     ('Real', 'xo'),
     ('Real', 'yo')
 ],
-                    body='v = 0\n    & (x-xo)^2 + (y-yo)^2 > 0\n    & isWellformedDir(dx, dy)'
+                    body='v = 0\n    & (x-xo)^2 + (y-yo)^2 > 0\n    & isWellformedDir(dx, dy)\n    & r != 0'
                 ),
                 PredicateDefinitionConfig(
                     name='assumptions',
@@ -322,7 +322,7 @@ class GeneratedKXEnv(gym.Env):
         # Predicates (lambdas for easy evaluation)
         self.predicates['isWellformedDir'] = lambda dx, dy: self._approx_eq(dx**2 + dy**2, 1)
         self.predicates['bounds'] = lambda : ((self.constants['A']) >= (0)) and (((self.constants['b']) > (0)) and ((self.constants['ep']) > (0)))
-        self.predicates['initialState'] = lambda x, y, v, dx, dy, xo, yo: (self._approx_eq(v, 0)) and ((((x-xo)**2 + (y-yo)**2) > (0)) and (self.predicates['isWellformedDir'](dx, dy)))
+        self.predicates['initialState'] = lambda x, y, v, dx, dy, xo, yo: (self._approx_eq(v, 0)) and ((((x-xo)**2 + (y-yo)**2) > (0)) and ((self.predicates['isWellformedDir'](dx, dy)) and ((self.state['r']) != (0))))
         self.predicates['assumptions'] = lambda x, y, v, dx, dy, xo, yo: (self.predicates['bounds']()) and (self.predicates['initialState'](x, y, v, dx, dy, xo, yo))
         self.predicates['loopinv'] = lambda x, y, v, dx, dy, xo, yo: ((v) >= (0)) and ((self.predicates['isWellformedDir'](dx, dy)) and (((np.abs(x-xo)) > (self.functions['stopDist'](v))) or ((np.abs(y-yo)) > (self.functions['stopDist'](v)))))
 
@@ -993,7 +993,10 @@ class GeneratedKXEnv(gym.Env):
             # Only local_vars are truly 'local' to the eval call.
             # All other references are now explicit (self.state['x'], self.constants['A'], etc.)
             eval_globals_for_eval = {'np': np, 'math': math, '_approx_eq': self._approx_eq, 'self': self}
-            return eval(expr_py_final, eval_globals_for_eval, local_vars)
+            print(f"Evaluating expression: '{expr_str}' -> Transformed to Python: '{expr_py_final}' with local_vars: {local_vars}")
+            result = eval(expr_py_final, eval_globals_for_eval, local_vars)
+            print(f"Result of evaluation: {result}")
+            return result
         except Exception as e:
             print(f"Error evaluating expression '{expr_str}' (transformed: '{expr_py_final}'): {e}")
             if is_constraint:
@@ -1152,7 +1155,7 @@ class GeneratedKXEnv(gym.Env):
             # Z3 found a base solution. Now, perturb it to get 'new' values.
             # We will try to perturb it and verify, falling back to the base if perturbation fails.
             perturbation_magnitude = 0.05 # Small perturbation range
-            num_perturbation_attempts = 5
+            num_perturbation_attempts = 10
             perturbed_state_found = False
 
             for _ in range(num_perturbation_attempts):
@@ -1225,7 +1228,7 @@ class GeneratedKXEnv(gym.Env):
         # Verify the full precondition after setting initial states
         # Evaluate each conjunct of the precondition to identify specific failures
         failing_formula = None
-        precondition_conjuncts = self._split_top_level_and_local('((A >= 0     & b > 0     & ep > 0) & (v = 0     & (x-xo)^2 + (y-yo)^2 > 0     & (dx^2 + dy^2 = 1)))')
+        precondition_conjuncts = self._split_top_level_and_local('((A >= 0     & b > 0     & ep > 0) & (v = 0     & (x-xo)^2 + (y-yo)^2 > 0     & (dx^2 + dy^2 = 1)     & r != 0))')
         precondition_satisfied = True
         for conj_str in precondition_conjuncts:
             # Evaluate each conjunct. _evaluate_expression will handle the parsing.
