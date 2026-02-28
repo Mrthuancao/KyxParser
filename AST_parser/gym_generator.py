@@ -375,7 +375,7 @@ def generate_gym_environment_code(config: GymEnvironmentConfig, envName: str = "
         # 2. Replace multiple underscores with a single underscore and strip leading/trailing underscores
         sanitized_env_name = re.sub(r'_+', '_', sanitized_env_name).strip('_')
         
-        # 3. Ensure it doesn't start with a digit
+        # 3. Ensure it's not starting with a digit
         if sanitized_env_name and sanitized_env_name[0].isdigit():
             sanitized_env_name = '_' + sanitized_env_name
         
@@ -407,13 +407,9 @@ def generate_gym_environment_code(config: GymEnvironmentConfig, envName: str = "
                 const.value, [], all_constant_names, state_variable_names, all_function_names, all_predicate_names
             )
         else: # const.value is None (not provided in AST)
-            # Apply heuristic for critical constants
-            if const.name in ['ep', 'W', 'V', 'A', 'b', 'Ud']:
-                formatted_value = '1.0'
-                if const.name == 'Ud':
-                    formatted_value = '0.1'
-            else:
-                formatted_value = '0.0' # Default for other unspecified constants
+            # If value is None, initialize to 0.0. Z3 will solve for it in reset().
+            # This prevents hardcoding specific defaults in __init__ for unspecified constants.
+            formatted_value = '0.0' # A neutral default, which Z3 will then override.
 
         constants_init_code_lines.append(f"self.constants['{const.name}'] = {formatted_value}")
     # Pre-indent this block
@@ -828,7 +824,7 @@ def generate_gym_environment_code(config: GymEnvironmentConfig, envName: str = "
 
             # --- Relational Operators (next level down) ---
             # Note: '=' in KeYmaera X maps to '==' for Z3 exact equality
-            relational_ops = [('!=', '!='), ('<=', '<='), ('>=', '>='), ('<', '<'), ('>', '>'), ('=', '==')]
+            relational_ops = [('!=', '!='), ('<=', '<='), ('>=', '>='), ('<', '<'), ('<', '<'), ('=', '==')]
             
             balance = 0
             rel_op_found_kx = None
@@ -1008,6 +1004,7 @@ class {env_name_for_class}(gym.Env):
         # Mapping of state variable names to their index in the observation array
         self._state_keys = {state_variable_names}
         # Current state values (dictionary for easy access by name)
+        # Initialize to 0.0 as placeholders; these will be overwritten by reset()
         self.state = {{key: 0.0 for key in self._state_keys}} 
         # Initial state values are set in reset()
         self.last_failing_precondition_formula = None # Initialize for debugging
@@ -1049,6 +1046,9 @@ class {env_name_for_class}(gym.Env):
         self.max_episode_steps = 200 # Default max steps for an episode
         self.reward_range = (-float('inf'), float('inf'))
 
+        # Initialize the environment to a valid state using the reset method
+        self.reset() # <--- ADDED THIS LINE
+        
     def _compile_ode_func(self, func_str):
         # Create a dictionary for globals that includes 'self'
         exec_globals = {{'np': np, 'math': math, 'self': self}} # 'self' in globals
@@ -1416,7 +1416,7 @@ def _generate_action_space_and_logic(hps: List[HybridProgramConfig]):
     return action_space_definition, control_func_config.action_space_config, action_space_keys
 
 def _generate_ode_solver_logic(hps: List[HybridProgramConfig], state_variable_names: List[str],
-                               all_constants: List[str], all_function_names: List[str], all_predicate_names: List[str]):
+                               all_constants: List[str], all_function_names: List[str], all_predicate_names: List[str]) -> Tuple[str, str, Dict[str, int], Dict[int, str]]:
     """
     Generates the Python code for the ODE function and event functions
     for scipy.integrate.solve_ivp.
@@ -1545,17 +1545,21 @@ def _generate_reset_logic(variables: List[VariableDeclarationConfig], preconditi
     reset_code_lines.append(f"        ")
     reset_code_lines.append(f"        for _ in range(num_perturbation_attempts):")
     reset_code_lines.append(f"            trial_state = z3_base_solution.copy()")
-    reset_code_lines.append(f"            for var_name in self._state_keys:") # Only perturb state variables
-    reset_code_lines.append(f"                if var_name in trial_state:") # Ensure it's a variable Z3 solved for
+    reset_code_lines.append(f"            for var_name, value in z3_base_solution.items():") # Iterate over Z3's solution
+    reset_code_lines.append(f"                if var_name in self._state_keys:") # Only perturb state variables
     reset_code_lines.append(f"                    perturb = self.np_random.uniform(-perturbation_magnitude, perturbation_magnitude)")
-    reset_code_lines.append(f"                    trial_state[var_name] = trial_state[var_name] + perturb")
+    reset_code_lines.append(f"                    trial_state[var_name] = value + perturb") # Apply perturbation to base value
     reset_code_lines.append(f"            ")
+    
     reset_code_lines.append(f"            # Verify the perturbed state against the precondition")
-    reset_code_lines.append(f"            # Temporarily apply trial state to self.state for precondition check")
+    reset_code_lines.append(f"            # Temporarily apply trial state to self.state and self.constants for precondition check")
     reset_code_lines.append(f"            original_state_copy = self.state.copy()")
+    reset_code_lines.append(f"            original_constants_copy = self.constants.copy()") # Store original constants too
     reset_code_lines.append(f"            for var_name, value in trial_state.items():")
-    reset_code_lines.append(f"                if var_name in self.state: # Only update state variables")
+    reset_code_lines.append(f"                if var_name in self.state: # Update state variables")
     reset_code_lines.append(f"                    self.state[var_name] = value")
+    reset_code_lines.append(f"                elif var_name in self.constants: # Update constants that Z3 solved for")
+    reset_code_lines.append(f"                    self.constants[var_name] = value")
     reset_code_lines.append(f"            ")
     
     # Escape the precondition formula for embedding into the f-string
@@ -1564,10 +1568,12 @@ def _generate_reset_logic(variables: List[VariableDeclarationConfig], preconditi
     reset_code_lines.append(f"            if self._evaluate_expression('{precondition_formula_escaped_for_eval}', is_constraint=True):")
     reset_code_lines.append(f"                final_initial_state = trial_state")
     reset_code_lines.append(f"                perturbed_state_found = True")
-    reset_code_lines.append(f"                # Revert self.state before breaking, as final_initial_state will be applied later")
+    reset_code_lines.append(f"                # Revert self.state and self.constants before breaking, as final_initial_state will be applied later")
     reset_code_lines.append(f"                self.state.update(original_state_copy)") 
+    reset_code_lines.append(f"                self.constants.update(original_constants_copy)")
     reset_code_lines.append(f"                break")
-    reset_code_lines.append(f"            self.state.update(original_state_copy) # Revert self.state if perturbation failed")
+    reset_code_lines.append(f"            self.state.update(original_state_copy) # Revert if perturbation failed")
+    reset_code_lines.append(f"            self.constants.update(original_constants_copy)")
     reset_code_lines.append(f"        ")
     reset_code_lines.append(f"        if not perturbed_state_found:")
     reset_code_lines.append(f"            print(f\"Warning: Could not find a valid perturbed state after {{{{num_perturbation_attempts}}}} attempts. Using base Z3 solution.\")")
@@ -1575,10 +1581,13 @@ def _generate_reset_logic(variables: List[VariableDeclarationConfig], preconditi
     reset_code_lines.append(f"        ")
     reset_code_lines.append(f"        # Apply the chosen initial state (perturbed or base Z3 solution)")
     reset_code_lines.append(f"        for var_name, value in final_initial_state.items():")
-    reset_code_lines.append(f"            if var_name in self.state:")
+    reset_code_lines.append(f"            if var_name in self.state:") # Update state variables
     reset_code_lines.append(f"                self.state[var_name] = value")
+    reset_code_lines.append(f"            elif var_name in self.constants:") # Update constants that Z3 solved for
+    reset_code_lines.append(f"                self.constants[var_name] = value")
     reset_code_lines.append(f"        self.last_failing_precondition_formula = None")
     reset_code_lines.append(f"        print(f\"Initial state set by Z3 (possibly perturbed): {{self.state}}\")")
+    reset_code_lines.append(f"        print(f\"Constants possibly set by Z3: {{self.constants}}\")") # Added for visibility
     reset_code_lines.append(f"    else:")
     reset_code_lines.append(f"        # Z3 failed, fall back to heuristics (existing code).")
     reset_code_lines.append(f"        print(f\"Warning: Z3 solver failed to find a satisfying initial state for the precondition: '{{self._problem_config.precondition.formula}}'. Falling back to heuristics. This may lead to the initial state not satisfying the precondition, which could cause immediate termination or warnings during reset. Consider revising the precondition or ensuring it is satisfiable with the given definitions.\")")
@@ -1668,7 +1677,8 @@ if __name__ == "__main__":
     # This mimics the output of convert_keymaerax_ast_to_intermediate_pyast
     
     # Constants
-    ep_const = ConstantDefinitionConfig(name='ep', type='Real', value='1.0') # Set a value for testing
+    # Set ep_const.value to None to demonstrate Z3 solving for it
+    ep_const = ConstantDefinitionConfig(name='ep', type='Real', value=None) 
     b_const = ConstantDefinitionConfig(name='b', type='Real', value='0.5') # Set a value for testing
     A_const = ConstantDefinitionConfig(name='A', type='Real', value='1.0') # Set a value for testing
     W_const = ConstantDefinitionConfig(name='W', type='Real', value='1.0') # Set a value for testing
@@ -1772,7 +1782,7 @@ if __name__ == "__main__":
             CallHybridProgramConfig(hp_name='controlFunc'),
             DeterministicAssignmentActionConfig(variable='t', value='0')
         ]),
-        HybridProgramStepConfig(hp_name='stepFunc', invariant_formula='t>=0 & isWellformedDir(dx, dy) & (v>0 -> (abs(x-xo) > stopDist(v) | abs(y-yo) > stopDist(v)))') # Simplified invariant for example
+        HybridProgramStepConfig(hp_name='stepFunc', invariant_formula='t>=0 & isWellformedDir(dx, dy) & (v>0 -> (abs(x-xo) > stopDist(v) | abs(y-yo) > stopDist(v)))') # Corrected invariant for example
     ])
     loop_execution = LoopExecutionConfig(
         iterations='inf',
@@ -1831,25 +1841,29 @@ from generated_kx_env import {sanitized_example_env_name}
 import numpy as np
 
 # Instantiate the environment
+# The __init__ method now calls reset(), so the environment starts in a valid state.
 env = {sanitized_example_env_name}()
 
-print("\\n--- First Reset ---")
-observation, info = env.reset()
+print("\\n--- Initial state after __init__ (from first reset call) ---")
+# The first reset call is done internally by __init__
+observation, info = env._get_obs(), env._get_info() # Manually get obs and info as reset() was called internally
 print("Initial observation:", observation)
 print("Initial state (info):", info)
 if env.last_failing_precondition_formula:
     print(f"Precondition not fully satisfied: {{env.last_failing_precondition_formula}}")
+print(f"Constants after first reset: {{env.constants}}") # Check if ep was solved by Z3
 
-print("\\n--- Second Reset (should be different) ---")
-observation, info = env.reset()
+print("\\n--- Second Reset (should be different and valid) ---")
+observation, info = env.reset() # Explicitly call reset again for a new episode
 print("Initial observation:", observation)
 print("Initial state (info):", info)
 if env.last_failing_precondition_formula:
     print(f"Precondition not fully satisfied: {{env.last_failing_precondition_formula}}")
+print(f"Constants after second reset: {{env.constants}}") # Check if ep was solved by Z3
 
 # Example 1: Choose the first branch of ChoiceLevel_0 (a := -b)
 print("\\nTaking 5 steps with action_branch_0 (a := -b):")
-env.reset() # Reset for a fresh start
+env.reset() # Reset for a fresh start for this example
 for i in range(5):
     print(f"Step {{i+1}} (before action): State={{env.state}}")
     action_to_take = {{

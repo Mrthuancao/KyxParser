@@ -309,10 +309,10 @@ class GeneratedKXEnv(gym.Env):
         self.predicates = {}
 
         # Constants
-        self.constants['ep'] = 1.0
-        self.constants['b'] = 1.0
-        self.constants['A'] = 1.0
-        self.constants['W'] = 1.0
+        self.constants['ep'] = 0.0
+        self.constants['b'] = 0.0
+        self.constants['A'] = 0.0
+        self.constants['W'] = 0.0
 
         # Functions (lambdas for easy evaluation)
         self.functions['stopDist'] = lambda v: v**2 / (2*self.constants['b'])
@@ -330,6 +330,7 @@ class GeneratedKXEnv(gym.Env):
         # Mapping of state variable names to their index in the observation array
         self._state_keys = ['x', 'y', 'v', 'a', 'dx', 'dy', 'w', 'r', 'xo', 'yo', 't']
         # Current state values (dictionary for easy access by name)
+        # Initialize to 0.0 as placeholders; these will be overwritten by reset()
         self.state = {key: 0.0 for key in self._state_keys} 
         # Initial state values are set in reset()
         self.last_failing_precondition_formula = None # Initialize for debugging
@@ -481,6 +482,9 @@ class GeneratedKXEnv(gym.Env):
         self.current_step = 0
         self.max_episode_steps = 200 # Default max steps for an episode
         self.reward_range = (-float('inf'), float('inf'))
+
+        # Initialize the environment to a valid state using the reset method
+        self.reset() # <--- ADDED THIS LINE
 
     def _compile_ode_func(self, func_str):
         # Create a dictionary for globals that includes 'self'
@@ -669,7 +673,7 @@ class GeneratedKXEnv(gym.Env):
 
             # --- Relational Operators (next level down) ---
             # Note: '=' in KeYmaera X maps to '==' for Z3 exact equality
-            relational_ops = [('!=', '!='), ('<=', '<='), ('>=', '>='), ('<', '<'), ('>', '>'), ('=', '==')]
+            relational_ops = [('!=', '!='), ('<=', '<='), ('>=', '>='), ('<', '<'), ('<', '<'), ('=', '==')]
 
             balance = 0
             rel_op_found_kx = None
@@ -1153,25 +1157,30 @@ class GeneratedKXEnv(gym.Env):
 
             for _ in range(num_perturbation_attempts):
                 trial_state = z3_base_solution.copy()
-                for var_name in self._state_keys:
-                    if var_name in trial_state:
+                for var_name, value in z3_base_solution.items():
+                    if var_name in self._state_keys:
                         perturb = self.np_random.uniform(-perturbation_magnitude, perturbation_magnitude)
-                        trial_state[var_name] = trial_state[var_name] + perturb
+                        trial_state[var_name] = value + perturb
 
                 # Verify the perturbed state against the precondition
-                # Temporarily apply trial state to self.state for precondition check
+                # Temporarily apply trial state to self.state and self.constants for precondition check
                 original_state_copy = self.state.copy()
+                original_constants_copy = self.constants.copy()
                 for var_name, value in trial_state.items():
-                    if var_name in self.state: # Only update state variables
+                    if var_name in self.state: # Update state variables
                         self.state[var_name] = value
+                    elif var_name in self.constants: # Update constants that Z3 solved for
+                        self.constants[var_name] = value
 
                 if self._evaluate_expression('assumptions(x, y, v, dx, dy, xo, yo)', is_constraint=True):
                     final_initial_state = trial_state
                     perturbed_state_found = True
-                    # Revert self.state before breaking, as final_initial_state will be applied later
+                    # Revert self.state and self.constants before breaking, as final_initial_state will be applied later
                     self.state.update(original_state_copy)
+                    self.constants.update(original_constants_copy)
                     break
-                self.state.update(original_state_copy) # Revert self.state if perturbation failed
+                self.state.update(original_state_copy) # Revert if perturbation failed
+                self.constants.update(original_constants_copy)
 
             if not perturbed_state_found:
                 print(f"Warning: Could not find a valid perturbed state after {{num_perturbation_attempts}} attempts. Using base Z3 solution.")
@@ -1181,8 +1190,11 @@ class GeneratedKXEnv(gym.Env):
             for var_name, value in final_initial_state.items():
                 if var_name in self.state:
                     self.state[var_name] = value
+                elif var_name in self.constants:
+                    self.constants[var_name] = value
             self.last_failing_precondition_formula = None
             print(f"Initial state set by Z3 (possibly perturbed): {self.state}")
+            print(f"Constants possibly set by Z3: {self.constants}")
         else:
             # Z3 failed, fall back to heuristics (existing code).
             print(f"Warning: Z3 solver failed to find a satisfying initial state for the precondition: '{self._problem_config.precondition.formula}'. Falling back to heuristics. This may lead to the initial state not satisfying the precondition, which could cause immediate termination or warnings during reset. Consider revising the precondition or ensuring it is satisfiable with the given definitions.")
