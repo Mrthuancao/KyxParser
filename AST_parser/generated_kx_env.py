@@ -5,10 +5,10 @@ from scipy.integrate import solve_ivp
 import math # For math functions like sqrt, sin, cos, etc.
 import textwrap
 import re # For regex replacements in _evaluate_expression
-from typing import (Dict, Any, Tuple) # Import typing hints
+from typing import (Dict, Any, Tuple, List, Optional) # Import typing hints
 from pyast_config import (ActionType, ChoiceActionConfig, SequenceActionConfig, DeterministicAssignmentActionConfig, NondeterministicAssignmentActionConfig, ActionConstraintConfig, CallHybridProgramConfig, HybridProgramStepConfig) # Import AST classes
 
-class IJRR17_Corollary_1_2_Static_safety_with_margin_for_imperfect_trajectories(gym.Env):
+class IJRR17_Theorem_1_Static_safety(gym.Env):
     metadata = {"render_modes": ["human"], "render_fps": 30}
 
     def __init__(self, render_mode=None):
@@ -28,19 +28,18 @@ class IJRR17_Corollary_1_2_Static_safety_with_margin_for_imperfect_trajectories(
         self.constants['b'] = 1.0
         self.constants['A'] = 1.0
         self.constants['W'] = 1.0
-        self.constants['Ud'] = 0.1
 
         # Functions (lambdas for easy evaluation)
-        self.functions['stopDist'] = lambda v: ((1+self.constants['Ud']) * v**2 / (2*self.constants['b']))
-        self.functions['accelComp'] = lambda v: ((1+self.constants['Ud']) * (self.constants['A']/self.constants['b'] + 1) * (self.constants['A']/2 * self.constants['ep']**2 + self.constants['ep']*v))
+        self.functions['stopDist'] = lambda v: v**2 / (2*self.constants['b'])
+        self.functions['accelComp'] = lambda v: (self.constants['A']/self.constants['b'] + 1) * (self.constants['A']/2 * self.constants['ep']**2 + self.constants['ep']*v)
         self.functions['admissibleSeparation'] = lambda v: self.functions['stopDist'](v) + self.functions['accelComp'](v)
 
         # Predicates (lambdas for easy evaluation)
-        self.predicates['isWellformedDir'] = lambda dx, dy: 1-self.constants['Ud'] <= dx**2+dy**2 and dx**2 + dy**2 <= 1+self.constants['Ud']
-        self.predicates['bounds'] = lambda : self.constants['A'] >= 0                                                                                                                     and self.constants['b'] > 0                                                                                                                      and self.constants['ep'] > 0                                                                                                                     and 0<=self.constants['Ud'] and self.constants['Ud'] <= 1
-        self.predicates['initialState'] = lambda x, y, v, dx, dy, xo, yo: self._approx_eq(v, 0)         and (x-xo)**2 + (y-yo)**2 > 0         and self.predicates['isWellformedDir'](dx,dy)
-        self.predicates['assumptions'] = lambda x, y, v, dx, dy, xo, yo: self.predicates['bounds']() and self.predicates['initialState'](x, y, v, dx, dy, xo, yo)
-        self.predicates['loopinv'] = lambda x, y, v, dx, dy, xo, yo: v >= 0         and self.predicates['isWellformedDir'](dx,dy)         and (np.abs(x-xo) > self.functions['stopDist'](v) or np.abs(y-yo) > self.functions['stopDist'](v))
+        self.predicates['isWellformedDir'] = lambda dx, dy: self._approx_eq(dx**2 + dy**2, 1)
+        self.predicates['bounds'] = lambda : ((self.constants['A']) >= (0)) and (((self.constants['b']) > (0)) and ((self.constants['ep']) > (0)))
+        self.predicates['initialState'] = lambda x, y, v, dx, dy, xo, yo: (self._approx_eq(v, 0)) and ((((x-xo)**2 + (y-yo)**2) > (0)) and (self.predicates['isWellformedDir'](dx, dy)))
+        self.predicates['assumptions'] = lambda x, y, v, dx, dy, xo, yo: (self.predicates['bounds']()) and (self.predicates['initialState'](x, y, v, dx, dy, xo, yo))
+        self.predicates['loopinv'] = lambda x, y, v, dx, dy, xo, yo: ((v) >= (0)) and ((self.predicates['isWellformedDir'](dx, dy)) and (((np.abs(x-xo)) > (self.functions['stopDist'](v))) or ((np.abs(y-yo)) > (self.functions['stopDist'](v)))))
 
         # --- State Variables ---
         # Mapping of state variable names to their index in the observation array
@@ -48,6 +47,7 @@ class IJRR17_Corollary_1_2_Static_safety_with_margin_for_imperfect_trajectories(
         # Current state values (dictionary for easy access by name)
         self.state = {key: 0.0 for key in self._state_keys} 
         # Initial state values are set in reset()
+        self.last_failing_precondition_formula = None # Initialize for debugging
 
         # --- Observation Space ---
         # All state variables are Real, so Box space is appropriate.
@@ -83,7 +83,7 @@ class IJRR17_Corollary_1_2_Static_safety_with_margin_for_imperfect_trajectories(
                     NondeterministicAssignmentActionConfig(variable='xo'),
                     NondeterministicAssignmentActionConfig(variable='yo'),
                     ActionConstraintConfig(formula='r!=0 & r*w = v'),
-                    ActionConstraintConfig(formula='np.abs(x-xo) > admissibleSeparation(v)         | np.abs(y-yo) > admissibleSeparation(v)')
+                    ActionConstraintConfig(formula='abs(x-xo) > admissibleSeparation(v)         | abs(y-yo) > admissibleSeparation(v)')
                 ])
             ]) # Stored for step logic
 
@@ -190,9 +190,10 @@ class IJRR17_Corollary_1_2_Static_safety_with_margin_for_imperfect_trajectories(
         """
         return np.isclose(a, b, atol=self.equality_tolerance)
 
-    def _evaluate_expression(self, expr_str, local_vars=None, is_constraint=False):
 
+    def _evaluate_expression(self, expr_str: str, local_vars: Optional[Dict[str, Any]] = None, is_constraint: bool = False) -> Any:
         # Safe evaluation of expressions using environment's context.
+        # This method parses KeYmaera X expressions at runtime.
         # If is_constraint is True, returns False on evaluation error.
 
         if local_vars is None:
@@ -205,65 +206,154 @@ class IJRR17_Corollary_1_2_Static_safety_with_margin_for_imperfect_trajectories(
         # Combine all available variables for evaluation context
         eval_globals = {
             'np': np, 'math': math,
-            **self.constants,
-            **self.functions, # Include functions for general expressions
-            **self.predicates,  # Include predicates for general expressions
             '_approx_eq': self._approx_eq # Make approximate equality available
         }
+        # eval_locals will be populated with self.state, self.constants, self.functions, self.predicates, local_vars
+        # This allows direct access to 'x', 'y', 'ep', 'stopDist', 'isWellformedDir'
         eval_locals = {
             **self.state,
+            **self.constants, # Constants are directly accessible as names
+            **{f_name: f_func for f_name, f_func in self.functions.items()}, # Functions are directly callable
+            **{p_name: p_func for p_name, p_func in self.predicates.items()}, # Predicates are directly callable
             **local_vars
         }
 
-        # Apply the same transformations as in _format_kx_expr_for_python_lambda_body
-        # to ensure consistency when evaluating expressions at runtime.
-        expr_py = expr_str.strip()
+        # --- Start KeYmaera X to Python conversion logic (moved from generator) ---
+        expr_py_transformed = expr_str.strip()
 
         # 1. Basic syntax replacements (power, abs)
-        expr_py = expr_py.replace('^', '**').replace('abs(', 'np.abs(')
+        expr_py_transformed = expr_py_transformed.replace('^', '**').replace('abs(', 'np.abs(')
 
-        # 2. Replace single '=' (KeYmaera X equality) with self._approx_eq(LHS, RHS).
-        #    This is a heuristic due to not having a full parser, but addresses the semantic gap.
-        #    The regex attempts to capture the left and right operands of '='.
-        #    It assumes operands are either simple identifiers/numbers or non-nested parenthesized expressions.
-        #    It must be applied iteratively to handle multiple equalities in an expression.
+        # 2. Recursive parsing for operator precedence (relational then logical)
+        def _parse_expression_recursive_runtime(sub_expr: str) -> str:
+            sub_expr = sub_expr.strip()
+            if not sub_expr:
+                return ""
 
-        # Define a pattern for a "simple term" which can be an identifier, a number,
-        # or a non-nested parenthesized expression.
-        simple_term_pattern = r'(?:[a-zA-Z_][a-zA-Z0-9_.]*\b|-?\d+(?:\.\d+)?|\([^)]*\))' # Interpolate the string literal here
+            # Handle outermost balanced parentheses
+            if sub_expr.startswith('(') and sub_expr.endswith(')'):
+                balance = 0
+                is_fully_enclosed = True
+                for i in range(len(sub_expr) - 1): # Check up to second to last char
+                    char = sub_expr[i]
+                    if char == '(': balance += 1
+                    elif char == ')': balance -= 1
+                    if balance == 0:
+                        is_fully_enclosed = False
+                        break
+                if is_fully_enclosed:
+                    return _parse_expression_recursive_runtime(sub_expr[1:-1]) # Recursively parse inner part
 
-        # Pattern to find 'LHS = RHS' where LHS and RHS are simple terms.
-        # We need to ensure it's a single '=' and not part of '!=', '<=', '>='.
-        # Construct equality_regex using string concatenation to avoid f-string nesting issues.
-        equality_regex = r'(' + simple_term_pattern + r')\s*(?<![<>=!])=(?![=])\s*(' + simple_term_pattern + r')'
+            # Find lowest precedence operator at top level
 
-        # Apply this replacement iteratively until no more matches are found.
-        # This helps with multiple simple equalities in a single expression.
-        while True:
-            new_expr_py = re.sub(equality_regex, r'_approx_eq(\1, \2)', expr_py)
-            if new_expr_py == expr_py:
-                break
-            expr_py = new_expr_py
+            # Implication (lowest logical precedence) - right-associative
+            balance = 0
+            implication_idx = -1
+            for i in range(len(sub_expr) - 2, -1, -1): # Scan right-to-left
+                char_pair = sub_expr[i:i+2]
+                if char_pair == '->' and balance == 0:
+                    implication_idx = i
+                    break
+                if sub_expr[i] == ')': balance += 1
+                elif sub_expr[i] == '(': balance -= 1
 
-        # 3. Handle logical operators (&, |)
-        expr_py = expr_py.replace('&', 'and').replace('|', 'or')
+            if implication_idx != -1:
+                left = _parse_expression_recursive_runtime(sub_expr[:implication_idx].strip())
+                right = _parse_expression_recursive_runtime(sub_expr[implication_idx+2:].strip())
+                return f"((not ({left})) or ({right}))"
 
-        # 4. Handle KeYmaera X implication '->' (A -> B becomes (not (A) or (B)))
-        while True:
-            new_expr_py = re.sub(r'\((.*?)\s*->\s*(.*?)\)', r'((not \1) or \2)', expr_py)
-            if new_expr_py == expr_py:
-                break
-            expr_py = new_expr_py
+            # Disjunction (next lowest logical) - left-associative
+            balance = 0
+            disjunction_idx = -1
+            for i in range(len(sub_expr)): # Scan left-to-right
+                if sub_expr[i] == '|' and balance == 0:
+                    disjunction_idx = i
+                    break
+                if sub_expr[i] == '(': balance += 1
+                elif sub_expr[i] == ')': balance -= 1
+
+            if disjunction_idx != -1:
+                left = _parse_expression_recursive_runtime(sub_expr[:disjunction_idx].strip())
+                right = _parse_expression_recursive_runtime(sub_expr[disjunction_idx+1:].strip())
+                return f"({left}) or ({right})"
+
+            # Conjunction (next lowest logical) - left-associative
+            balance = 0
+            conjunction_idx = -1
+            for i in range(len(sub_expr)): # Scan left-to-right
+                if sub_expr[i] == '&' and balance == 0:
+                    conjunction_idx = i
+                    break
+                if sub_expr[i] == '(': balance += 1
+                elif sub_expr[i] == ')': balance -= 1
+
+            if conjunction_idx != -1:
+                left = _parse_expression_recursive_runtime(sub_expr[:conjunction_idx].strip())
+                right = _parse_expression_recursive_runtime(sub_expr[conjunction_idx+1:].strip())
+                return f"({left}) and ({right})"
+
+            # Negation (highest logical precedence) - prefix operator
+            if sub_expr.startswith('!'):
+                operand = _parse_expression_recursive_runtime(sub_expr[1:].strip())
+                return f"(not ({operand}))"
+
+            # Relational operators (including '=')
+            relational_ops = [('!=', '!='), ('<=', '<='), ('>=', '>='), ('<', '<'), ('>', '>'), ('=', '_approx_eq')]
+
+            balance = 0
+            rel_op_found_kx = None
+            rel_op_found_py = None
+            rel_op_idx = -1
+
+            # Scan left-to-right for relational operators
+            for i in range(len(sub_expr)):
+                char = sub_expr[i]
+                if char == '(': balance += 1
+                elif char == ')': balance -= 1
+                elif balance == 0:
+                    # Check for multi-character operators first
+                    for kx_op, py_op_format in relational_ops:
+                        if len(kx_op) > 1 and sub_expr[i:i+len(kx_op)] == kx_op:
+                            rel_op_found_kx = kx_op
+                            rel_op_found_py = py_op_format
+                            rel_op_idx = i
+                            break
+                    if rel_op_found_kx: break # Found a multi-char op
+
+                    # Check for single-character operators if no multi-char op found yet
+                    for kx_op, py_op_format in relational_ops:
+                        if len(kx_op) == 1 and sub_expr[i] == kx_op:
+                            # Special check for '=', ensure it's not part of '==', '!=', '<=', '>='
+                            if kx_op == '=' and (i > 0 and sub_expr[i-1] in '<>=!') or                                             (i < len(sub_expr) - 1 and sub_expr[i+1] == '='):
+                                continue # Skip if it's part of ==, !=, <=, >=
+                            rel_op_found_kx = kx_op
+                            rel_op_found_py = py_op_format
+                            rel_op_idx = i
+                            break
+                    if rel_op_found_kx: break # Found a single-char op
+
+            if rel_op_found_kx:
+                left = _parse_expression_recursive_runtime(sub_expr[:rel_op_idx].strip())
+                right = _parse_expression_recursive_runtime(sub_expr[rel_op_idx+len(rel_op_found_kx):].strip())
+                if rel_op_found_kx == '=':
+                    return f"{rel_op_found_py}({left}, {right})"
+                else:
+                    return f"({left}) {rel_op_found_py} ({right})"
+
+            # If no logical or relational operators, it's an arithmetic expression, literal, or function/predicate call
+            return sub_expr
+
+        expr_py_final = _parse_expression_recursive_runtime(expr_py_transformed)
+        # --- End KeYmaera X to Python conversion logic ---
 
         try:
-            return eval(expr_py, eval_globals, eval_locals)
+            return eval(expr_py_final, eval_globals, eval_locals)
         except Exception as e:
-            print(f"Error evaluating expression '{expr_str}' (transformed: '{expr_py}'): {e}")
-            # print(f"Eval globals: {eval_globals}") # Too verbose
-            # print(f"Eval locals: {eval_locals}") # Too verbose
+            print(f"Error evaluating expression '{{expr_str}}' (transformed: '{{expr_py_final}}'): {{e}}")
             if is_constraint:
                 return False # For constraints, return False on error
             raise # Re-raise for non-constraint expressions
+
 
     def _execute_action_config(self, action_config: ActionType, agent_action: Dict[str, Any]) -> Tuple[float, bool, bool]:
         """
@@ -306,6 +396,7 @@ class IJRR17_Corollary_1_2_Static_safety_with_margin_for_imperfect_trajectories(
 
         elif isinstance(action_config, DeterministicAssignmentActionConfig):
             try:
+                # Value is a raw KeYmaera X string, parsed at runtime by _evaluate_expression
                 assigned_value = self._evaluate_expression(action_config.value)
                 self.state[action_config.variable] = assigned_value
             except Exception as e:
@@ -316,7 +407,6 @@ class IJRR17_Corollary_1_2_Static_safety_with_margin_for_imperfect_trajectories(
             return reward, terminated, applied_successfully
 
         elif isinstance(action_config, NondeterministicAssignmentActionConfig):
-            # FIX: Corrected indentation for the following line
             assign_key = f"assign_{action_config.variable}"
             if assign_key in agent_action:
                 self.state[action_config.variable] = agent_action[assign_key]
@@ -330,7 +420,7 @@ class IJRR17_Corollary_1_2_Static_safety_with_margin_for_imperfect_trajectories(
             return reward, terminated, applied_successfully
 
         elif isinstance(action_config, ActionConstraintConfig):
-            # Constraints should use approximate equality
+            # Formula is a raw KeYmaera X string, parsed at runtime by _evaluate_expression
             constraint_met = self._evaluate_expression(action_config.formula, is_constraint=True)
             if not constraint_met:
                 # print(f"Constraint violated: {{action_config.formula}}")
@@ -366,6 +456,32 @@ class IJRR17_Corollary_1_2_Static_safety_with_margin_for_imperfect_trajectories(
 
         return reward, terminated, applied_successfully
 
+
+    def _split_top_level_and_local(self, formula_str: str) -> List[str]:
+        parts = []
+        balance = 0
+        start = 0
+        # Normalize spaces around '&'
+        formula_str = re.sub(r'\s*&\s*', '&', formula_str)
+
+        for i, char in enumerate(formula_str):
+            if char == '(':
+                balance += 1
+            elif char == ')':
+                balance -= 1
+            elif char == '&' and balance == 0:
+                part = formula_str[start:i].strip()
+                if part:
+                    parts.append(part)
+                start = i + 1
+
+        last_part = formula_str[start:].strip()
+        if last_part:
+            parts.append(last_part)
+
+        return parts if parts else [formula_str.strip()]
+
+
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
         self.current_step = 0
@@ -384,34 +500,38 @@ class IJRR17_Corollary_1_2_Static_safety_with_margin_for_imperfect_trajectories(
         self.state['yo'] = 0.0
         self.state['t'] = 0.0
 
-        # Z3 could not find a satisfying initial state or encountered an error.
-        # Falling back to heuristic defaults and adjustments.
-        # Apply explicit assignments from the precondition (fallback)
-        self.state['v'] = 0
-
-        # Ensure dx, dy satisfy isWellformedDir (approximate unit vector) (fallback)
-        norm_sq = self.state['dx']**2 + self.state['dy']**2
-        ud_val = self.constants.get('Ud', 0.0) # Get Ud from constants, default to 0.0 if not found
-        min_norm_sq_target = (1.0 - ud_val)**2
-        max_norm_sq_target = (1.0 + ud_val)**2
-        if not (min_norm_sq_target - self.equality_tolerance <= norm_sq <= max_norm_sq_target + self.equality_tolerance):
-            norm = np.sqrt(norm_sq)
-            if norm > self.equality_tolerance: # Avoid division by zero with tolerance
-                self.state['dx'] /= norm
-                self.state['dy'] /= norm
-            else: # Default to (1,0) if too small
-                self.state['dx'] = 1.0
-                self.state['dy'] = 0.0
-
-        # Ensure robot and obstacle are not at the same position (fallback)
-        if self._approx_eq(self.state['x'], self.state['xo']) and self._approx_eq(self.state['y'], self.state['yo']):
-            self.state['x'] += 0.1 # Slightly perturb x to ensure separation
+        # Initial state solved by Z3 (overriding defaults):
+        # Solved initial state: {'x': -1.0, 'y': 0.0, 'v': 0.0, 'a': 0.0, 'dx': -1.0, 'dy': 0.0, 'w': 0.0, 'r': 0.0, 'xo': 0.0, 'yo': 0.0, 't': 0.0, 'ep': 1.0, 'b': 1.0, 'A': 0.0, 'W': 0.0}
+        self.state['x'] = -1.0
+        self.state['y'] = 0.0
+        self.state['v'] = 0.0
+        self.state['a'] = 0.0
+        self.state['dx'] = -1.0
+        self.state['dy'] = 0.0
+        self.state['w'] = 0.0
+        self.state['r'] = 0.0
+        self.state['xo'] = 0.0
+        self.state['yo'] = 0.0
+        self.state['t'] = 0.0
+        self.last_failing_precondition_formula = None
 
         # Verify the full precondition after setting initial states
-        precondition_satisfied = self._evaluate_expression('((A >= 0                                                                                                                     & b > 0                                                                                                                      & ep > 0                                                                                                                     & 0<=Ud & Ud <= 1) & (v = 0         & (x-xo)^2 + (y-yo)^2 > 0         & (1-Ud <= dx^2+dy^2 & dx^2 + dy^2 <= 1+Ud)))', is_constraint=True)
+        # Evaluate each conjunct of the precondition to identify specific failures
+        failing_formula = None
+        precondition_conjuncts = self._split_top_level_and_local('((A >= 0     & b > 0     & ep > 0) & (v = 0     & (x-xo)^2 + (y-yo)^2 > 0     & (dx^2 + dy^2 = 1)))')
+        precondition_satisfied = True
+        for conj_str in precondition_conjuncts:
+            # Evaluate each conjunct. _evaluate_expression will handle the parsing.
+            if not self._evaluate_expression(conj_str, is_constraint=True):
+                precondition_satisfied = False
+                failing_formula = conj_str
+                break # Report the first failing conjunct
         if not precondition_satisfied:
-            print(f"Warning: Initial state does not satisfy precondition: 'assumptions(x, y, v, dx, dy, xo, yo)'. Expanded: '((A >= 0                                                                                                                     & b > 0                                                                                                                      & ep > 0                                                                                                                     & 0<=Ud & Ud <= 1) & (v = 0         & (x-xo)^2 + (y-yo)^2 > 0         & (1-Ud <= dx^2+dy^2 & dx^2 + dy^2 <= 1+Ud)))'.")
-            # If Z3 failed or heuristics didn't fully satisfy, this warning is crucial.
+            self.last_failing_precondition_formula = failing_formula
+            print(f"Warning: Initial state does not satisfy precondition: 'assumptions(x, y, v, dx, dy, xo, yo)'.")
+            print(f"         Failing conjunct: '{failing_formula}'.")
+        else:
+            self.last_failing_precondition_formula = None
 
 
         observation = self._get_obs()
@@ -510,8 +630,8 @@ class IJRR17_Corollary_1_2_Static_safety_with_margin_for_imperfect_trajectories(
         # (x - xo)^2 + (y - yo)^2 > 0
         # This means the robot must NOT be at the obstacle's position.
         # If it becomes <= 0, safety is violated.
-        # Postcondition should use approximate equality for any '=' it contains.
-        postcondition_satisfied = self._evaluate_expression('(x - xo)**2 + (y - yo)**2 > 0', is_constraint=True)
+        # Postcondition is a raw KeYmaera X string, parsed at runtime by _evaluate_expression
+        postcondition_satisfied = self._evaluate_expression('(x - xo)^2 + (y - yo)^2 > 0', is_constraint=True)
         if not postcondition_satisfied:
             reward -= 100.0 # Safety violation
             terminated = True
