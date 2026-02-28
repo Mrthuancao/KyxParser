@@ -372,28 +372,32 @@ def _ast_to_python_code_string(ast_node: ActionType, indent_level: int = 0,
         raise ValueError(f"Unknown AST node type: {type(ast_node)}")
 
 
-def generate_gym_environment_code(config: GymEnvironmentConfig) -> str:
+def generate_gym_environment_code(config: GymEnvironmentConfig, envName: str = "") -> str:
     """
     Generates Python code for a Gymnasium environment based on the provided
     GymEnvironmentConfig AST.
     """
-    original_env_name = config.env_name
+    if not envName:
+        original_env_name = config.env_name
+        
+        # --- SANITIZE ENV_NAME FOR PYTHON CLASS IDENTIFIER ---
+        # 1. Replace non-alphanumeric characters (excluding underscore) with underscore
+        sanitized_env_name = re.sub(r'[^a-zA-Z0-9_]', '_', original_env_name)
+        # 2. Replace multiple underscores with a single underscore and strip leading/trailing underscores
+        sanitized_env_name = re.sub(r'_+', '_', sanitized_env_name).strip('_')
+        
+        # 3. Ensure it doesn't start with a digit
+        if sanitized_env_name and sanitized_env_name[0].isdigit():
+            sanitized_env_name = '_' + sanitized_env_name
+        
+        # 4. Fallback if the name becomes empty after sanitization
+        if not sanitized_env_name:
+            sanitized_env_name = "GeneratedEnv" 
+        
+        env_name_for_class = sanitized_env_name # Use this for the class definition
     
-    # --- SANITIZE ENV_NAME FOR PYTHON CLASS IDENTIFIER ---
-    # 1. Replace non-alphanumeric characters (excluding underscore) with underscore
-    sanitized_env_name = re.sub(r'[^a-zA-Z0-9_]', '_', original_env_name)
-    # 2. Replace multiple underscores with a single underscore and strip leading/trailing underscores
-    sanitized_env_name = re.sub(r'_+', '_', sanitized_env_name).strip('_')
-    
-    # 3. Ensure it doesn't start with a digit
-    if sanitized_env_name and sanitized_env_name[0].isdigit():
-        sanitized_env_name = '_' + sanitized_env_name
-    
-    # 4. Fallback if the name becomes empty after sanitization
-    if not sanitized_env_name:
-        sanitized_env_name = "GeneratedEnv" 
-    
-    env_name_for_class = sanitized_env_name # Use this for the class definition
+    else: 
+        env_name_for_class = envName # Use provided envName directly for class definition
     # ---------------------------------------------------
 
     # Collect all variable names for observation space and ODE state vector

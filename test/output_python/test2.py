@@ -1,4 +1,3 @@
-
 import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
@@ -6,14 +5,18 @@ from scipy.integrate import solve_ivp
 import math # For math functions like sqrt, sin, cos, etc.
 import textwrap
 import re # For regex replacements in _evaluate_expression
-from ast_config import (ChoiceActionConfig, SequenceActionConfig, DeterministicAssignmentActionConfig, NondeterministicAssignmentActionConfig, ActionConstraintConfig, CallHybridProgramConfig) # Import AST classes
+from typing import (Dict, Any, Tuple) # Import typing hints
+from pyast_config import (ActionType, ChoiceActionConfig, SequenceActionConfig, DeterministicAssignmentActionConfig, NondeterministicAssignmentActionConfig, ActionConstraintConfig, CallHybridProgramConfig, HybridProgramStepConfig) # Import AST classes
 
-class IJRR17_Corollary_1_1__Velocity_controlled_passive_safety(gym.Env):
+class IJRR17_Corollary_1_1_Velocity_controlled_passive_safety(gym.Env):
     metadata = {"render_modes": ["human"], "render_fps": 30}
 
     def __init__(self, render_mode=None):
         super().__init__()
         self.render_mode = render_mode
+
+        # --- Semantic Gap Bridging: Floating Point Equality Tolerance ---
+        self.equality_tolerance = 1e-9 # Default absolute tolerance for np.isclose
 
         # --- KeYmaera X Definitions ---
         self.constants = {}
@@ -21,21 +24,21 @@ class IJRR17_Corollary_1_1__Velocity_controlled_passive_safety(gym.Env):
         self.predicates = {}
 
         # Constants
-        self.constants['ep'] = 0.0
-        self.constants['W'] = 0.0
-        self.constants['V'] = 0.0
+        self.constants['ep'] = 1.0
+        self.constants['W'] = 1.0
+        self.constants['V'] = 1.0
 
         # Functions (lambdas for easy evaluation)
-        self.functions['stopDist'] = lambda v: self._evaluate_expression('0', {'v': v})
-        self.functions['accelComp'] = lambda v: self._evaluate_expression('ep*(v+V)', {'v': v})
-        self.functions['admissibleSeparation'] = lambda v: self._evaluate_expression('stopDist(v) + accelComp(v)', {'v': v})
+        self.functions['stopDist'] = lambda v: 0
+        self.functions['accelComp'] = lambda v: self.constants['ep']*(v+self.constants['V'])
+        self.functions['admissibleSeparation'] = lambda v: self.functions['stopDist'](v) + self.functions['accelComp'](v)
 
         # Predicates (lambdas for easy evaluation)
-        self.predicates['isWellformedDir'] = lambda dx, dy: self._evaluate_expression('dx^2 + dy^2 = 1', {'dx': dx, 'dy': dy})
-        self.predicates['bounds'] = lambda : self._evaluate_expression('ep > 0                                                                                                               & V >= 0', {})
-        self.predicates['initialState'] = lambda x, y, v, dx, dy, xo, yo: self._evaluate_expression('v = 0     & (x-xo)^2 + (y-yo)^2 > 0     & isWellformedDir(dx,dy)', {'x': x, 'y': y, 'v': v, 'dx': dx, 'dy': dy, 'xo': xo, 'yo': yo})
-        self.predicates['assumptions'] = lambda x, y, v, dx, dy, xo, yo: self._evaluate_expression('bounds() & initialState(x,y,v,dx,dy,xo,yo)', {'x': x, 'y': y, 'v': v, 'dx': dx, 'dy': dy, 'xo': xo, 'yo': yo})
-        self.predicates['loopinv'] = lambda x, y, v, dx, dy, xo, yo: self._evaluate_expression('v >= 0     & isWellformedDir(dx,dy)     & (v>0 -> abs(x-xo) > stopDist(v) | abs(y-yo) > stopDist(v))', {'x': x, 'y': y, 'v': v, 'dx': dx, 'dy': dy, 'xo': xo, 'yo': yo})
+        self.predicates['isWellformedDir'] = lambda dx, dy: dx**2 + dy**self._approx_eq(2, 1)
+        self.predicates['bounds'] = lambda : self.constants['ep'] > 0                                                                                                               and self.constants['V'] >= 0
+        self.predicates['initialState'] = lambda x, y, v, dx, dy, xo, yo: self._approx_eq(v, 0)     and (x-xo)**2 + (y-yo)**2 > 0     and self.predicates['isWellformedDir'](dx,dy)
+        self.predicates['assumptions'] = lambda x, y, v, dx, dy, xo, yo: self.predicates['bounds']() and self.predicates['initialState'](x,y,v,dx,dy,xo,yo)
+        self.predicates['loopinv'] = lambda x, y, v, dx, dy, xo, yo: v >= 0     and self.predicates['isWellformedDir']((not dx,dy)     and (v>0) or np.abs(x-xo) > self.functions['stopDist'](v) or np.abs(y-yo) > self.functions['stopDist'](v))
 
         # --- State Variables ---
         # Mapping of state variable names to their index in the observation array
@@ -63,32 +66,32 @@ class IJRR17_Corollary_1_1__Velocity_controlled_passive_safety(gym.Env):
                 'assign_r': spaces.Box(low=-np.inf, high=np.inf, shape=(), dtype=np.float32),
                 'assign_xo': spaces.Box(low=-np.inf, high=np.inf, shape=(), dtype=np.float32),
                 'assign_yo': spaces.Box(low=-np.inf, high=np.inf, shape=(), dtype=np.float32),
-                    })
+                })
         self._action_space_keys = ['choice_ChoiceLevel_0', 'assign_vxo', 'assign_vyo', 'choice_ChoiceLevel_1', 'assign_v', 'assign_w', 'assign_r', 'assign_xo', 'assign_yo']
         self._control_func_action_config = ChoiceActionConfig(level_name='ChoiceLevel_0', choices=[
-            SequenceActionConfig(actions=[
-                NondeterministicAssignmentActionConfig(variable='vxo'),
-                NondeterministicAssignmentActionConfig(variable='vyo'),
-                ActionConstraintConfig(formula='vxo^2+vyo^2<=V^2')
-            ]),
-            ChoiceActionConfig(level_name='ChoiceLevel_1', choices=[
                 SequenceActionConfig(actions=[
-                    DeterministicAssignmentActionConfig(variable='v', value='0'),
-                    DeterministicAssignmentActionConfig(variable='w', value='0')
+                    NondeterministicAssignmentActionConfig(variable='vxo'),
+                    NondeterministicAssignmentActionConfig(variable='vyo'),
+                    ActionConstraintConfig(formula='vxo**2+vyo**2<=V**2')
                 ]),
-                SequenceActionConfig(actions=[
-                    NondeterministicAssignmentActionConfig(variable='v'),
-                    ActionConstraintConfig(formula='0<=v'),
-                    NondeterministicAssignmentActionConfig(variable='w'),
-                    ActionConstraintConfig(formula='-W<=w & w<=W'),
-                    NondeterministicAssignmentActionConfig(variable='r'),
-                    NondeterministicAssignmentActionConfig(variable='xo'),
-                    NondeterministicAssignmentActionConfig(variable='yo'),
-                    ActionConstraintConfig(formula='r!=0 & r*w = v'),
-                    ActionConstraintConfig(formula='abs(x-xo) > admissibleSeparation(v)         | abs(y-yo) > admissibleSeparation(v)')
+                ChoiceActionConfig(level_name='ChoiceLevel_1', choices=[
+                    SequenceActionConfig(actions=[
+                        DeterministicAssignmentActionConfig(variable='v', value='0'),
+                        DeterministicAssignmentActionConfig(variable='w', value='0')
+                    ]),
+                    SequenceActionConfig(actions=[
+                        NondeterministicAssignmentActionConfig(variable='v'),
+                        ActionConstraintConfig(formula='0<=v'),
+                        NondeterministicAssignmentActionConfig(variable='w'),
+                        ActionConstraintConfig(formula='-W<=w & w<=W'),
+                        NondeterministicAssignmentActionConfig(variable='r'),
+                        NondeterministicAssignmentActionConfig(variable='xo'),
+                        NondeterministicAssignmentActionConfig(variable='yo'),
+                        ActionConstraintConfig(formula='r!=0 & r*w = v'),
+                        ActionConstraintConfig(formula='np.abs(x-xo) > admissibleSeparation(v)         | np.abs(y-yo) > admissibleSeparation(v)')
+                    ])
                 ])
-            ])
-        ]) # Stored for step logic
+            ]) # Stored for step logic
 
         # --- ODE Solver Setup (from stepFunc) ---
         # Mapping from state variable names to their index in the ODE solver's y array
@@ -118,19 +121,19 @@ class IJRR17_Corollary_1_1__Velocity_controlled_passive_safety(gym.Env):
 
                 # Calculate derivatives
                 dydt = [
-                    self._evaluate_expression('v * dx'), # dx/dt
-                    self._evaluate_expression('v * dy'), # dy/dt
+                    v * dx, # dx/dt
+                    v * dy, # dy/dt
                     0.0, # dv/dt
                     0.0, # da/dt
-                    self._evaluate_expression('-w * dy'), # ddx/dt
-                    self._evaluate_expression('w * dx'), # ddy/dt
+                    -w * dy, # ddx/dt
+                    w * dx, # ddy/dt
                     0.0, # dw/dt
                     0.0, # dr/dt
-                    self._evaluate_expression('vxo'), # dxo/dt
-                    self._evaluate_expression('vyo'), # dyo/dt
+                    vxo, # dxo/dt
+                    vyo, # dyo/dt
                     0.0, # dvxo/dt
                     0.0, # dvyo/dt
-                    self._evaluate_expression('1'), # dt/dt
+                    1, # dt/dt
                 ]
                 return dydt
         '''
@@ -168,9 +171,9 @@ class IJRR17_Corollary_1_1__Velocity_controlled_passive_safety(gym.Env):
         self.reward_range = (-float('inf'), float('inf'))
 
     def _compile_ode_func(self, func_str):
-        # Create a dictionary for locals that includes 'self'
-        exec_globals = {'np': np, 'math': math}
-        exec_locals = {'self': self}
+        # Create a dictionary for globals that includes 'self'
+        exec_globals = {'np': np, 'math': math, 'self': self} # 'self' in globals
+        exec_locals = {} # No special locals needed, self is in globals
         # Dedent the string before execution, as it was indented for the triple-quote literal
         exec(textwrap.dedent(func_str), exec_globals, exec_locals)
         return exec_locals['ode_func']
@@ -178,8 +181,8 @@ class IJRR17_Corollary_1_1__Velocity_controlled_passive_safety(gym.Env):
     def _compile_ode_events(self, events_str):
         if not events_str.strip():
             return []
-        exec_globals = {'np': np, 'math': math}
-        exec_locals = {'self': self}
+        exec_globals = {'np': np, 'math': math, 'self': self} # 'self' in globals
+        exec_locals = {} # No special locals needed, self is in globals
         # Dedent the string before execution
         exec(textwrap.dedent(events_str), exec_globals, exec_locals)
         return exec_locals['ode_events']
@@ -190,8 +193,18 @@ class IJRR17_Corollary_1_1__Velocity_controlled_passive_safety(gym.Env):
     def _get_info(self):
         return self.state.copy() # Return a copy of the current state dictionary
 
-    def _evaluate_expression(self, expr_str, local_vars=None):
-        # Safe evaluation of expressions using environment's context
+    def _approx_eq(self, a, b):
+        """
+        Performs an approximate equality check using numpy.isclose.
+        This bridges the semantic gap between formal exact equality and float approximation.
+        """
+        return np.isclose(a, b, atol=self.equality_tolerance)
+
+    def _evaluate_expression(self, expr_str, local_vars=None, is_constraint=False):
+
+        # Safe evaluation of expressions using environment's context.
+        # If is_constraint is True, returns False on evaluation error.
+
         if local_vars is None:
             local_vars = {}
 
@@ -203,116 +216,172 @@ class IJRR17_Corollary_1_1__Velocity_controlled_passive_safety(gym.Env):
         eval_globals = {
             'np': np, 'math': math,
             **self.constants,
-            **self.functions,
-            **self.predicates
+            **self.functions, # Include functions for general expressions
+            **self.predicates,  # Include predicates for general expressions
+            '_approx_eq': self._approx_eq # Make approximate equality available
         }
         eval_locals = {
             **self.state,
             **local_vars
         }
 
-        # Replace common KeYmaera X syntax with Python
-        expr_py = expr_str.replace('^', '**').replace('abs(', 'np.abs(')
+        # Apply the same transformations as in _format_kx_expr_for_python_lambda_body
+        # to ensure consistency when evaluating expressions at runtime.
+        expr_py = expr_str.strip()
 
-        # Handle logical operators (assuming KeYmaera X uses '&' and '|' for logical AND/OR)
+        # 1. Basic syntax replacements (power, abs)
+        expr_py = expr_py.replace('^', '**').replace('abs(', 'np.abs(')
+
+        # 2. Replace single '=' (KeYmaera X equality) with self._approx_eq(LHS, RHS).
+        #    This is a heuristic due to not having a full parser, but addresses the semantic gap.
+        #    The regex attempts to capture the left and right operands of '='.
+        #    It assumes operands are either simple identifiers/numbers or non-nested parenthesized expressions.
+        #    It must be applied iteratively to handle multiple equalities in an expression.
+
+        # Define a pattern for a "simple term" which can be an identifier, a number,
+        # or a non-nested parenthesized expression.
+        simple_term_pattern = r'(?:[a-zA-Z_][a-zA-Z0-9_.]*\b|-?\d+(?:\.\d+)?|\([^)]*\))' # Interpolate the string literal here
+
+        # Pattern to find 'LHS = RHS' where LHS and RHS are simple terms.
+        # We need to ensure it's a single '=' and not part of '!=', '<=', '>='.
+        # Construct equality_regex using string concatenation to avoid f-string nesting issues.
+        equality_regex = r'(' + simple_term_pattern + r')\s*(?<![<>=!])=(?![=])\s*(' + simple_term_pattern + r')'
+
+        # Apply this replacement iteratively until no more matches are found.
+        # This helps with multiple simple equalities in a single expression.
+        while True:
+            new_expr_py = re.sub(equality_regex, r'_approx_eq(\1, \2)', expr_py)
+            if new_expr_py == expr_py:
+                break
+            expr_py = new_expr_py
+
+        # 3. Handle logical operators (&, |)
         expr_py = expr_py.replace('&', 'and').replace('|', 'or')
 
-        # Handle comparison operators:
-        # These are mostly no-ops if the input already uses Python syntax, but ensures consistency.
-        expr_py = expr_py.replace('==', '==') 
-        expr_py = expr_py.replace('!=', '!=')
-        expr_py = expr_py.replace('>=', '>=')
-        expr_py = expr_py.replace('<=', '<=')
-
-        # Replace standalone '=' with '==' for equality.
-        # This regex ensures that '=' is not part of '<=', '>=', '!=' or '=='
-        expr_py = re.sub(r'(?<![<>=!])=(?![=])', '==', expr_py) # <--- MODIFIED LINE
+        # 4. Handle KeYmaera X implication '->' (A -> B becomes (not (A) or (B)))
+        while True:
+            new_expr_py = re.sub(r'\((.*?)\s*->\s*(.*?)\)', r'((not \1) or \2)', expr_py)
+            if new_expr_py == expr_py:
+                break
+            expr_py = new_expr_py
 
         try:
             return eval(expr_py, eval_globals, eval_locals)
         except Exception as e:
-            print(f"Error evaluating expression '{expr_str}': {e}")
-            print(f"Eval globals: {eval_globals}")
-            print(f"Eval locals: {eval_locals}")
-            raise
+            print(f"Error evaluating expression '{expr_str}' (transformed: '{expr_py}'): {e}")
+            # print(f"Eval globals: {eval_globals}") # Too verbose
+            # print(f"Eval locals: {eval_locals}") # Too verbose
+            if is_constraint:
+                return False # For constraints, return False on error
+            raise # Re-raise for non-constraint expressions
+
+    def _execute_action_config(self, action_config: ActionType, agent_action: Dict[str, Any]) -> Tuple[float, bool, bool]:
+        """
+        Recursively executes a given action configuration (Choice, Sequence, Assignment, Constraint).
+        Returns (reward, terminated, applied_successfully).
+        """
+        reward = 0.0
+        terminated = False
+        applied_successfully = True
+
+        if isinstance(action_config, ChoiceActionConfig):
+            choice_key = f"choice_{action_config.level_name}"
+            if choice_key not in agent_action:
+                print(f"Error: Choice key '{{choice_key}}' missing from agent action.")
+                reward -= 200.0
+                terminated = True
+                applied_successfully = False
+                return reward, terminated, applied_successfully
+
+            choice_idx = agent_action[choice_key]
+            if not (0 <= choice_idx < len(action_config.choices)):
+                print(f"Error: Invalid choice index {{choice_idx}} for '{{choice_key}}'.")
+                reward -= 200.0
+                terminated = True
+                applied_successfully = False
+                return reward, terminated, applied_successfully
+
+            chosen_sub_config = action_config.choices[choice_idx]
+            return self._execute_action_config(chosen_sub_config, agent_action)
+
+        elif isinstance(action_config, SequenceActionConfig):
+            for sub_action in action_config.actions:
+                r, t, s = self._execute_action_config(sub_action, agent_action)
+                reward += r
+                if t: terminated = True
+                if not s:
+                    applied_successfully = False
+                    break # Stop processing sequence if any sub-action fails
+            return reward, terminated, applied_successfully
+
+        elif isinstance(action_config, DeterministicAssignmentActionConfig):
+            try:
+                assigned_value = self._evaluate_expression(action_config.value)
+                self.state[action_config.variable] = assigned_value
+            except Exception as e:
+                print(f"Error evaluating deterministic assignment for {{action_config.variable}}='{{action_config.value}}': {{e}}")
+                reward -= 100.0
+                terminated = True
+                applied_successfully = False
+            return reward, terminated, applied_successfully
+
+        elif isinstance(action_config, NondeterministicAssignmentActionConfig):
+            # FIX: Corrected indentation for the following line
+            assign_key = f"assign_{action_config.variable}"
+            if assign_key in agent_action:
+                self.state[action_config.variable] = agent_action[assign_key]
+            else:
+                print(f"Warning: Nondeterministic assignment for '{{action_config.variable}}' (key '{{assign_key}}') not found in agent action. Defaulting to current value.")
+                # This might indicate an incomplete action by the agent, penalize.
+                reward -= 50.0 
+                # Do not terminate here, as it might be a valid choice to not assign.
+                # However, if the problem requires it, this might need to be `terminated = True`.
+                # For now, we assume it's okay to skip, but with a penalty.
+            return reward, terminated, applied_successfully
+
+        elif isinstance(action_config, ActionConstraintConfig):
+            # Constraints should use approximate equality
+            constraint_met = self._evaluate_expression(action_config.formula, is_constraint=True)
+            if not constraint_met:
+                # print(f"Constraint violated: {{action_config.formula}}")
+                reward -= 100.0 # Penalty for invalid action
+                terminated = True
+                applied_successfully = False
+            return reward, terminated, applied_successfully
+
+        elif isinstance(action_config, CallHybridProgramConfig):
+            # This generator assumes controlFunc is the primary action selection.
+            # If CallHybridProgramConfig appears here, it's an unsupported nested HP call within controlFunc.
+            print(f"Warning: CallHybridProgramConfig '{{action_config.hp_name}}' encountered in _execute_action_config. Not fully supported yet.")
+            reward -= 50.0
+            applied_successfully = False
+            return reward, terminated, applied_successfully
+
+        else:
+            print(f"Error: Unknown action config type: {{type(action_config)}}")
+            reward -= 200.0
+            terminated = True
+            applied_successfully = False
+            return reward, terminated, applied_successfully
 
     def _apply_control_action(self, action):
-        reward = 0
-        terminated = False
-
-        # This structure mirrors the _control_func_action_config generated earlier
-        # It's a ChoiceActionConfig at the top level
-
-        # Get the chosen branch index
-        choice_idx = action['choice_ChoiceLevel_0']
-
-        # Access the configuration for the chosen branch
-        chosen_branch_config = self._control_func_action_config.choices[choice_idx]
-
-        # Process actions within the chosen branch
-        for sub_action_config in chosen_branch_config.actions:
-            if isinstance(sub_action_config, ActionConstraintConfig):
-                # Evaluate constraint. If false, action is invalid.
-                constraint_met = self._evaluate_expression(sub_action_config.formula)
-                if not constraint_met:
-                    # print(f"Constraint violated: {sub_action_config.formula}")
-                    reward -= 100.0 # Penalty for invalid action
-                    terminated = True
-                    return reward, terminated, False # False means action was not fully applied
-            elif isinstance(sub_action_config, DeterministicAssignmentActionConfig):
-                # Apply deterministic assignment
-                assigned_value = self._evaluate_expression(sub_action_config.value)
-                self.state[sub_action_config.variable] = assigned_value
-            elif isinstance(sub_action_config, NondeterministicAssignmentActionConfig):
-                # Apply nondeterministic assignment from agent's action
-                assign_key = f"assign_{sub_action_config.variable}"
-                if assign_key in action:
-                    self.state[sub_action_config.variable] = action[assign_key]
-                else:
-                    # This should not happen if action space is constructed correctly
-                    # print(f"Warning: Nondeterministic assignment for {sub_action_config.variable} not found in action.")
-                    reward -= 50.0 # Penalty for incomplete action
-                    terminated = True
-                    return reward, terminated, False
-            elif isinstance(sub_action_config, CallHybridProgramConfig):
-                # This environment doesn't support nested HP calls directly in controlFunc
-                # other than the main controlFunc itself.
-                # For this specific example, controlFunc is the top-level discrete action.
-                pass # Or raise an error if unexpected
-            elif isinstance(sub_action_config, SequenceActionConfig):
-                # If there's a sequence within a choice, process its actions
-                # This case handles the structure created by _parse_kx_hp_program_fragment_to_action_config
-                # when it returns a SequenceActionConfig for a choice branch.
-                for inner_action in sub_action_config.actions:
-                    if isinstance(inner_action, ActionConstraintConfig):
-                        constraint_met = self._evaluate_expression(inner_action.formula)
-                        if not constraint_met:
-                            reward -= 100.0
-                            terminated = True
-                            return reward, terminated, False
-                    elif isinstance(inner_action, DeterministicAssignmentActionConfig):
-                        assigned_value = self._evaluate_expression(inner_action.value)
-                        self.state[inner_action.variable] = assigned_value
-                    elif isinstance(inner_action, NondeterministicAssignmentActionConfig):
-                        assign_key = f"assign_{inner_action.variable}"
-                        if assign_key in action:
-                            self.state[inner_action.variable] = action[assign_key]
-                        else:
-                            reward -= 50.0
-                            terminated = True
-                            return reward, terminated, False
+        """
+        Applies the agent's chosen action by traversing the control function's AST.
+        """
+        reward, terminated, applied_successfully = self._execute_action_config(self._control_func_action_config, action)
 
         # Apply t := 0; after controlFunc, as specified in the problem loop body
-        self.state['t'] = 0.0
+        if applied_successfully: # Only reset t if the action was valid and applied
+            self.state['t'] = 0.0
 
-        return reward, terminated, True # True means action was successfully applied
+        return reward, terminated, applied_successfully
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
         self.current_step = 0
 
         # --- Initial State (based on Problem Precondition and defaults) ---
-            # Default initial values (can be randomized or fixed based on problem)
+        # Default initial values for state variables
         self.state['x'] = 0.0
         self.state['y'] = 0.0
         self.state['v'] = 1.0
@@ -327,15 +396,35 @@ class IJRR17_Corollary_1_1__Velocity_controlled_passive_safety(gym.Env):
         self.state['vyo'] = 0.0
         self.state['t'] = 0.0
 
-        # Ensure dx, dy represent a unit vector initially
-        # This is a common requirement for orientation vectors
-        norm = np.sqrt(self.state['dx']**2 + self.state['dy']**2)
-        if norm > 1e-6: # Avoid division by zero
-            self.state['dx'] /= norm
-            self.state['dy'] /= norm
-        else: # Default to (1,0) if initial dx, dy are too small
-            self.state['dx'] = 1.0
-            self.state['dy'] = 0.0
+        # Z3 could not find a satisfying initial state or encountered an error.
+        # Falling back to heuristic defaults and adjustments.
+        # Apply explicit assignments from the precondition (fallback)
+        self.state['v'] = 0
+
+        # Ensure dx, dy satisfy isWellformedDir (approximate unit vector) (fallback)
+        norm_sq = self.state['dx']**2 + self.state['dy']**2
+        ud_val = self.constants.get('Ud', 0.0) # Get Ud from constants, default to 0.0 if not found
+        min_norm_sq_target = (1.0 - ud_val)**2
+        max_norm_sq_target = (1.0 + ud_val)**2
+        if not (min_norm_sq_target - self.equality_tolerance <= norm_sq <= max_norm_sq_target + self.equality_tolerance):
+            norm = np.sqrt(norm_sq)
+            if norm > self.equality_tolerance: # Avoid division by zero with tolerance
+                self.state['dx'] /= norm
+                self.state['dy'] /= norm
+            else: # Default to (1,0) if too small
+                self.state['dx'] = 1.0
+                self.state['dy'] = 0.0
+
+        # Ensure robot and obstacle are not at the same position (fallback)
+        if self._approx_eq(self.state['x'], self.state['xo']) and self._approx_eq(self.state['y'], self.state['yo']):
+            self.state['x'] += 0.1 # Slightly perturb x to ensure separation
+
+        # Verify the full precondition after setting initial states
+        precondition_satisfied = self._evaluate_expression('((ep > 0                                                                                                               & V >= 0) & (v = 0     & (x-xo)^2 + (y-yo)^2 > 0     & (dx^2 + dy^2 = 1)))', is_constraint=True)
+        if not precondition_satisfied:
+            print(f"Warning: Initial state does not satisfy precondition: 'assumptions(x, y, v, dx, dy, xo, yo)'. Expanded: '((ep > 0                                                                                                               & V >= 0) & (v = 0     & (x-xo)^2 + (y-yo)^2 > 0     & (dx^2 + dy^2 = 1)))'.")
+            # If Z3 failed or heuristics didn't fully satisfy, this warning is crucial.
+
 
         observation = self._get_obs()
         info = self._get_info()
@@ -361,65 +450,80 @@ class IJRR17_Corollary_1_1__Velocity_controlled_passive_safety(gym.Env):
         # --- 2. Simulate Differential Equations (Continuous Dynamics) ---
         # Prepare initial state for ODE solver
         y0 = np.array([self.state[var_name] for var_name in self._ode_state_map.keys()], dtype=np.float64)
-        t_span = (0, self.constants['ep']) # Integrate up to time limit 'ep'
 
-        # Set up ODE events for domain constraints
-        # Events are functions that return 0 when an event occurs.
-        # terminal=True means integration stops. direction=-1 means event triggers when value goes from + to -
+        ep_val = self.constants['ep'] # Get the 'ep' constant value
+        t_span = (0, ep_val) # Integrate up to time limit 'ep'
 
-        # Ensure self.state reflects current values for ODE func/events
-        # The ODE func and events will get 'self' and use self.state
-
-        try:
-            solution = solve_ivp(
-                self._ode_func_compiled, 
-                t_span, 
-                y0, 
-                events=self._ode_events_compiled, 
-                dense_output=True,
-                rtol=1e-6, atol=1e-8
-            )
-
-            if solution.status == 0: # Integration completed successfully
-                # Update state with final values from ODE solver
-                final_y = solution.y[:, -1]
-                for i, var_name in enumerate(self._ode_state_map.keys()):
-                    self.state[var_name] = final_y[i]
-            elif solution.status == 1: # An event occurred
-                # Update state to the point where the event occurred
-                # Check if y_events is not empty before accessing
-                if solution.y_events and solution.y_events[0].size > 0:
-                    final_y = solution.y_events[0][0] 
-                else:
-                    final_y = solution.y[:, -1] # Fallback if event data is missing
-
-                for i, var_name in enumerate(self._ode_state_map.keys()):
-                    self.state[var_name] = final_y[i]
-
-                # Check which event terminated it
-                # For this problem, events are domain constraints (t <= ep, v >= 0)
-                # If v < 0, it's a domain violation -> termination
-                # We need to re-evaluate after updating self.state
-                if self.state['v'] < 0:
-                    reward -= 100.0 # Penalty for v < 0
-                    terminated = True
-                # If t > ep, it means the time limit was reached, which is expected behavior
-                # so no additional penalty for that specific event, as it's part of the evolution domain.
-            else: # Integration failed (status 2)
-                # print(f"ODE integration failed: {solution.message}")
-                reward -= 150.0 # Severe penalty for integration failure
+        if ep_val <= 0:
+            # If ep is non-positive, no meaningful time evolution occurs.
+            # This might indicate an invalid control action or problem setup.
+            self.state['t'] = 0.0 # Time does not advance or is reset
+            if ep_val < 0:
+                print(f"Warning: 'ep' constant is negative ({ep_val}). Skipping ODE integration and penalizing.")
+                reward -= 100.0 # Penalty for invalid time duration
                 terminated = True
+            # else (ep_val == 0): No time passes, but not necessarily an error if intended.
+        else:
+            # Set up ODE events for domain constraints
+            # Events are functions that return 0 when an event occurs.
+            # terminal=True means integration stops. direction=-1 means event triggers when value goes from + to -
 
-        except Exception as e:
-            # print(f"Error during ODE integration: {e}")
-            reward -= 200.0 # Very severe penalty for unexpected errors
-            terminated = True
+            # Ensure self.state reflects current values for ODE func/events
+            # The ODE func and events will get 'self' and use self.state
+
+            try:
+                solution = solve_ivp(
+                    self._ode_func_compiled, 
+                    t_span, 
+                    y0, 
+                    events=self._ode_events_compiled, 
+                    dense_output=True,
+                    rtol=1e-6, atol=1e-8
+                )
+
+                if solution.status == 0: # Integration completed successfully
+                    # Update state with final values from ODE solver
+                    final_y = solution.y[:, -1]
+                    for i, var_name in enumerate(self._ode_state_map.keys()):
+                        self.state[var_name] = final_y[i]
+                elif solution.status == 1: # An event occurred
+                    # Update state to the point where the event occurred
+                    # Check if y_events is not empty before accessing
+                    if solution.y_events and solution.y_events[0].size > 0:
+                        final_y = solution.y_events[0][0] 
+                    else:
+                        final_y = solution.y[:, -1] # Fallback if event data is missing
+
+                    for i, var_name in enumerate(self._ode_state_map.keys()):
+                        self.state[var_name] = final_y[i]
+
+                    # Check which event terminated it
+                    # For this problem, events are domain constraints (t <= ep, v >= 0)
+                    # If v < 0, it's a domain violation -> termination
+                    # We need to re-evaluate after updating self.state
+                    # Note: ODE events themselves use floating-point comparisons internally.
+                    # This check here is a re-evaluation after the fact.
+                    if self.state.get('v', 0.0) < -self.equality_tolerance: # Use tolerance for v < 0 check
+                        reward -= 100.0 # Penalty for v < 0
+                        terminated = True
+                    # If t > ep, it means the time limit was reached, which is expected behavior
+                    # so no additional penalty for that specific event, as it's part of the evolution domain.
+                else: # Integration failed (status 2)
+                    # print(f"ODE integration failed: {solution.message}")
+                    reward -= 150.0 # Severe penalty for integration failure
+                    terminated = True
+
+            except Exception as e:
+                # print(f"Error during ODE integration: {e}")
+                reward -= 200.0 # Very severe penalty for unexpected errors
+                terminated = True
 
         # --- 3. Check Problem Postcondition ---
         # (x - xo)^2 + (y - yo)^2 > 0
         # This means the robot must NOT be at the obstacle's position.
         # If it becomes <= 0, safety is violated.
-        postcondition_satisfied = self._evaluate_expression('(v>0 -> (x - xo)^2 + (y - yo)^2 > 0)')
+        # Postcondition should use approximate equality for any '=' it contains.
+        postcondition_satisfied = self._evaluate_expression('(v>0 -> (x - xo)**2 + (y - yo)**2 > 0)', is_constraint=True)
         if not postcondition_satisfied:
             reward -= 100.0 # Safety violation
             terminated = True
