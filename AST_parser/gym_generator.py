@@ -16,6 +16,127 @@ from pyast_config import (
     ActionConstraintConfig, CallHybridProgramConfig
 )
 
+# --- Generic AST Node Serialization Helper ---
+def _serialize_ast_node(node: Any, indent_level: int = 0) -> str:
+    """
+    Recursively serializes an AST node into its Python constructor call string.
+    This is used to embed the full AST configuration objects into the generated
+    environment's __init__ method for later runtime access (e.g., by Z3 helpers).
+    """
+    indent_str = "    " * indent_level
+    next_indent_str = "    " * (indent_level + 1)
+
+    if isinstance(node, (str, int, float, bool)):
+        return repr(node) # Use repr for primitives (handles strings, numbers, bools)
+
+    if node is None:
+        return "None"
+    
+    if isinstance(node, list):
+        if not node:
+            return "[]"
+        items_str = ",\n".join([f"{next_indent_str}{_serialize_ast_node(item, indent_level + 1)}" for item in node])
+        return f"[\n{items_str}\n{indent_str}]"
+
+    if isinstance(node, tuple):
+        items_str = ", ".join([repr(item) for item in node])
+        return f"({items_str})"
+
+    class_name = node.__class__.__name__
+    attributes = []
+    
+    # Manually map attributes for each config type to control formatting and recursion
+    if isinstance(node, GymEnvironmentConfig):
+        attributes.append(f"env_name={_serialize_ast_node(node.env_name)}")
+        attributes.append(f"definitions={_serialize_ast_node(node.definitions, indent_level + 1)}")
+        attributes.append(f"variables={_serialize_ast_node(node.variables, indent_level + 1)}")
+        attributes.append(f"problem={_serialize_ast_node(node.problem, indent_level + 1)}")
+    elif isinstance(node, DefinitionsConfig):
+        attributes.append(f"constants={_serialize_ast_node(node.constants, indent_level + 1)}")
+        attributes.append(f"functions={_serialize_ast_node(node.functions, indent_level + 1)}")
+        attributes.append(f"predicates={_serialize_ast_node(node.predicates, indent_level + 1)}")
+        attributes.append(f"hybrid_programs={_serialize_ast_node(node.hybrid_programs, indent_level + 1)}")
+    elif isinstance(node, VariablesConfig):
+        attributes.append(f"state_variables={_serialize_ast_node(node.state_variables, indent_level + 1)}")
+    elif isinstance(node, ProblemConfig):
+        attributes.append(f"precondition={_serialize_ast_node(node.precondition, indent_level + 1)}")
+        attributes.append(f"loop_execution={_serialize_ast_node(node.loop_execution, indent_level + 1)}")
+        attributes.append(f"postcondition={_serialize_ast_node(node.postcondition, indent_level + 1)}")
+    elif isinstance(node, ConstantDefinitionConfig):
+        value_str = repr(node.value) if node.value is not None else "None"
+        attributes.append(f"name={_serialize_ast_node(node.name)}")
+        attributes.append(f"type={_serialize_ast_node(node.type)}")
+        attributes.append(f"value={value_str}")
+    elif isinstance(node, FunctionDefinitionConfig):
+        # FIX: Use repr() for body to handle newlines and quotes correctly
+        attributes.append(f"name={_serialize_ast_node(node.name)}")
+        attributes.append(f"return_type={_serialize_ast_node(node.return_type)}")
+        attributes.append(f"parameters={_serialize_ast_node(node.parameters)}")
+        attributes.append(f"body={repr(node.body)}") # Changed here
+    elif isinstance(node, PredicateDefinitionConfig):
+        # FIX: Use repr() for body to handle newlines and quotes correctly
+        attributes.append(f"name={_serialize_ast_node(node.name)}")
+        attributes.append(f"parameters={_serialize_ast_node(node.parameters)}")
+        attributes.append(f"body={repr(node.body)}") # Changed here
+    elif isinstance(node, ControlFuncConfig):
+        attributes.append(f"name={_serialize_ast_node(node.name)}")
+        attributes.append(f"action_space_config={_serialize_ast_node(node.action_space_config, indent_level + 1)}")
+    elif isinstance(node, StepFuncConfig):
+        attributes.append(f"name={_serialize_ast_node(node.name)}")
+        attributes.append(f"odes={_serialize_ast_node(node.odes, indent_level + 1)}")
+        attributes.append(f"evolution_domain={_serialize_ast_node(node.evolution_domain, indent_level + 1)}")
+        attributes.append(f"duration={_serialize_ast_node(node.duration)}")
+    elif isinstance(node, ODEConfig):
+        # FIX: Use repr() for equation
+        attributes.append(f"variable={_serialize_ast_node(node.variable)}")
+        attributes.append(f"equation={repr(node.equation)}") # Changed here
+    elif isinstance(node, EvolutionDomainConfig):
+        # FIX: Use repr() for constraints
+        constraints_str = ", ".join([repr(c) for c in node.constraints]) # Changed here
+        attributes.append(f"constraints=[{constraints_str}]")
+    elif isinstance(node, VariableDeclarationConfig):
+        attributes.append(f"name={_serialize_ast_node(node.name)}")
+        attributes.append(f"type={_serialize_ast_node(node.type)}")
+    elif isinstance(node, PreconditionConfig):
+        # FIX: Use repr() for formula
+        attributes.append(f"formula={repr(node.formula)}") # Changed here
+    elif isinstance(node, PostconditionConfig):
+        # FIX: Use repr() for formula
+        attributes.append(f"formula={repr(node.formula)}") # Changed here
+    elif isinstance(node, LoopExecutionConfig):
+        attributes.append(f"iterations={_serialize_ast_node(node.iterations)}")
+        # FIX: Use repr() for loop_invariant_formula
+        attributes.append(f"loop_invariant_formula={repr(node.loop_invariant_formula)}") # Changed here
+        attributes.append(f"loop_body={_serialize_ast_node(node.loop_body, indent_level + 1)}")
+    elif isinstance(node, HybridProgramStepConfig):
+        # FIX: Use repr() for invariant_formula
+        attributes.append(f"hp_name={_serialize_ast_node(node.hp_name)}")
+        attributes.append(f"invariant_formula={repr(node.invariant_formula)}") # Changed here
+    elif isinstance(node, ChoiceActionConfig):
+        attributes.append(f"level_name={_serialize_ast_node(node.level_name)}")
+        attributes.append(f"choices={_serialize_ast_node(node.choices, indent_level + 1)}")
+    elif isinstance(node, SequenceActionConfig):
+        attributes.append(f"actions={_serialize_ast_node(node.actions, indent_level + 1)}")
+    elif isinstance(node, DeterministicAssignmentActionConfig):
+        # FIX: Use repr() for value
+        attributes.append(f"variable={_serialize_ast_node(node.variable)}")
+        attributes.append(f"value={repr(node.value)}") # Changed here
+    elif isinstance(node, NondeterministicAssignmentActionConfig):
+        attributes.append(f"variable={_serialize_ast_node(node.variable)}")
+    elif isinstance(node, ActionConstraintConfig):
+        # FIX: Use repr() for formula
+        attributes.append(f"formula={repr(node.formula)}") # Changed here
+    elif isinstance(node, CallHybridProgramConfig):
+        attributes.append(f"hp_name={_serialize_ast_node(node.hp_name)}")
+    else:
+        raise TypeError(f"Cannot serialize unknown AST node type: {type(node)}")
+
+    if not attributes:
+        return f"{class_name}()"
+
+    attributes_str = ",\n".join([f"{next_indent_str}{attr}" for attr in attributes])
+    return f"{class_name}(\n{attributes_str}\n{indent_str})"
+
 # --- Helper Functions for Expression Formatting (Generator-side) ---
 
 def _format_kx_expr_for_python_lambda_body_generator(expr_str: str, lambda_param_names: Optional[List[str]] = None, all_constants: List[str] = None, all_state_vars: List[str] = None, all_functions: List[str] = None, all_predicates: List[str] = None) -> str:
@@ -39,9 +160,9 @@ def _format_kx_expr_for_python_lambda_body_generator(expr_str: str, lambda_param
     expr_py = expr_py.replace('^', '**').replace('abs(', 'np.abs(')
 
     # 2. Identify and replace identifiers with their correct scope prefix
-    # Build a list of all known identifiers (excluding lambda params)
+    # Build a list of all known identifiers (excluding lambda params, and global modules like 'np', 'math')
     all_env_identifiers_for_prefixing = sorted(
-        list(set(all_constants + all_state_vars + all_functions + all_predicates + ['np'])),
+        list(set(all_constants + all_state_vars + all_functions + all_predicates)), # Removed 'np' and 'math'
         key=len, reverse=True
     )
 
@@ -63,15 +184,13 @@ def _format_kx_expr_for_python_lambda_body_generator(expr_str: str, lambda_param
                 return f"self.functions['{ident}']"
             elif ident in all_predicates:
                 return f"self.predicates['{ident}']"
-            elif ident == 'np':
-                return 'np'
-            return ident
+            # No 'np' or 'math' case here, they are assumed to be directly accessible or prefixed in the original string (e.g., np.abs)
+            return ident # Should not be reached for identifiers in the list
 
         expr_py = pattern.sub(replacer, expr_py)
 
     # 3. Recursive parsing for operator precedence (relational then logical)
-    # This logic is similar to the runtime _evaluate_expression, but it uses 'self._approx_eq'
-    # and expects prefixed identifiers.
+    # This logic is similar to the runtime _evaluate_expression, but applies it at generation time.
     def _parse_expression_recursive_generator(sub_expr: str) -> str:
         sub_expr = sub_expr.strip()
         if not sub_expr:
@@ -165,7 +284,7 @@ def _format_kx_expr_for_python_lambda_body_generator(expr_str: str, lambda_param
                         rel_op_found_py = py_op_format
                         rel_op_idx = i
                         break
-                if rel_op_found_kx: break # Found a multi-char op
+                if rel_op_found_kx: break 
 
                 # Check for single-character operators if no multi-char op found yet
                 for kx_op, py_op_format in relational_ops:
@@ -173,12 +292,12 @@ def _format_kx_expr_for_python_lambda_body_generator(expr_str: str, lambda_param
                         # Special check for '=', ensure it's not part of '==', '!=', '<=', '>='
                         if kx_op == '=' and (i > 0 and sub_expr[i-1] in '<>=!') or \
                                         (i < len(sub_expr) - 1 and sub_expr[i+1] == '='):
-                            continue # Skip if it's part of ==, !=, <=, >=
+                            continue 
                         rel_op_found_kx = kx_op
                         rel_op_found_py = py_op_format
                         rel_op_idx = i
                         break
-                if rel_op_found_kx: break # Found a single-char op
+                if rel_op_found_kx: break 
 
         if rel_op_found_kx:
             left = _parse_expression_recursive_generator(sub_expr[:rel_op_idx].strip())
@@ -240,297 +359,6 @@ def _expand_formula(formula_str: str, definitions: DefinitionsConfig) -> str:
     return expanded_formula
 
 # --- End Helper Functions (Generator-side) ---
-
-# --- Z3 Integration Helpers ---
-def _kx_expr_to_z3_formula(kx_expr: str, z3_symbol_map: Dict[str, Any], fixed_constants: Dict[str, Union[int, float]]) -> Any:
-    """
-    Converts a KeYmaera X expression string into a Z3 formula.
-    This function performs string replacements to convert KeYmaera X syntax
-    to a Python string that, when evaluated, constructs a Z3 expression.
-    It processes operators respecting precedence: arithmetic, relational, then logical.
-    For logical operators, it uses a recursive approach to handle nested parentheses.
-    """
-    expr_transformed = kx_expr.strip()
-
-    # 1. Replace identifiers with their Z3 symbol map reference.
-    # Fixed constants will be handled by being added to eval_globals as Z3 literals.
-    sorted_z3_symbols = sorted(z3_symbol_map.keys(), key=len, reverse=True)
-
-    for ident_name in sorted_z3_symbols:
-        # Use word boundaries to avoid partial replacements (e.g., 'x' in 'dx')
-        expr_transformed = re.sub(r'\b' + re.escape(ident_name) + r'\b', f"z3_symbol_map['{ident_name}']", expr_transformed)
-
-    # 2. Basic arithmetic and math functions
-    expr_transformed = expr_transformed.replace('^', '**')
-    expr_transformed = expr_transformed.replace('abs(', 'z3.Abs(') # Use z3.Abs for Z3 context
-
-    # 3. Handle logical and relational operators respecting precedence and parentheses
-    # This recursive function will parse the logical and relational structure.
-    def _parse_logical_and_relational_expression_z3(expression_str: str) -> str:
-        expression_str = expression_str.strip()
-        if not expression_str:
-            return ""
-
-        # 1. Strip outermost balanced parentheses
-        while expression_str.startswith('(') and expression_str.endswith(')'):
-            balance = 0
-            is_fully_enclosed = True
-            for i in range(len(expression_str) - 1): 
-                char = expression_str[i]
-                if char == '(': balance += 1
-                elif char == ')': balance -= 1
-                if balance == 0:
-                    is_fully_enclosed = False
-                    break
-            if is_fully_enclosed:
-                expression_str = expression_str[1:-1].strip()
-            else:
-                break 
-
-        # --- Logical Operators (highest level of this parser) ---
-        
-        # Implication (lowest logical precedence, right-associative)
-        balance = 0
-        implication_idx = -1
-        for i in range(len(expression_str) - 2, -1, -1): # Scan right-to-left for implication
-            char = expression_str[i]
-            if char == ')': balance += 1
-            elif char == '(': balance -= 1
-            elif balance == 0 and expression_str[i:i+2] == '->':
-                implication_idx = i
-                break
-        if implication_idx != -1:
-            left = _parse_logical_and_relational_expression_z3(expression_str[:implication_idx].strip())
-            right = _parse_logical_and_relational_expression_z3(expression_str[implication_idx+2:].strip())
-            return f"z3.Implies({left}, {right})"
-
-        # Disjunction (medium precedence, left-associative)
-        balance = 0
-        disjunction_idx = -1
-        for i in range(len(expression_str)): # Scan left-to-right for disjunction
-            char = expression_str[i]
-            if char == '(': balance += 1
-            elif char == ')': balance -= 1
-            elif balance == 0 and char == '|':
-                disjunction_idx = i
-                break 
-        if disjunction_idx != -1:
-            left = _parse_logical_and_relational_expression_z3(expression_str[:disjunction_idx].strip())
-            right = _parse_logical_and_relational_expression_z3(expression_str[disjunction_idx+1:].strip())
-            return f"z3.Or({left}, {right})"
-
-        # Conjunction (highest precedence, left-associative)
-        balance = 0
-        conjunction_idx = -1
-        for i in range(len(expression_str)): # Scan left-to-right for conjunction
-            char = expression_str[i]
-            if char == '(': balance += 1
-            elif char == ')': balance -= 1
-            elif balance == 0 and char == '&':
-                conjunction_idx = i
-                break 
-        if conjunction_idx != -1:
-            left = _parse_logical_and_relational_expression_z3(expression_str[:conjunction_idx].strip())
-            right = _parse_logical_and_relational_expression_z3(expression_str[conjunction_idx+1:].strip())
-            return f"z3.And({left}, {right})"
-            
-        # Logical NOT (prefix operator)
-        if expression_str.startswith('!'):
-            operand = _parse_logical_and_relational_expression_z3(expression_str[1:].strip())
-            return f"z3.Not({operand})"
-
-        # --- Relational Operators (next level down) ---
-        relational_ops = [('!=', '!='), ('<=', '<='), ('>=', '>='), ('<', '<'), ('>', '>'), ('=', '==')]
-        
-        balance = 0
-        rel_op_found_kx = None
-        rel_op_found_py = None
-        rel_op_idx = -1
-        
-        # Scan left-to-right for relational operators
-        for i in range(len(expression_str)):
-            char = expression_str[i]
-            if char == '(': balance += 1
-            elif char == ')': balance -= 1
-            elif balance == 0:
-                # Check for multi-character operators first
-                for kx_op, py_op_format in relational_ops:
-                    if len(kx_op) > 1 and expression_str[i:i+len(kx_op)] == kx_op:
-                        rel_op_found_kx = kx_op
-                        rel_op_found_py = py_op_format
-                        rel_op_idx = i
-                        break
-                if rel_op_found_kx: break 
-
-                # Check for single-character operators if no multi-char op found yet
-                for kx_op, py_op_format in relational_ops:
-                    if len(kx_op) == 1 and expression_str[i] == kx_op:
-                        # Special check for '=', ensure it's not part of '==', '!=', '<=', '>='
-                        if kx_op == '=' and ((i > 0 and expression_str[i-1] in '<>=!') or \
-                                        (i < len(expression_str) - 1 and expression_str[i+1] == '=')):
-                            continue 
-                        rel_op_found_kx = kx_op
-                        rel_op_found_py = py_op_format
-                        rel_op_idx = i
-                        break
-                if rel_op_found_kx: break 
-
-        if rel_op_found_kx:
-            left = _parse_logical_and_relational_expression_z3(expression_str[:rel_op_idx].strip())
-            right = _parse_logical_and_relational_expression_z3(expression_str[rel_op_idx+len(rel_op_found_kx):].strip())
-            return f"({left}) {rel_op_found_py} ({right})" 
-
-        # Base case: no logical or relational operators found, return the expression as is.
-        # This should now be an arithmetic expression or a literal.
-        return expression_str
-
-    # Apply the combined logical and relational expression parser
-    expr_transformed = _parse_logical_and_relational_expression_z3(expr_transformed)
-
-    # Final evaluation in a Z3-aware context
-    eval_globals = {'z3': z3, 'z3_symbol_map': z3_symbol_map}
-    for const_name, const_value in fixed_constants.items():
-        if isinstance(const_value, int):
-            eval_globals[const_name] = z3.IntVal(const_value)
-        else: # float or other numeric
-            eval_globals[const_name] = z3.RealVal(const_value)
-    
-    try:
-        return eval(expr_transformed, eval_globals)
-    except Exception as e:
-        raise ValueError(f"Failed to evaluate Z3 expression '{kx_expr}' (transformed: '{expr_transformed}'): {e}")
-
-def _solve_initial_state_with_z3(
-    precondition_kx: str,
-    definitions: DefinitionsConfig,
-    variables: List[VariableDeclarationConfig]
-) -> Optional[Dict[str, float]]:
-    """
-    Uses Z3 to find a satisfying assignment for initial state variables and constants
-    based on the expanded KeYmaera X precondition.
-    Returns a dictionary of solved values (variable/constant name -> float) or None if unsatisfiable.
-    """
-    # 1. Prepare Z3 symbols (Real for all variables and constants that need to be solved)
-    z3_symbol_map = {}
-    
-    # Store fixed constants separately to avoid creating Z3 variables for them
-    fixed_constants = {}
-
-    # State variables (these are the ones we want Z3 to solve for)
-    for var_decl in variables:
-        z3_symbol_map[var_decl.name] = z3.Real(var_decl.name)
-    
-    # Constants: If they have a fixed numeric value, use that value directly in the expression.
-    # Otherwise, treat them as Z3 Real variables to be solved for.
-    for const_decl in definitions.constants:
-        if const_decl.value is not None and re.fullmatch(r'^-?\d+(\.\d+)?$', const_decl.value):
-            # This constant has a fixed numeric value. Store it as a Python float.
-            fixed_constants[const_decl.name] = float(const_decl.value)
-        else:
-            # This constant either has no value, or its value is an expression.
-            # For Z3, we treat it as a variable that needs to be solved.
-            z3_symbol_map[const_decl.name] = z3.Real(const_decl.name)
-
-    # 2. Expand predicates in the precondition
-    expanded_precondition = _expand_formula(precondition_kx, definitions)
-    print(f"Expanded precondition for Z3 solving: '{expanded_precondition}'")
-
-    # 3. Convert expanded KeYmaera X formula to Z3 expression
-    try:
-        # Pass both z3_symbol_map and fixed_constants
-        z3_formula = _kx_expr_to_z3_formula(expanded_precondition, z3_symbol_map, fixed_constants)
-    except ValueError as e:
-        print(f"Z3 Solver Error: Failed to convert precondition to Z3 formula: {e}")
-        return None
-    
-    print(f"Z3 formula for precondition: {z3_formula}")
-
-    # 4. Create Z3 solver and add the formula
-    s = z3.Solver()
-    s.add(z3_formula)
-
-    # 5. Check for satisfiability
-    check_result = s.check()
-    if check_result == z3.sat:
-        model = s.model()
-        solved_values = {}
-        # Add values for state variables and constants that were Z3 variables
-        for k, v in z3_symbol_map.items():
-            evaluated_val = model.evaluate(v, model_completion=True)
-            if evaluated_val is not None:
-                if hasattr(evaluated_val, 'as_fraction'):
-                    solved_values[k] = float(evaluated_val.as_fraction())
-                else:
-                    solved_values[k] = float(evaluated_val.as_decimal(10))
-        # Add values for fixed constants
-        solved_values.update(fixed_constants)
-        return solved_values
-    elif check_result == z3.unsat:
-        print(f"Z3 Solver: Precondition is UNSAT. No initial state exists for: '{precondition_kx}'")
-        return None
-    else: # z3.unknown
-        print(f"Z3 Solver: Precondition satisfiability UNKNOWN for: '{precondition_kx}'")
-        return None
-# --- End Z3 Integration Helpers ---
-
-
-def _ast_to_python_code_string(ast_node: ActionType, indent_level: int = 0,
-                                all_constants: List[str] = None, all_state_vars: List[str] = None,
-                                all_functions: List[str] = None, all_predicates: List[str] = None) -> str:
-    """
-    Recursively converts an ActionType AST node into its Python constructor call string.
-    This is used to embed the control function's action configuration directly into the
-    generated environment's __init__ method.
-    Formulas and values are embedded as raw KeYmaera X strings to be parsed at runtime
-    by the generated _evaluate_expression method.
-    """
-    # Initialize lists if not provided (for top-level call) - not strictly needed here as we pass raw strings
-    # but kept for consistency if future logic needs them.
-    if all_constants is None: all_constants = []
-    if all_state_vars is None: all_state_vars = []
-    if all_functions is None: all_functions = []
-    if all_predicates is None: all_predicates = []
-
-    indent_str = "    " * indent_level
-    next_indent_str = "    " * (indent_level + 1)
-
-    if isinstance(ast_node, ChoiceActionConfig):
-        choices_str = ",\n".join([
-            f"{next_indent_str}{_ast_to_python_code_string(choice, indent_level + 1, all_constants, all_state_vars, all_functions, all_predicates)}"
-            for choice in ast_node.choices
-        ])
-        return (
-            f"ChoiceActionConfig(level_name='{ast_node.level_name}', choices=[\n"
-            f"{choices_str}\n"
-            f"{indent_str}])"
-        )
-    elif isinstance(ast_node, SequenceActionConfig):
-        actions_str = ",\n".join([
-            f"{next_indent_str}{_ast_to_python_code_string(action, indent_level + 1, all_constants, all_state_vars, all_functions, all_predicates)}"
-            for action in ast_node.actions
-        ])
-        return (
-            f"SequenceActionConfig(actions=[\n"
-            f"{actions_str}\n"
-            f"{indent_str}])"
-        )
-    elif isinstance(ast_node, DeterministicAssignmentActionConfig):
-        # Pass raw KeYmaera X value string; generated _evaluate_expression will parse it.
-        return f"DeterministicAssignmentActionConfig(variable='{ast_node.variable}', value='{ast_node.value}')"
-    elif isinstance(ast_node, NondeterministicAssignmentActionConfig):
-        return f"NondeterministicAssignmentActionConfig(variable='{ast_node.variable}')"
-    elif isinstance(ast_node, ActionConstraintConfig):
-        # Pass raw KeYmaera X formula string; generated _evaluate_expression will parse it.
-        formula_single_line = ast_node.formula.replace('\n', ' ').strip()
-        return f"ActionConstraintConfig(formula='{formula_single_line}')"
-    elif isinstance(ast_node, CallHybridProgramConfig):
-        return f"CallHybridProgramConfig(hp_name='{ast_node.hp_name}')"
-    elif isinstance(ast_node, HybridProgramStepConfig):
-        # Pass raw KeYmaera X invariant formula string; generated _evaluate_expression will parse it.
-        invariant_single_line = ast_node.invariant_formula.replace('\n', ' ').strip()
-        return f"HybridProgramStepConfig(hp_name='{ast_node.hp_name}', invariant_formula='{invariant_single_line}')"
-    else:
-        raise ValueError(f"Unknown AST node type: {type(ast_node)}")
 
 
 def generate_gym_environment_code(config: GymEnvironmentConfig, envName: str = "") -> str:
@@ -626,10 +454,8 @@ def generate_gym_environment_code(config: GymEnvironmentConfig, envName: str = "
     
     # Convert the control_func_ast_object to its Python code string representation
     # This will embed raw KeYmaera X strings for action values/formulas
-    control_func_ast_code_str = _ast_to_python_code_string(
-        control_func_ast_object, indent_level=3,
-        all_constants=all_constant_names, all_state_vars=state_variable_names,
-        all_functions=all_function_names, all_predicates=all_predicate_names
+    control_func_ast_code_str = _serialize_ast_node(
+        control_func_ast_object, indent_level=3
     ) # Indent for __init__ method
 
     # --- Generate ODEs and Evolution Domain ---
@@ -654,12 +480,15 @@ def generate_gym_environment_code(config: GymEnvironmentConfig, envName: str = "
         "ActionType", 
         "ChoiceActionConfig", "SequenceActionConfig", "DeterministicAssignmentActionConfig",
         "NondeterministicAssignmentActionConfig", "ActionConstraintConfig", "CallHybridProgramConfig",
-        "HybridProgramStepConfig"
+        "HybridProgramStepConfig", "GymEnvironmentConfig", "DefinitionsConfig", "VariablesConfig",
+        "ProblemConfig", "ConstantDefinitionConfig", "FunctionDefinitionConfig", "PredicateDefinitionConfig",
+        "HybridProgramConfig", "ControlFuncConfig", "StepFuncConfig", "ODEConfig", "EvolutionDomainConfig",
+        "VariableDeclarationConfig", "PreconditionConfig", "PostconditionConfig", "LoopExecutionConfig"
     ]
     ast_import_statement = f"from pyast_config import ({', '.join(ast_imports)})"
 
     # Imports for typing hints
-    typing_imports = ["Dict", "Any", "Tuple", "List", "Optional"] # Added Optional
+    typing_imports = ["Dict", "Any", "Tuple", "List", "Optional", "Union"] # Added Optional, Union
     typing_import_statement = f"from typing import ({', '.join(typing_imports)})"
 
     # New: Code for _split_top_level_and_local method, to be inserted as a class method
@@ -703,23 +532,49 @@ def generate_gym_environment_code(config: GymEnvironmentConfig, envName: str = "
         if expr_str.startswith('?'):
             expr_str = expr_str[1:].strip()
 
-        # Combine all available variables for evaluation context
-        eval_globals = {
-            'np': np, 'math': math,
-            '_approx_eq': self._approx_eq # Make approximate equality available
-        }
-        # eval_locals will be populated with self.state, self.constants, self.functions, self.predicates, local_vars
-        # This allows direct access to 'x', 'y', 'ep', 'stopDist', 'isWellformedDir'
-        eval_locals = {
-            **self.state,
-            **self.constants, # Constants are directly accessible as names
-            **{f_name: f_func for f_name, f_func in self.functions.items()}, # Functions are directly callable
-            **{p_name: p_func for p_name, p_func in self.predicates.items()}, # Predicates are directly callable
-            **local_vars
-        }
+        # --- NEW PRE-PROCESSING STEP: Prefix identifiers ---
+        # This step converts bare KeYmaera X identifiers (like 'x', 'A', 'stopDist')
+        # into Python-compatible references (like 'self.state["x"]', 'self.constants["A"]', 'self.functions["stopDist"]')
+        # before the expression is further parsed and evaluated.
         
-        # --- Start KeYmaera X to Python conversion logic (moved from generator) ---
-        expr_py_transformed = expr_str.strip()
+        processed_expr = expr_str.strip()
+
+        # Combine all known identifiers from the environment that need prefixing
+        # Exclude 'np' and 'math' as they are global modules and should not be prefixed.
+        all_env_identifiers = list(self.state.keys()) + \\
+                              list(self.constants.keys()) + \\
+                              list(self.functions.keys()) + \\
+                              list(self.predicates.keys())
+        
+        # Sort by length descending to handle cases where one identifier is a substring of another (e.g., 'dx' before 'x')
+        all_env_identifiers_sorted = sorted(all_env_identifiers, key=len, reverse=True)
+
+        # Create a temporary list of identifiers that are *local* to this evaluation (e.g., lambda parameters passed in local_vars)
+        # These should NOT be prefixed.
+        local_identifiers_in_scope = list(local_vars.keys()) if local_vars else []
+
+        # Perform the prefixing
+        for ident_name in all_env_identifiers_sorted:
+            if ident_name in local_identifiers_in_scope:
+                continue # Skip if it's a local variable (e.g., 'v' in 'stopDist(v)' if 'v' is in local_vars)
+
+            replacement = ""
+            if ident_name in self.state:
+                replacement = f"self.state['{ident_name}']"
+            elif ident_name in self.constants:
+                replacement = f"self.constants['{ident_name}']"
+            elif ident_name in self.functions:
+                replacement = f"self.functions['{ident_name}']"
+            elif ident_name in self.predicates:
+                replacement = f"self.predicates['{ident_name}']"
+            
+            if replacement:
+                # Use regex with word boundaries to ensure we replace whole identifiers only
+                processed_expr = re.sub(r'\\b' + re.escape(ident_name) + r'\\b', replacement, processed_expr)
+
+        # --- END NEW PRE-PROCESSING STEP ---
+
+        expr_py_transformed = processed_expr # Now use the processed_expr
 
         # 1. Basic syntax replacements (power, abs)
         expr_py_transformed = expr_py_transformed.replace('^', '**').replace('abs(', 'np.abs(')
@@ -818,7 +673,7 @@ def generate_gym_environment_code(config: GymEnvironmentConfig, envName: str = "
                             rel_op_found_py = py_op_format
                             rel_op_idx = i
                             break
-                    if rel_op_found_kx: break # Found a multi-char op
+                    if rel_op_found_kx: break 
 
                     # Check for single-character operators if no multi-char op found yet
                     for kx_op, py_op_format in relational_ops:
@@ -826,12 +681,12 @@ def generate_gym_environment_code(config: GymEnvironmentConfig, envName: str = "
                             # Special check for '=', ensure it's not part of '==', '!=', '<=', '>='
                             if kx_op == '=' and (i > 0 and sub_expr[i-1] in '<>=!') or \
                                             (i < len(sub_expr) - 1 and sub_expr[i+1] == '='):
-                                continue # Skip if it's part of ==, !=, <=, >=
+                                continue 
                             rel_op_found_kx = kx_op
                             rel_op_found_py = py_op_format
                             rel_op_idx = i
                             break
-                    if rel_op_found_kx: break # Found a single-char op
+                    if rel_op_found_kx: break 
 
             if rel_op_found_kx:
                 left = _parse_expression_recursive_runtime(sub_expr[:rel_op_idx].strip())
@@ -848,14 +703,265 @@ def generate_gym_environment_code(config: GymEnvironmentConfig, envName: str = "
         # --- End KeYmaera X to Python conversion logic ---
 
         try:
-            return eval(expr_py_final, eval_globals, eval_locals)
+            # With explicit prefixing, eval_locals can be much simpler.
+            # Only local_vars are truly 'local' to the eval call.
+            # All other references are now explicit (self.state['x'], self.constants['A'], etc.)
+            eval_globals_for_eval = {'np': np, 'math': math, '_approx_eq': self._approx_eq, 'self': self}
+            return eval(expr_py_final, eval_globals_for_eval, local_vars)
         except Exception as e:
-            print(f"Error evaluating expression '{{expr_str}}' (transformed: '{{expr_py_final}}'): {{e}}")
+            print(f"Error evaluating expression '{expr_str}' (transformed: '{expr_py_final}'): {e}")
             if is_constraint:
                 return False # For constraints, return False on error
             raise # Re-raise for non-constraint expressions
     """)
 
+    # Embed _kx_expr_to_z3_formula method
+    _kx_expr_to_z3_formula_method_code = textwrap.dedent("""
+    def _kx_expr_to_z3_formula(self, kx_expr: str, z3_symbol_map: Dict[str, Any], fixed_constants: Dict[str, Union[int, float]]) -> Any:
+        \"\"\"
+        Converts a KeYmaera X expression string into a Z3 formula.
+        This function performs string replacements to convert KeYmaera X syntax
+        to a Python string that, when evaluated, constructs a Z3 expression.
+        It processes operators respecting precedence: arithmetic, relational, then logical.
+        For logical operators, it uses a recursive approach to handle nested parentheses.
+        \"\"\"
+        expr_transformed = kx_expr.strip()
+
+        # 1. Replace identifiers with their Z3 symbol map reference.
+        # Fixed constants will be handled by being added to eval_globals as Z3 literals.
+        # Sort by length descending to handle cases where one identifier is a substring of another (e.g., 'dx' before 'x')
+        sorted_z3_symbols_and_constants = sorted(
+            list(z3_symbol_map.keys()) + list(fixed_constants.keys()), 
+            key=len, reverse=True
+        )
+
+        for ident_name in sorted_z3_symbols_and_constants:
+            replacement = ""
+            if ident_name in z3_symbol_map:
+                replacement = f"z3_symbol_map['{ident_name}']"
+            elif ident_name in fixed_constants:
+                # Fixed constants are added to eval_globals directly, so they should be referenced by name
+                replacement = ident_name 
+            
+            if replacement:
+                # Use word boundaries to avoid partial replacements (e.g., 'x' in 'dx')
+                expr_transformed = re.sub(r'\\b' + re.escape(ident_name) + r'\\b', replacement, expr_transformed)
+
+        # 2. Basic arithmetic and math functions
+        expr_transformed = expr_transformed.replace('^', '**')
+        expr_transformed = expr_transformed.replace('abs(', 'z3.Abs(') # Use z3.Abs for Z3 context
+
+        # 3. Handle logical and relational operators respecting precedence and parentheses
+        # This recursive function will parse the logical and relational structure.
+        def _parse_logical_and_relational_expression_z3(expression_str: str) -> str:
+            expression_str = expression_str.strip()
+            if not expression_str:
+                return ""
+
+            # 1. Strip outermost balanced parentheses
+            while expression_str.startswith('(') and expression_str.endswith(')'):
+                balance = 0
+                is_fully_enclosed = True
+                for i in range(len(expression_str) - 1): 
+                    char = expression_str[i]
+                    if char == '(': balance += 1
+                    elif char == ')': balance -= 1
+                    if balance == 0:
+                        is_fully_enclosed = False
+                        break
+                if is_fully_enclosed:
+                    expression_str = expression_str[1:-1].strip()
+                else:
+                    break 
+
+            # --- Logical Operators (highest level of this parser) ---
+            
+            # Implication (lowest logical precedence, right-associative)
+            balance = 0
+            implication_idx = -1
+            for i in range(len(expression_str) - 2, -1, -1): # Scan right-to-left for implication
+                char = expression_str[i]
+                if char == ')': balance += 1
+                elif char == '(': balance -= 1
+                elif balance == 0 and expression_str[i:i+2] == '->':
+                    implication_idx = i
+                    break
+            if implication_idx != -1:
+                left = _parse_logical_and_relational_expression_z3(expression_str[:implication_idx].strip())
+                right = _parse_logical_and_relational_expression_z3(expression_str[implication_idx+2:].strip())
+                return f"z3.Implies({left}, {right})"
+
+            # Disjunction (medium precedence, left-associative)
+            balance = 0
+            disjunction_idx = -1
+            for i in range(len(expression_str)): # Scan left-to-right for disjunction
+                char = expression_str[i]
+                if char == '(': balance += 1
+                elif char == ')': balance -= 1
+                elif balance == 0 and char == '|':
+                    disjunction_idx = i
+                    break 
+            if disjunction_idx != -1:
+                left = _parse_logical_and_relational_expression_z3(expression_str[:disjunction_idx].strip())
+                right = _parse_logical_and_relational_expression_z3(expression_str[disjunction_idx+1:].strip())
+                return f"z3.Or({left}, {right})"
+
+            # Conjunction (highest precedence, left-associative)
+            balance = 0
+            conjunction_idx = -1
+            for i in range(len(expression_str)): # Scan left-to-right for conjunction
+                char = expression_str[i]
+                if char == '(': balance += 1
+                elif char == ')': balance -= 1
+                elif balance == 0 and char == '&':
+                    conjunction_idx = i
+                    break 
+            if conjunction_idx != -1:
+                left = _parse_logical_and_relational_expression_z3(expression_str[:conjunction_idx].strip())
+                right = _parse_logical_and_relational_expression_z3(expression_str[conjunction_idx+1:].strip())
+                return f"z3.And({left}, {right})"
+                
+            # Logical NOT (prefix operator)
+            if expression_str.startswith('!'):
+                operand = _parse_logical_and_relational_expression_z3(expression_str[1:].strip())
+                return f"z3.Not({operand})"
+
+            # --- Relational Operators (next level down) ---
+            # Note: '=' in KeYmaera X maps to '==' for Z3 exact equality
+            relational_ops = [('!=', '!='), ('<=', '<='), ('>=', '>='), ('<', '<'), ('>', '>'), ('=', '==')]
+            
+            balance = 0
+            rel_op_found_kx = None
+            rel_op_found_py = None
+            rel_op_idx = -1
+            
+            # Scan left-to-right for relational operators
+            for i in range(len(expression_str)):
+                char = expression_str[i]
+                if char == '(': balance += 1
+                elif char == ')': balance -= 1
+                elif balance == 0:
+                    # Check for multi-character operators first
+                    for kx_op, py_op_format in relational_ops:
+                        if len(kx_op) > 1 and expression_str[i:i+len(kx_op)] == kx_op:
+                            rel_op_found_kx = kx_op
+                            rel_op_found_py = py_op_format
+                            rel_op_idx = i
+                            break
+                    if rel_op_found_kx: break 
+
+                    # Check for single-character operators if no multi-char op found yet
+                    for kx_op, py_op_format in relational_ops:
+                        if len(kx_op) == 1 and expression_str[i] == kx_op:
+                            # Special check for '=', ensure it's not part of '==', '!=', '<=', '>='
+                            if kx_op == '=' and ((i > 0 and expression_str[i-1] in '<>=!') or \
+                                            (i < len(expression_str) - 1 and expression_str[i+1] == '=')):
+                                continue 
+                            rel_op_found_kx = kx_op
+                            rel_op_found_py = py_op_format
+                            rel_op_idx = i
+                            break
+                    if rel_op_found_kx: break 
+
+            if rel_op_found_kx:
+                left = _parse_logical_and_relational_expression_z3(expression_str[:rel_op_idx].strip())
+                right = _parse_logical_and_relational_expression_z3(expression_str[rel_op_idx+len(rel_op_found_kx):].strip())
+                return f"({left}) {rel_op_found_py} ({right})" 
+
+            # Base case: no logical or relational operators found, return the expression as is.
+            # This should now be an arithmetic expression or a literal.
+            return expression_str
+
+        # Apply the combined logical and relational expression parser
+        expr_transformed = _parse_logical_and_relational_expression_z3(expr_transformed)
+
+        # Final evaluation in a Z3-aware context
+        eval_globals = {'z3': z3, 'z3_symbol_map': z3_symbol_map}
+        for const_name, const_value in fixed_constants.items():
+            if isinstance(const_value, int):
+                eval_globals[const_name] = z3.IntVal(const_value)
+            else: # float or other numeric
+                eval_globals[const_name] = z3.RealVal(const_value)
+        
+        try:
+            return eval(expr_transformed, eval_globals)
+        except Exception as e:
+            raise ValueError(f"Failed to evaluate Z3 expression '{kx_expr}' (transformed: '{expr_transformed}'): {e}")
+    """)
+
+    # Embed _solve_initial_state_with_z3 method
+    _solve_initial_state_with_z3_method_code = textwrap.dedent("""
+    def _solve_initial_state_with_z3(self, precondition_kx: str) -> Optional[Dict[str, float]]:
+        \"\"\"
+        Uses Z3 to find a satisfying assignment for initial state variables and constants
+        based on the expanded KeYmaera X precondition.
+        Returns a dictionary of solved values (variable/constant name -> float) or None if unsatisfiable.
+        \"\"\"
+        # 1. Prepare Z3 symbols (Real for all variables and constants that need to be solved)
+        z3_symbol_map = {}
+        
+        # Store fixed constants separately to avoid creating Z3 variables for them
+        fixed_constants = {}
+
+        # State variables (these are the ones we want Z3 to solve for)
+        for var_decl in self._variables_config.state_variables:
+            z3_symbol_map[var_decl.name] = z3.Real(var_decl.name)
+        
+        # Constants: If they have a fixed numeric value, use that value directly in the expression.
+        # Otherwise, treat them as Z3 Real variables to be solved for.
+        for const_decl in self._definitions_config.constants:
+            if const_decl.value is not None and re.fullmatch(r'^-?\\d+(\\.\\d+)?$', const_decl.value):
+                # This constant has a fixed numeric value. Store it as a Python float.
+                fixed_constants[const_decl.name] = float(const_decl.value)
+            else:
+                # This constant either has no value, or its value is an expression.
+                # For Z3, we treat it as a variable that needs to be solved.
+                z3_symbol_map[const_decl.name] = z3.Real(const_decl.name)
+
+        # 2. Expand predicates in the precondition
+        expanded_precondition = self._expand_formula(precondition_kx, self._definitions_config)
+        # print(f"Expanded precondition for Z3 solving: '{expanded_precondition}'")
+
+        # 3. Convert expanded KeYmaera X formula to Z3 expression
+        try:
+            # Pass both z3_symbol_map and fixed_constants
+            z3_formula = self._kx_expr_to_z3_formula(expanded_precondition, z3_symbol_map, fixed_constants)
+        except ValueError as e:
+            print(f"Z3 Solver Error: Failed to convert precondition to Z3 formula: {e}")
+            return None
+        
+        # print(f"Z3 formula for precondition: {z3_formula}")
+
+        # 4. Create Z3 solver and add the formula
+        s = z3.Solver()
+        s.add(z3_formula)
+
+        # 5. Check for satisfiability
+        check_result = s.check()
+        if check_result == z3.sat:
+            model = s.model()
+            solved_values = {}
+            # Add values for state variables and constants that were Z3 variables
+            for k, v in z3_symbol_map.items():
+                evaluated_val = model.evaluate(v, model_completion=True)
+                if evaluated_val is not None:
+                    if hasattr(evaluated_val, 'as_fraction'): # For Z3 Real values
+                        solved_values[k] = float(evaluated_val.as_fraction())
+                    elif hasattr(evaluated_val, 'as_long'): # For Z3 Int values
+                        solved_values[k] = float(evaluated_val.as_long())
+                    else: # Fallback for other Z3 types or if as_fraction/as_long not present
+                        solved_values[k] = float(str(evaluated_val)) # Convert to string and then float
+            # Add values for fixed constants
+            # These are already numeric, no need for Z3 evaluation
+            solved_values.update(fixed_constants)
+            return solved_values
+        elif check_result == z3.unsat:
+            print(f"Z3 Solver: Precondition is UNSAT. No initial state exists for: '{precondition_kx}'")
+            return None
+        else: # z3.unknown
+            print(f"Z3 Solver: Precondition satisfiability UNKNOWN for: '{precondition_kx}'")
+            return None
+    """)
 
     # --- Main Environment Class Structure ---
     env_code = textwrap.dedent(f"""import gymnasium as gym
@@ -865,6 +971,7 @@ from scipy.integrate import solve_ivp
 import math # For math functions like sqrt, sin, cos, etc.
 import textwrap
 import re # For regex replacements in _evaluate_expression
+import z3 # For SMT solving in reset()
 {typing_import_statement} # Import typing hints
 {ast_import_statement} # Import AST classes
 
@@ -874,6 +981,11 @@ class {env_name_for_class}(gym.Env):
     def __init__(self, render_mode=None):
         super().__init__()
         self.render_mode = render_mode
+
+        # --- Store original AST config objects for Z3 and other runtime needs ---
+        self._definitions_config = {_serialize_ast_node(config.definitions, indent_level=2)}
+        self._variables_config = {_serialize_ast_node(config.variables, indent_level=2)}
+        self._problem_config = {_serialize_ast_node(config.problem, indent_level=2)}
 
         # --- Semantic Gap Bridging: Floating Point Equality Tolerance ---
         self.equality_tolerance = 1e-9 # Default absolute tolerance for np.isclose
@@ -966,6 +1078,55 @@ class {env_name_for_class}(gym.Env):
         This bridges the semantic gap between formal exact equality and float approximation.
         \"\"\"
         return np.isclose(a, b, atol=self.equality_tolerance)
+
+    def _expand_formula(self, formula_str: str, definitions: DefinitionsConfig) -> str:
+        \"\"\"
+        Recursively expands predicate calls within a formula string.
+        This returns the formula in KeYmaera X syntax, suitable for further parsing.
+        It handles simple argument substitution.
+        \"\"\"
+        expanded_formula = formula_str
+        
+        predicate_map = {{p.name: (p.body, [param[1] for param in p.parameters]) for p in definitions.predicates}}
+        
+        while True:
+            num_substitutions_in_pass = 0
+            # Sort by length descending to handle cases where one predicate name is a substring of another
+            sorted_pred_names = sorted(predicate_map.keys(), key=len, reverse=True)
+            
+            for pred_name in sorted_pred_names:
+                pred_body, pred_params = predicate_map[pred_name]
+                # Regex to find calls to this specific predicate, capturing arguments
+                pattern = r'\\b' + re.escape(pred_name) + r'\\s*\\(([^)]*)\\)'
+                
+                def replace_match(match):
+                    nonlocal num_substitutions_in_pass
+                    num_substitutions_in_pass += 1
+                    call_args_str = match.group(1)
+                    call_args = [arg.strip() for arg in call_args_str.split(',') if arg.strip()]
+                    
+                    if len(call_args) != len(pred_params):
+                        print(f"Warning: Mismatch in number of arguments for predicate '{{pred_name}}'. Expected {{len(pred_params)}}, got {{len(call_args)}} in call '{{match.group(0)}}'.")
+                        return match.group(0)
+                    
+                    substituted_body = pred_body
+                    for i, param_name in enumerate(pred_params):
+                        # Replace `param_name` with `call_args[i]` in the body
+                        # Use word boundaries to avoid partial replacements (e.g., replacing 'x' in 'dx')
+                        substituted_body = re.sub(r'\\b' + re.escape(param_name) + r'\\b', call_args[i], substituted_body)
+                    
+                    return f"({{substituted_body}})" # Enclose in parens to maintain logical grouping
+
+                expanded_formula = re.sub(pattern, replace_match, expanded_formula)
+            
+            if num_substitutions_in_pass == 0:
+                break
+                
+        return expanded_formula
+
+{textwrap.indent(_kx_expr_to_z3_formula_method_code, '    ')}
+
+{textwrap.indent(_solve_initial_state_with_z3_method_code, '    ')}
 
 {textwrap.indent(_evaluate_expression_method_template, '    ')}
 
@@ -1176,7 +1337,7 @@ class {env_name_for_class}(gym.Env):
         # This means the robot must NOT be at the obstacle's position.
         # If it becomes <= 0, safety is violated.
         # Postcondition is a raw KeYmaera X string, parsed at runtime by _evaluate_expression
-        postcondition_satisfied = self._evaluate_expression('{postcondition_formula_py}', is_constraint=True)
+        postcondition_satisfied = self._evaluate_expression(f'{postcondition_formula_py}', is_constraint=True)
         if not postcondition_satisfied:
             reward -= 100.0 # Safety violation
             terminated = True
@@ -1351,7 +1512,8 @@ def _generate_reset_logic(variables: List[VariableDeclarationConfig], preconditi
     """
     Generates the initial state assignment logic for the reset method,
     leveraging the precondition and predicate definitions.
-    Prioritizes Z3 solver for initial state, falls back to heuristics if Z3 fails.
+    Prioritizes Z3 solver for initial state, and then attempts to perturb it randomly.
+    Falls back to heuristics if Z3 fails or perturbation is unsuccessful.
     """
     reset_code_lines = []
     
@@ -1371,83 +1533,97 @@ def _generate_reset_logic(variables: List[VariableDeclarationConfig], preconditi
 
     # --- Z3 Solver Integration ---
     # Attempt to find a satisfying initial state using Z3 solver
-    # This function is defined globally in this file and should be accessible.
-    solved_initial_state = _solve_initial_state_with_z3(
-        precondition.formula, definitions, variables
-    )
+    reset_code_lines.append(f"    z3_base_solution = self._solve_initial_state_with_z3(self._problem_config.precondition.formula)")
+    reset_code_lines.append(f"    final_initial_state = None")
 
-    if solved_initial_state:
-        reset_code_lines.append("    # Initial state solved by Z3 (overriding defaults):")
-        reset_code_lines.append(f"    # Solved initial state: {solved_initial_state}")
-        
-        print(f"Z3 solver found a satisfying initial state for the precondition: '{precondition.formula}'. Using this state for reset. Solved state: {solved_initial_state}")
-        
-        for var_name in [v.name for v in variables]:
-            if var_name in solved_initial_state:
-                reset_code_lines.append(f"    self.state['{var_name}'] = {solved_initial_state[var_name]}")
-        
-        # If Z3 solved for constants, ensure they are consistent with __init__ or update them if allowed.
-        # For now, we assume constants are primarily set in __init__ and Z3 is for state variables.
-        # This part of the code is executed in `reset()`, constants are typically set in `__init__`.
-        # So we only assign to `self.state`.
-        reset_code_lines.append("    self.last_failing_precondition_formula = None") # Z3 found a solution
+    reset_code_lines.append(f"    if z3_base_solution:")
+    reset_code_lines.append(f"        # Z3 found a base solution. Now, perturb it to get 'new' values.")
+    reset_code_lines.append(f"        # We will try to perturb it and verify, falling back to the base if perturbation fails.")
+    reset_code_lines.append(f"        perturbation_magnitude = 0.05 # Small perturbation range")
+    reset_code_lines.append(f"        num_perturbation_attempts = 5")
+    reset_code_lines.append(f"        perturbed_state_found = False")
+    reset_code_lines.append(f"        ")
+    reset_code_lines.append(f"        for _ in range(num_perturbation_attempts):")
+    reset_code_lines.append(f"            trial_state = z3_base_solution.copy()")
+    reset_code_lines.append(f"            for var_name in self._state_keys:") # Only perturb state variables
+    reset_code_lines.append(f"                if var_name in trial_state:") # Ensure it's a variable Z3 solved for
+    reset_code_lines.append(f"                    perturb = self.np_random.uniform(-perturbation_magnitude, perturbation_magnitude)")
+    reset_code_lines.append(f"                    trial_state[var_name] = trial_state[var_name] + perturb")
+    reset_code_lines.append(f"            ")
+    reset_code_lines.append(f"            # Verify the perturbed state against the precondition")
+    reset_code_lines.append(f"            # Temporarily apply trial state to self.state for precondition check")
+    reset_code_lines.append(f"            original_state_copy = self.state.copy()")
+    reset_code_lines.append(f"            for var_name, value in trial_state.items():")
+    reset_code_lines.append(f"                if var_name in self.state: # Only update state variables")
+    reset_code_lines.append(f"                    self.state[var_name] = value")
+    reset_code_lines.append(f"            ")
+    
+    # Escape the precondition formula for embedding into the f-string
+    precondition_formula_escaped_for_eval = precondition.formula.replace("'", "\\'").replace('\\', '\\\\').replace('\n', ' ')
+    
+    reset_code_lines.append(f"            if self._evaluate_expression('{precondition_formula_escaped_for_eval}', is_constraint=True):")
+    reset_code_lines.append(f"                final_initial_state = trial_state")
+    reset_code_lines.append(f"                perturbed_state_found = True")
+    reset_code_lines.append(f"                # Revert self.state before breaking, as final_initial_state will be applied later")
+    reset_code_lines.append(f"                self.state.update(original_state_copy)") 
+    reset_code_lines.append(f"                break")
+    reset_code_lines.append(f"            self.state.update(original_state_copy) # Revert self.state if perturbation failed")
+    reset_code_lines.append(f"        ")
+    reset_code_lines.append(f"        if not perturbed_state_found:")
+    reset_code_lines.append(f"            print(f\"Warning: Could not find a valid perturbed state after {{{{num_perturbation_attempts}}}} attempts. Using base Z3 solution.\")")
+    reset_code_lines.append(f"            final_initial_state = z3_base_solution # Fallback to the unperturbed Z3 solution")
+    reset_code_lines.append(f"        ")
+    reset_code_lines.append(f"        # Apply the chosen initial state (perturbed or base Z3 solution)")
+    reset_code_lines.append(f"        for var_name, value in final_initial_state.items():")
+    reset_code_lines.append(f"            if var_name in self.state:")
+    reset_code_lines.append(f"                self.state[var_name] = value")
+    reset_code_lines.append(f"        self.last_failing_precondition_formula = None")
+    reset_code_lines.append(f"        print(f\"Initial state set by Z3 (possibly perturbed): {{self.state}}\")")
+    reset_code_lines.append(f"    else:")
+    reset_code_lines.append(f"        # Z3 failed, fall back to heuristics (existing code).")
+    reset_code_lines.append(f"        print(f\"Warning: Z3 solver failed to find a satisfying initial state for the precondition: '{{self._problem_config.precondition.formula}}'. Falling back to heuristics. This may lead to the initial state not satisfying the precondition, which could cause immediate termination or warnings during reset. Consider revising the precondition or ensuring it is satisfiable with the given definitions.\")")
+
+    # 2. Parse the expanded precondition for explicit assignments (fallback if Z3 fails)
+    expanded_precondition_kx = _expand_formula(precondition.formula, definitions)
+    # The regex below looks for 'var = value' patterns.
+    assignment_matches = re.findall(r'(\b\w+\b)\s*=\s*([a-zA-Z0-9_.]+)', expanded_precondition_kx)
+    
+    reset_code_lines.append(f"        if not z3_base_solution and {len(assignment_matches)} > 0:") # Only run if Z3 failed AND there are assignments
+    reset_code_lines.append(f"            # Apply explicit assignments from the precondition (fallback)")
+    for var_name, value_str in assignment_matches:
+        if var_name in [v.name for v in variables]:
+            try:
+                float_val = float(value_str)
+                reset_code_lines.append(f"            self.state['{var_name}'] = {float_val}")
+            except ValueError:
+                reset_code_lines.append(f"            # Could not parse '{value_str}' as float for '{var_name}'. Will be checked by _evaluate_expression.")
+    reset_code_lines.append("")
+
+    # 3. Special handling for dx, dy (isWellformedDir) (fallback if Z3 fails)
+    if re.search(r'dx\^2\s*\+\s*dy\^2', expanded_precondition_kx):
+        reset_code_lines.append(f"        if not z3_base_solution:") # Only run if Z3 failed
+        reset_code_lines.append(f"            # Ensure dx, dy satisfy isWellformedDir (approximate unit vector) (fallback)")
+        reset_code_lines.append(f"            norm_sq = self.state['dx']**2 + self.state['dy']**2")
+        reset_code_lines.append(f"            ud_val = self.constants.get('Ud', 0.0) # Get Ud from constants, default to 0.0 if not found")
+        reset_code_lines.append(f"            # The actual isWellformedDir is '1-Ud <= dx^2+dy^2 & dx^2 + dy^2 <= 1+Ud'")
+        reset_code_lines.append(f"            # For fallback, we normalize to 1 if it's too far off, or if Ud is 0.")
+        reset_code_lines.append(f"            if not self._approx_eq(norm_sq, 1.0):") # Check if it's approximately 1
+        reset_code_lines.append(f"                norm = np.sqrt(norm_sq)")
+        reset_code_lines.append(f"                if norm > self.equality_tolerance: # Avoid division by zero with tolerance")
+        reset_code_lines.append(f"                    self.state['dx'] /= norm")
+        reset_code_lines.append(f"                    self.state['dy'] /= norm")
+        reset_code_lines.append(f"                else: # Default to (1,0) if too small")
+        reset_code_lines.append(f"                    self.state['dx'] = 1.0")
+        reset_code_lines.append(f"                    self.state['dy'] = 0.0")
         reset_code_lines.append("")
-    else:
-        reset_code_lines.append("    # Z3 could not find a satisfying initial state or encountered an error.")
-        reset_code_lines.append("    # Falling back to heuristic defaults and adjustments.")
-        
-        print(f"Warning: Z3 solver failed to find a satisfying initial state for the precondition: '{precondition.formula}'. Falling back to heuristics. This may lead to the initial state not satisfying the precondition, which could cause immediate termination or warnings during reset. Consider revising the precondition or ensuring it is satisfiable with the given definitions.")
-        # If Z3 failed, keep the heuristic adjustments for dx/dy and obstacle separation.
 
-        # 2. Parse the expanded precondition for explicit assignments (fallback if Z3 fails)
-        expanded_precondition_kx = _expand_formula(precondition.formula, definitions)
-        # We need to be careful here. If the precondition uses '=', it's an equality.
-        # The regex below looks for 'var = value' patterns.
-        # It must use the _approx_eq helper that is available in the generated environment.
-        assignment_matches = re.findall(r'(\b\w+\b)\s*=\s*([a-zA-Z0-9_.]+)', expanded_precondition_kx)
-        
-        if assignment_matches:
-            reset_code_lines.append("    # Apply explicit assignments from the precondition (fallback)")
-            for var_name, value_str in assignment_matches:
-                if var_name in [v.name for v in variables]:
-                    # Evaluate the value_str to a float if possible, otherwise use it as is
-                    try:
-                        float_val = float(value_str)
-                        reset_code_lines.append(f"    self.state['{var_name}'] = {float_val}")
-                    except ValueError:
-                        # If it's not a simple float, it might be an expression,
-                        # which will be evaluated later by _evaluate_expression in the verification step.
-                        # For now, we just assign the string.
-                        reset_code_lines.append(f"    # Could not parse '{value_str}' as float for '{var_name}'. Will be checked by _evaluate_expression.")
-                        # Or, we could try to evaluate it here using the same logic as _evaluate_expression
-                        # but that would duplicate code. Better to rely on the final verification.
-                        pass
-            reset_code_lines.append("")
-
-        # 3. Special handling for dx, dy (isWellformedDir) (fallback if Z3 fails)
-        # Note: 'dx^2+dy^2' equality check will now use approximate equality via _evaluate_expression
-        if re.search(r'dx\^2\s*\+\s*dy\^2', expanded_precondition_kx):
-            reset_code_lines.append(f"    # Ensure dx, dy satisfy isWellformedDir (approximate unit vector) (fallback)")
-            reset_code_lines.append(f"    norm_sq = self.state['dx']**2 + self.state['dy']**2")
-            reset_code_lines.append(f"    ud_val = self.constants.get('Ud', 0.0) # Get Ud from constants, default to 0.0 if not found")
-            reset_code_lines.append(f"    # The actual isWellformedDir is '1-Ud <= dx^2+dy^2 & dx^2 + dy^2 <= 1+Ud'")
-            reset_code_lines.append(f"    # For fallback, we normalize to 1 if it's too far off, or if Ud is 0.")
-            reset_code_lines.append(f"    if not self._approx_eq(norm_sq, 1.0):") # Check if it's approximately 1
-            reset_code_lines.append(f"        norm = np.sqrt(norm_sq)")
-            reset_code_lines.append(f"        if norm > self.equality_tolerance: # Avoid division by zero with tolerance")
-            reset_code_lines.append(f"            self.state['dx'] /= norm")
-            reset_code_lines.append(f"            self.state['dy'] /= norm")
-            reset_code_lines.append(f"        else: # Default to (1,0) if too small")
-            reset_code_lines.append(f"            self.state['dx'] = 1.0")
-            reset_code_lines.append(f"            self.state['dy'] = 0.0")
-            reset_code_lines.append("")
-
-        # 4. Special handling for (x-xo)^2 + (y-yo)^2 > 0 (fallback if Z3 fails)
-        if re.search(r'\(x\s*-\s*xo\)\^2\s*\+\s*\(y\s*-\s*yo\)\^2\s*>\s*0', expanded_precondition_kx):
-            reset_code_lines.append(f"    # Ensure robot and obstacle are not at the same position (fallback)")
-            reset_code_lines.append(f"    if self._approx_eq(self.state['x'], self.state['xo']) and self._approx_eq(self.state['y'], self.state['yo']):")
-            reset_code_lines.append(f"        self.state['x'] += 0.1 # Slightly perturb x to ensure separation")
-            reset_code_lines.append("")
+    # 4. Special handling for (x-xo)^2 + (y-yo)^2 > 0 (fallback if Z3 fails)
+    if re.search(r'\(x\s*-\s*xo\)\^2\s*\+\s*\(y\s*-\s*yo\)\^2\s*>\s*0', expanded_precondition_kx):
+        reset_code_lines.append(f"        if not z3_base_solution:") # Only run if Z3 failed
+        reset_code_lines.append(f"            # Ensure robot and obstacle are not at the same position (fallback)")
+        reset_code_lines.append(f"            if self._approx_eq(self.state['x'], self.state['xo']) and self._approx_eq(self.state['y'], self.state['yo']):")
+        reset_code_lines.append(f"                self.state['x'] += 0.1 # Slightly perturb x to ensure separation")
+        reset_code_lines.append("")
 
     # 5. Final verification (always runs)
     # The _evaluate_expression method expects KeYmaera X syntax (with '=' for equality).
@@ -1511,7 +1687,7 @@ if __name__ == "__main__":
     # Changed isWellformedDir to use equality for testing the fix
     isWellformedDir_pred = PredicateDefinitionConfig(name='isWellformedDir', parameters=[('Real', 'dx'), ('Real', 'dy')], body='dx^2 + dy^2 = 1')
     # FIX: Corrected bounds predicate to match 0 <= Ud < 1
-    bounds_pred = PredicateDefinitionConfig(name='bounds', parameters=[], body='A >= 0 & b > 0 & ep > 0 & V >= 0 & 0<=Ud & Ud < 1') # Use & for AND, added V, Ud bounds
+    bounds_pred = PredicateDefinitionConfig(name='bounds', parameters=[], body='A >= 0\n    & b > 0\n    & ep > 0\n    & V >= 0\n    & 0<=Ud\n    & Ud < 1') # Use & for AND, added V, Ud bounds
     initialState_pred = PredicateDefinitionConfig(name='initialState', parameters=[('Real', 'x'), ('Real', 'y'), ('Real', 'v'), ('Real', 'dx'), ('Real', 'dy'), ('Real', 'xo'), ('Real', 'yo')], body='v = 0 & (x-xo)^2 + (y-yo)^2 > 0 & isWellformedDir(dx,dy)') # Use &
     loopinv_pred = PredicateDefinitionConfig(name='loopinv', parameters=[('Real', 'x'), ('Real', 'y'), ('Real', 'v'), ('Real', 'dx'), ('Real', 'dy'), ('Real', 'xo'), ('Real', 'yo')], body='v >= 0 & isWellformedDir(dx,dy) & (abs(x-xo) > stopDist(v) | abs(y-yo) > stopDist(v))')
     assumptions_pred = PredicateDefinitionConfig(name='assumptions', parameters=[('Real', 'x'), ('Real', 'y'), ('Real', 'v'), ('Real', 'dx'), ('Real', 'dy'), ('Real', 'xo'), ('Real', 'yo')], body='bounds() & initialState(x,y,v,dx,dy,xo,yo)')
@@ -1657,10 +1833,19 @@ import numpy as np
 # Instantiate the environment
 env = {sanitized_example_env_name}()
 
+print("\\n--- First Reset ---")
 observation, info = env.reset()
 print("Initial observation:", observation)
-print("Observation Space:", env.observation_space)
-print("Action Space:", env.action_space)
+print("Initial state (info):", info)
+if env.last_failing_precondition_formula:
+    print(f"Precondition not fully satisfied: {{env.last_failing_precondition_formula}}")
+
+print("\\n--- Second Reset (should be different) ---")
+observation, info = env.reset()
+print("Initial observation:", observation)
+print("Initial state (info):", info)
+if env.last_failing_precondition_formula:
+    print(f"Precondition not fully satisfied: {{env.last_failing_precondition_formula}}")
 
 # Example 1: Choose the first branch of ChoiceLevel_0 (a := -b)
 print("\\nTaking 5 steps with action_branch_0 (a := -b):")
