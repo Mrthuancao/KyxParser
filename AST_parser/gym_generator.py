@@ -1639,10 +1639,17 @@ def _generate_reset_logic(variables: List[VariableDeclarationConfig], preconditi
     # The _evaluate_expression method expects KeYmaera X syntax (with '=' for equality).
     # It will internally convert '=' to self._approx_eq.
     final_precondition_for_eval = _expand_formula(precondition.formula, definitions)
+    # Remove extra spaces for cleaner embedding
+    normalized_string = " ".join(final_precondition_for_eval.split())
+    
+    print(f"Debug: Final expanded precondition for evaluation: '{final_precondition_for_eval}'") # Debug print to check the final precondition formula after expansion
     
     # Escape strings for embedding into the generated Python code's f-string
     original_precondition_formula_escaped = precondition.formula.replace("'", "\\'").replace('\\', '\\\\').replace('\n', ' ')
-    final_precondition_for_eval_escaped = final_precondition_for_eval.replace("'", "\\'").replace('\\', '\\\\').replace('\n', ' ')
+    final_precondition_for_eval_escaped = normalized_string.replace("'", "\\'").replace('\\', '\\\\')
+    
+    print(f"Debug: Escaped original precondition formula for embedding: '{original_precondition_formula_escaped}'") # Debug print to check escaping
+    print(f"Debug: Escaped final precondition for evaluation: '{final_precondition_for_eval_escaped}'") # Debug print to check escaping
 
     reset_code_lines.append(f"    # Verify the full precondition after setting initial states")
     reset_code_lines.append(f"    # Evaluate each conjunct of the precondition to identify specific failures")
