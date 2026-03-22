@@ -29,10 +29,17 @@ Definitions
   Bool assumptions(Real x, Real y, Real v, Real dx, Real dy, Real xo, Real yo) <->
     bounds() & initialState(x, y, v, dx, dy, xo, yo);
 
+  // reward x->x, y->y, v->if v>0 then 1/v else v
   Bool loopinv(Real x, Real y, Real v, Real dx, Real dy, Real xo, Real yo) <-> (
     v >= 0
+    & r != 0
     & isWellformedDir(dx, dy)
     & (abs(x-xo) > stopDist(v) | abs(y-yo) > stopDist(v))
+  );
+  
+
+  Bool ensure(Real x, Real y, Real xo, Real yo) <-> (
+    (x - xo)^2 + (y - yo)^2 > 0
   );
   
   /* control */
@@ -88,5 +95,5 @@ assumptions(x, y, v, dx, dy, xo, yo) ->
       stepFunc;@invariant(t>=0, isWellformedDir(dx, dy))
       }
     }*@invariant(loopinv(x, y, v, dx, dy, xo, yo))
-  ](x - xo)^2 + (y - yo)^2 > 0
+  ]ensure(x, y, xo, yo)
 End.

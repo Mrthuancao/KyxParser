@@ -1,0 +1,137 @@
+CSC 695 | MASTER'S RESEARCH | 1-4 quarter hours
+(Graduate)
+
+Students interested in a more in-depth study of a particular area will register for this course and work with a faculty member (not necessarily their academic advisor) on a research project. The work involved may include system development, empirical studies, or theoretical work. 4 credit hours of CSC 695 replaces one 500level elective course in student's degree program. This course can be taken for 1-4 credit hours for up 8 credit-hours. PREREQUISITE(S): Consent of research advisor. Independent study form required. Students must successfully complete the foundation courses prior to their first enrollment in CSC 695. (variable credit )
+
+Please provide below detailed information about the independent study course content, including, at a minimum, the course description, learning goals, and how the student work will be evaluated. Additional information may include a list of readings, homework, grading criteria, weekly timeline, and how frequently the student will meet with the faculty member.
+
+NOTES:
+
+If you are submitting a request for CSC or HCD 699 (Research) or CSC or HCD 701 (Full-Time Candidacy Continuation / Candidacy Dissertation Research) for an international student, your description should include a plan for at least two in-person meetings during the quarter.
+
+For IT 300 Research Experience, which carries EL credit, the course description must include the EL learning outcomes and an explanation of how they will be met by the described research activities. EL learning outcomes can be found here.
+
+For FILM 396, FILM 399, FILM 599: Note that only full-time faculty may supervise production-based Independent Study projects that involve DePaul production resources (equipment, space, etc.).
+Description:
+The increasing use of machine learning in systems development, particularly in safety-critical domains such as avionics and ground transportation means that guarantees about the characteristics of learned components must be a vital part of the development process. For example, we may want safety guarantees about the physical effects of a neural network steering a car, such as absence of collisions, and stability guarantees to tolerate unexpected disturbance. Formal modeling and verification are promising tools to establish such guarantees. The predictive nature of formal models makes them attractive as sources for reward functions in formal-assisted machine learning, but todays verification tools and machine learning tools are largely disconnected. Existing work on [Provably Safe Neural Network Controllers](https://arxiv.org/abs/2402.10998) attempts to analyze learned systems with an independently developed formal model. In this project, we propose to reverse this process and use formal models as a starting point for generating reward functions:
+
+Develop a syntactic conventions to identify reward functions in formal models
+Safety rewards
+Progress rewards
+Stability rewards
+Reward shaping
+Implement a tool to generate reward functions from analytic models
+Concrete implementation efforts related to these tasks will use Python and [Gymnasium](https://gymnasium.farama.org/) for their popularity in reinforcement learning. The project will also base on the Gymnasium Synthesis library . The anticipated outcome of this project is a code generator that translates rewards in formal models into reward functions in Python/Gymnasium.
+
+We propose to extend an existing formal programming language (differential dynamic logic) with syntactic conventions in comments to enable generating reward functions. For example, in previous work we identified elements of a formal model with their connection to reinforcement learning as follows:
+
+ 
+
+```java
+
+// @Learn
+
+def controlFunc ::= {
+
+u := *;
+
+}
+
+ 
+
+// @Environment
+
+def stepFunc ::= { x’=v, v’=a }
+
+```
+
+ 
+
+We propose
+
+ 
+
+```java
+
+// @Ensure
+
+def terminate(Real x, Real o) <-> x != o;
+
+ 
+
+// @Reach
+
+def progressReward(Real x, Real v, Real n, Real g) := x+n*v + v^2/2*b >= g
+
+ 
+
+// @Avoid
+
+def safetyReward(Real v) := v;
+
+ 
+
+// @Shape
+ 
+def safetyShape(Real x) := if x>=0 then 1/x else x;
+
+```
+
+We then use the syntactic conventions in the programming language to generate Python code; for example, `@Ensure` defines an early termination condition for learning episodes; `@Reach` tells us what goal to achieve, `@Avoid` defines safety conditions that must be satisfied by the learned agent, `@Shape` allows us to adjust the functional shape of a progress or safety reward (e.g., to prefer being close to the safety boundary when safe, such as staying close to the speed limit). We expect to be able to synthesize reach-avoid rewards from stability and attractivity proofs, which requires extending the formal runtime monitoring technique ModelPlex to the shapes of stability and attractivity proofs.
+
+The anticipated outcome of this project are syntactic conventions for formal models, and a software tool to turn such formal models into Python code for the Gymnasium reinforcement learning library.
+
+Literature
+
+1. [ModelPlex](https://facweb.cdm.depaul.edu/smitsch/pdf/modelplex-long.pdf)
+
+2. [Reward Shaping](https://facweb.cdm.depaul.edu/smitsch/pdf/nfm23-rewardshaping.pdf)
+
+3. [Python Code Synthesis from Formal Models](https://arxiv.org/pdf/2305.08812)
+
+4. [Stability Proofs](https://arxiv.org/pdf/2111.01928.pdf)
+
+Student Responsibilities
+
+Implement a software tool to generate Gymnasium environments from formal models
+Keep a research journal on Overleaf (structure of a technical report)
+Learning Outcome
+
+Gain experience with formal specification of algorithms (transpiler) between formal modeling language and concrete programming language (Python)
+Gain experience with writing a transpiler in Python
+Gain experience with reinforcement learning in Python
+Timeline/Planning
+
+The project is ambitious and will require the student become familiar with formal modeling languages and reinforcement learning in the Gymnasium environment. The project plan is below:
+
+The project builds on the student's experience gained in a GRAP project: the project developed a transpiler for differential equations and control code to Python/Gymnasium. The goal of the present project is to extend the transpiler to reward function synthesis.
+
+Week 1-2: extend software tool to consider safety reward from formal model in reward functions in Python
+Week 3: extend language with reward scaling capabilities
+Week 4-6: extend software tool to consider progress reward from liveness proofs in reward functions in Python
+Week 7-9: extend software tool to consider stability reward from stability proofs in reward functions in Python
+Week 10: polish report
+
+---
+
+Based on the detailed research plan, the specific literature referenced (VerSAILLE, Mosaic, ModelPlex), and the technical focus on bridging Differential Dynamic Logic ($dL$) with Reinforcement Learning (Gymnasium), here is a draft for your research abstract.
+
+Title Idea:
+Bridging Formal Verification and Reinforcement Learning: Synthesizing Provably Informed Reward Functions from Differential Dynamic Logic
+
+Abstract
+The integration of Neural Network (NN) controllers into safety-critical Cyber-Physical Systems (CPS) requires rigorous guarantees that traditional "black-box" machine learning methods cannot provide. While recent advancements like VerSAILLE and Mosaic have enabled the verification of NN controllers against formal specifications in Differential Dynamic Logic ($dL$), a significant disconnect remains: formal models and reinforcement learning (RL) environments are typically developed in isolation. This research proposes a novel "formal-first" approach to RL by reversing the verification pipeline. Instead of verifying a pre-trained agent, we propose to synthesize the RL training environment—specifically the reward functions and termination conditions—directly from $dL$ formal models.
+
+We introduce a set of syntactic conventions for $dL$ that allow developers to annotate formal specifications with RL-specific metadata, including safety constraints (@Avoid), liveness goals (@Reach), and episode termination logic (@Ensure). Building upon the Gymnasium Synthesis library, we develop a transpiler that translates these annotated formal models into executable Python code for the Gymnasium RL framework. A key contribution of this work is the extension of the ModelPlex runtime monitoring technique to synthesize "reward shaping" functions (@Shape) from stability and attractivity proofs. This ensures that the learned agent is not only incentivized to reach its goal but is also guided by the underlying mathematical structure of the safety proof. The anticipated outcome is a software toolchain that automates the creation of provably informed RL environments, reducing the gap between formal methods and autonomous systems development.
+
+Key Elements Included:
+The Problem: The gap between formal verification (which happens after training) and RL training (which often lacks formal rigor).
+The Solution: A "transpiler" that turns $dL$ models into Gymnasium environments.
+The Innovation: Using annotations like @Reach, @Avoid, and @Shape to automate reward engineering.
+Technical Basis: Mentions ModelPlex, Differential Dynamic Logic, and Gymnasium, which were the core components of your provided text.
+Outcome: A toolchain that makes RL environments "provably informed" by the safety proofs.
+Tips for your CSC 695 Submission:
+Since this is for a Master's Research course, ensure that your Learning Goals in the application emphasize the "Transpiler" aspect. You are essentially building a bridge between a high-level logic ($dL$) and a low-level implementation (Python/Gymnasium), which is a classic and highly-regarded computer science challenge.
+
+---
+

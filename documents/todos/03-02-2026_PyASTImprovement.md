@@ -1,0 +1,2 @@
+Predicate need to divide constraint into Equality, Inequality, ... for initial state generation
+AST need to take into account which variable is defined in definition and is constant and in var where it is mutable 
