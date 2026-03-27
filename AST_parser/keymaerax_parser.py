@@ -206,117 +206,186 @@ class KeYmaeraXParser:
         logging.debug(f"Created DefinitionsBlock ASTNode.")
 
         # Use a mutable list of characters for efficient replacement of processed blocks.
-        mutable_definitions_block = list(definitions_block)
+        # This allows us to "remove" parsed content by replacing it with spaces,
+        # which regexes will then naturally skip over.
+        mutable_definitions_block_chars = list(definitions_block)
 
-        # --- 1. Extract Hybrid Programs (HP) first ---
-
-        # Pattern to find the HP header up to the opening brace '{'
-        HP_HEADER_PATTERN = re.compile(r'(?P<metadata>//\s*@.*?\n)?\s*HP\s+(?P<name>\w+)\s*::=\s*\{', re.DOTALL)
+        # Pre-compile patterns for efficiency
+        # HP_START_PATTERN: Matches the header of an HP definition, including metadata.
+        # Uses `[^\n]*` for single-line comments and `*` for multiple metadata lines.
+        HP_START_PATTERN = re.compile(
+            r'(?P<metadata>(?://\s*@[^\n]*\n)*)?' # Capture all leading comment lines for HP metadata
+            r'\s*HP\s+(?P<name>\w+)\s*::=\s*\{',
+            re.DOTALL # Allows '.' to match newlines for the overall pattern, though metadata is line-limited
+        )
         
-        logging.debug("Starting HP extraction.")
-        current_search_pos = 0
-        while current_search_pos < len(mutable_definitions_block):
-            # Search for the next HP header from the current position
-            search_string = "".join(mutable_definitions_block[current_search_pos:])
-            match = HP_HEADER_PATTERN.search(search_string)
+        # DEF_FULL_PATTERN: Matches a complete Real or Bool definition, including metadata,
+        # parameters, value, and the terminating semicolon.
+        # Uses `[^\n]*` for single-line comments.
+        DEF_FULL_PATTERN = re.compile(
+            r'(?P<raw_comments>(?:^[ \t]*//[^\n]*\n)*)' # Capture all leading comment lines (strictly single-line)
+            r'[ \t]*(?P<type>Real|Bool)\s+(?P<name>\w+)' # Type and Name
+            r'(?:\s*\((?P<params>.*?)\))?' # Optional parameters (can span multiple lines)
+            r'(?:\s*(?:<->|=)\s*(?P<value>.*?))?' # Optional value/body (can span multiple lines)
+            r';', # Terminating semicolon
+            re.DOTALL | re.MULTILINE # DOTALL for multi-line params/value, MULTILINE for '^' to match start of line
+        )
 
-            if match:
-                hp_header_start_idx = current_search_pos + match.start()
-                open_brace_idx = current_search_pos + match.end() - 1
-                hp_name = match.group('name')
-                raw_meta = match.group('metadata')
-                metadata_dict = self._parse_metadata_string(raw_meta)
+        # current_search_global_offset tracks the position in the original `definitions_block`
+        # (and thus in `mutable_definitions_block_chars`) where the next search should begin.
+        current_search_global_offset = 0
+
+        # Loop until no more definitions can be found
+        while True:
+            # Recreate the string from the mutable list for each search.
+            # Regex `search` will naturally skip over the ' ' characters from previous replacements.
+            current_definitions_text_for_search = "".join(mutable_definitions_block_chars)
+            
+            # Search for the next HP header and Real/Bool definition from the current offset
+            hp_match = HP_START_PATTERN.search(current_definitions_text_for_search, current_search_global_offset)
+            def_match = DEF_FULL_PATTERN.search(current_definitions_text_for_search, current_search_global_offset)
+
+            # Determine which definition type appears next (or if none are left)
+            next_hp_idx = hp_match.start() if hp_match else float('inf')
+            next_def_idx = def_match.start() if def_match else float('inf')
+
+            if next_hp_idx == float('inf') and next_def_idx == float('inf'):
+                # No more definitions of either type found in the remaining text
+                logging.debug("No more definitions found. Exiting parsing loop.")
+                break # Exit the loop
+
+            if next_hp_idx < next_def_idx:
+                # Process Hybrid Program (HP) because its header appeared first
+                hp_header_start_idx = hp_match.start()
+                open_brace_idx = hp_match.end() - 1 # The '{' is at the end of the HP header match
+                hp_name = hp_match.group('name')
+                raw_meta = hp_match.group('metadata')
+                metadata_dict = self._parse_metadata_string(raw_meta) if raw_meta else {}
                 logging.debug(f"Found HP header for '{hp_name}' at global index {hp_header_start_idx}.")
 
-                full_current_block_string = "".join(mutable_definitions_block)
-
+                # Use the full current string for brace matching
                 closing_brace_idx = self._find_matching_brace_span(
-                    full_current_block_string,
+                    current_definitions_text_for_search,
                     open_brace_idx
                 )
 
                 if closing_brace_idx is not None:
-                    hp_body_raw = "".join(mutable_definitions_block[open_brace_idx : closing_brace_idx + 1]).strip()
+                    hp_body_raw = current_definitions_text_for_search[open_brace_idx : closing_brace_idx + 1].strip()
                     logging.debug(f"Extracted HP '{hp_name}' body (raw): '{hp_body_raw[:100]}...'")
 
                     full_hp_block_end_idx = closing_brace_idx + 1
-
-                    if full_hp_block_end_idx + 1 < len(mutable_definitions_block) and \
-                       "".join(mutable_definitions_block[full_hp_block_end_idx : full_hp_block_end_idx + 2]).strip() == ';;':
-                        full_hp_block_end_idx += 2
-                    elif full_hp_block_end_idx < len(mutable_definitions_block) and \
-                         mutable_definitions_block[full_hp_block_end_idx] == ';':
-                        full_hp_block_end_idx += 1
-
+                    
+                    # Check for optional HP terminators (;; or ;) immediately after the closing brace
+                    # We need to find the *absolute* index of these terminators from the start of the full string
+                    temp_str_after_brace = current_definitions_text_for_search[full_hp_block_end_idx:].lstrip()
+                    if temp_str_after_brace.startswith(';;'):
+                        terminator_idx = current_definitions_text_for_search.find(';;', full_hp_block_end_idx)
+                        if terminator_idx != -1:
+                            full_hp_block_end_idx = terminator_idx + 2
+                    elif temp_str_after_brace.startswith(';'):
+                        terminator_idx = current_definitions_text_for_search.find(';', full_hp_block_end_idx)
+                        if terminator_idx != -1:
+                            full_hp_block_end_idx = terminator_idx + 1
+                    
                     hp_node = HybridProgram(hp_name, hp_body_raw)
-                    hp_node.metadata = metadata_dict # FIX: Attach metadata to HP node
+                    hp_node.metadata = metadata_dict
                     defs_node.add_child(hp_node)
                     logging.debug(f"Added HybridProgram ASTNode for '{hp_name}' to DefinitionsBlock.")
 
-                    # --- New: Parse HP body directly here ---
+                    # Parse HP body structure if specific functions are defined
                     body_content = hp_body_raw.strip()
                     if hp_name == 'controlFunc':
                         self._parse_program_fragment(body_content, hp_node)
                         logging.debug(f"Parsed controlFunc structure for '{hp_name}'.")
                     elif hp_name == 'stepFunc':
                         self._parse_step_func_structure(hp_body_raw, hp_node)
-                    # --- End HP body parsing ---
-
+                    
+                    # Replace the processed HP block with spaces in the mutable character list
                     for i in range(hp_header_start_idx, full_hp_block_end_idx):
-                        if i < len(mutable_definitions_block):
-                            mutable_definitions_block[i] = ' '
-
-                    current_search_pos = full_hp_block_end_idx
+                        if i < len(mutable_definitions_block_chars):
+                            mutable_definitions_block_chars[i] = ' '
+                    
+                    # Advance search position past the *original* end of the processed block
+                    current_search_global_offset = full_hp_block_end_idx
                 else:
                     logging.warning(f"Unbalanced braces for HP '{hp_name}' starting at index {open_brace_idx}. Skipping this block.")
-                    current_search_pos = open_brace_idx + 1
+                    # Advance search past the problematic open brace to avoid an infinite loop
+                    current_search_global_offset = open_brace_idx + 1
             else:
-                logging.debug("No more HP definitions found in current segment. Breaking HP extraction loop.")
-                break
+                # Process Real/Bool Definition because its header appeared first
+                def_start_idx = def_match.start()
+                d_type = def_match.group('type')
+                d_name = def_match.group('name')
+                d_params = def_match.group('params')
+                d_val = (def_match.group('value') or "").strip()
+                raw_comments = def_match.group('raw_comments') or ""
 
-        # 2. Parse Real/Bool Definitions with Metadata
-        remaining_text = "".join(mutable_definitions_block)
-        # Regex to capture: Optional Metadata + Type + Name + Optional Params + Optional Value
-        def_regex = re.compile(
-            r'(?P<raw_comments>(?:^[ \t]*//.*?\n)*)' # Capture all leading comment lines
-            r'[ \t]*(?P<type>Real|Bool)\s+(?P<name>\w+)' # Type and Name
-            r'(?:\s*\((?P<params>.*?)\))?' # Optional parameters
-            r'(?:\s*(?:<->|=)\s*(?P<value>.*?))?' # Optional value/body
-            r';', # Terminating semicolon
-            re.DOTALL | re.MULTILINE
-        )
+                m_data = self._parse_metadata_string(raw_comments)
 
-        for match in def_regex.finditer(remaining_text):
-            d_type = match.group('type')
-            d_name = match.group('name')
-            d_params = match.group('params')
-            d_val = (match.group('value') or "").strip()
-            raw_comments = match.group('raw_comments') or ""
+                if d_type == "Bool" and d_val.startswith('(') and d_val.endswith(')'):
+                    d_val = d_val[1:-1].strip()
 
-            # Extract metadata specifically from the captured comments
-            m_data = self._parse_metadata_string(raw_comments)
+                def_node = Definition(d_name, d_type, value=d_val)
+                def_node.metadata = m_data
+                
+                if d_params:
+                    param_list = [p.strip() for p in self.split_by_operator_outside_braces(d_params, ',')]
+                    def_node.add_child(ASTNode("Parameters", ", ".join(param_list)))
+                
+                defs_node.add_child(def_node)
+                logging.debug(f"Added Definition ASTNode for '{d_name}' (Type: {d_type}) to DefinitionsBlock.")
 
-            if d_type == "Bool" and d_val.startswith('(') and d_val.endswith(')'):
-                d_val = d_val[1:-1].strip()
+                # Replace the processed definition block with spaces
+                def_end_idx = def_match.end()
+                for i in range(def_start_idx, def_end_idx):
+                    if i < len(mutable_definitions_block_chars):
+                        mutable_definitions_block_chars[i] = ' '
+                
+                # Advance search position past the end of the processed block
+                current_search_global_offset = def_end_idx
 
-            def_node = Definition(d_name, d_type, value=d_val)
-            def_node.metadata = m_data
-            
-            if d_params:
-                param_list = [p.strip() for p in self.split_by_operator_outside_braces(d_params, ',')]
-                def_node.add_child(ASTNode("Parameters", ", ".join(param_list)))
-            
-            defs_node.add_child(def_node)
+        # After the loop, check for any unparsed content (non-space characters)
+        remaining_text_after_loop = "".join(mutable_definitions_block_chars).strip()
+        if remaining_text_after_loop:
+            logging.warning(f"Unparsed content remaining in Definitions block: '{remaining_text_after_loop[:200]}...'")
+
         
     def _parse_metadata_string(self, raw_metadata: Optional[str]) -> dict:
-        """Helper to convert //@ key=value lines into a dictionary."""
+        """
+        Converts RL-Annotation lines into a dictionary.
+        Supports: // @category: key1=val1, key2={complex_expr}
+        """
         metadata = {}
-        if not raw_metadata: return metadata
+        if not raw_metadata: 
+            return metadata
         
-        # Find all patterns like @key="value" or @key=value
-        matches = re.findall(r'@(\w+)\s*=\s*["\']?(.*?)["\']?(?:\n|$| )', raw_metadata)
-        for key, val in matches:
-            metadata[key.strip()] = val.strip()
+        # 1. Extract the category (safety, progress, stability)
+        # This looks for the word immediately following the '@' and before the ':'
+        category_match = re.search(r'@(\w+):', raw_metadata)
+        if category_match:
+            metadata['type'] = category_match.group(1).strip()
+
+        # 2. Extract key-value pairs
+        # Logic:
+        # (\w+)          -> The key (e.g., reward, penalty, shape)
+        # \s*=\s*        -> The equals sign with optional whitespace
+        # (              -> Start value capture group
+        #   \{.*?\}      -> Option A: Anything inside curly braces (non-greedy)
+        #   |            -> OR
+        #   [^,\n]+      -> Option B: Anything that isn't a comma or newline
+        # )              -> End value capture group
+        kv_pattern = r'(\w+)\s*=\s*({.*?}|[^,\n]+)'
+        
+        kv_matches = re.findall(kv_pattern, raw_metadata, re.DOTALL)
+        
+        for key, val in kv_matches:
+            clean_val = val.strip()
+            # Remove surrounding curly braces if they exist for the final dict
+            if clean_val.startswith('{') and clean_val.endswith('}'):
+                clean_val = clean_val[1:-1].strip()
+            
+            metadata[key.strip()] = clean_val
+
         return metadata
     
     
