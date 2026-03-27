@@ -22,17 +22,22 @@ class GeneratedKXEnv(gym.Env):
                 ConstantDefinitionConfig(
                     name='ep',
                     type='Real',
-                    value=None
+                    value=''
+                ),
+                ConstantDefinitionConfig(
+                    name='b',
+                    type='Real',
+                    value=''
+                ),
+                ConstantDefinitionConfig(
+                    name='A',
+                    type='Real',
+                    value=''
                 ),
                 ConstantDefinitionConfig(
                     name='W',
                     type='Real',
-                    value=None
-                ),
-                ConstantDefinitionConfig(
-                    name='V',
-                    type='Real',
-                    value=None
+                    value=''
                 )
             ],
             functions=[
@@ -42,7 +47,7 @@ class GeneratedKXEnv(gym.Env):
                     parameters=[
     ('Real', 'v')
 ],
-                    body='0'
+                    body='v^2 / (2*b)'
                 ),
                 FunctionDefinitionConfig(
                     name='accelComp',
@@ -50,7 +55,7 @@ class GeneratedKXEnv(gym.Env):
                     parameters=[
     ('Real', 'v')
 ],
-                    body='ep*(v+V)'
+                    body='((A/b + 1) * (A/2 * ep^2 + ep*v))'
                 ),
                 FunctionDefinitionConfig(
                     name='admissibleSeparation',
@@ -61,60 +66,7 @@ class GeneratedKXEnv(gym.Env):
                     body='stopDist(v) + accelComp(v)'
                 )
             ],
-            predicates=[
-                PredicateDefinitionConfig(
-                    name='isWellformedDir',
-                    parameters=[
-    ('Real', 'dx'),
-    ('Real', 'dy')
-],
-                    body='dx^2 + dy^2 = 1'
-                ),
-                PredicateDefinitionConfig(
-                    name='bounds',
-                    parameters=[],
-                    body='ep > 0                                                                                                          \n    & V >= 0'
-                ),
-                PredicateDefinitionConfig(
-                    name='initialState',
-                    parameters=[
-    ('Real', 'x'),
-    ('Real', 'y'),
-    ('Real', 'v'),
-    ('Real', 'dx'),
-    ('Real', 'dy'),
-    ('Real', 'xo'),
-    ('Real', 'yo')
-],
-                    body='v = 0\n    & (x-xo)^2 + (y-yo)^2 > 0\n    & isWellformedDir(dx,dy)'
-                ),
-                PredicateDefinitionConfig(
-                    name='assumptions',
-                    parameters=[
-    ('Real', 'x'),
-    ('Real', 'y'),
-    ('Real', 'v'),
-    ('Real', 'dx'),
-    ('Real', 'dy'),
-    ('Real', 'xo'),
-    ('Real', 'yo')
-],
-                    body='bounds() & initialState(x,y,v,dx,dy,xo,yo)'
-                ),
-                PredicateDefinitionConfig(
-                    name='loopinv',
-                    parameters=[
-    ('Real', 'x'),
-    ('Real', 'y'),
-    ('Real', 'v'),
-    ('Real', 'dx'),
-    ('Real', 'dy'),
-    ('Real', 'xo'),
-    ('Real', 'yo')
-],
-                    body='v >= 0\n    & isWellformedDir(dx,dy)\n    & (v>0 -> abs(x-xo) > stopDist(v) | abs(y-yo) > stopDist(v))'
-                )
-            ],
+            predicates=[],
             hybrid_programs=[
                 ControlFuncConfig(
                     name='controlFunc',
@@ -123,62 +75,53 @@ class GeneratedKXEnv(gym.Env):
                         choices=[
                             SequenceActionConfig(
                                 actions=[
-                                    NondeterministicAssignmentActionConfig(
-                                        variable='vxo'
-                                    ),
-                                    NondeterministicAssignmentActionConfig(
-                                        variable='vyo'
-                                    ),
-                                    ActionConstraintConfig(
-                                        formula='vxo^2+vyo^2<=V^2'
+                                    DeterministicAssignmentActionConfig(
+                                        variable='a',
+                                        value='-b'
                                     )
                                 ]
                             ),
-                            ChoiceActionConfig(
-                                level_name='ChoiceLevel_1',
-                                choices=[
-                                    SequenceActionConfig(
-                                        actions=[
-                                            DeterministicAssignmentActionConfig(
-                                                variable='v',
-                                                value='0'
-                                            ),
-                                            DeterministicAssignmentActionConfig(
-                                                variable='w',
-                                                value='0'
-                                            )
-                                        ]
+                            SequenceActionConfig(
+                                actions=[
+                                    ActionConstraintConfig(
+                                        formula='v = 0'
                                     ),
-                                    SequenceActionConfig(
-                                        actions=[
-                                            NondeterministicAssignmentActionConfig(
-                                                variable='v'
-                                            ),
-                                            ActionConstraintConfig(
-                                                formula='0<=v'
-                                            ),
-                                            NondeterministicAssignmentActionConfig(
-                                                variable='w'
-                                            ),
-                                            ActionConstraintConfig(
-                                                formula='-W<=w & w<=W'
-                                            ),
-                                            NondeterministicAssignmentActionConfig(
-                                                variable='r'
-                                            ),
-                                            NondeterministicAssignmentActionConfig(
-                                                variable='xo'
-                                            ),
-                                            NondeterministicAssignmentActionConfig(
-                                                variable='yo'
-                                            ),
-                                            ActionConstraintConfig(
-                                                formula='r!=0 & r*w = v'
-                                            ),
-                                            ActionConstraintConfig(
-                                                formula=' abs(x-xo) > admissibleSeparation(v)\n        | abs(y-yo) > admissibleSeparation(v)'
-                                            )
-                                        ]
+                                    DeterministicAssignmentActionConfig(
+                                        variable='a',
+                                        value='0'
+                                    ),
+                                    DeterministicAssignmentActionConfig(
+                                        variable='w',
+                                        value='0'
+                                    )
+                                ]
+                            ),
+                            SequenceActionConfig(
+                                actions=[
+                                    DeterministicAssignmentActionConfig(
+                                        variable='a',
+                                        value='A'
+                                    ),
+                                    NondeterministicAssignmentActionConfig(
+                                        variable='w'
+                                    ),
+                                    ActionConstraintConfig(
+                                        formula='-W<=w & w<=W'
+                                    ),
+                                    NondeterministicAssignmentActionConfig(
+                                        variable='r'
+                                    ),
+                                    NondeterministicAssignmentActionConfig(
+                                        variable='xo'
+                                    ),
+                                    NondeterministicAssignmentActionConfig(
+                                        variable='yo'
+                                    ),
+                                    ActionConstraintConfig(
+                                        formula='r!=0 & r*w = v'
+                                    ),
+                                    ActionConstraintConfig(
+                                        formula='abs(x-xo) > admissibleSeparation(v)\n        | abs(y-yo) > admissibleSeparation(v)'
                                     )
                                 ]
                             )
@@ -197,6 +140,10 @@ class GeneratedKXEnv(gym.Env):
                             equation='v * dy'
                         ),
                         ODEConfig(
+                            variable='v',
+                            equation='a'
+                        ),
+                        ODEConfig(
                             variable='dx',
                             equation='-w * dy'
                         ),
@@ -205,12 +152,8 @@ class GeneratedKXEnv(gym.Env):
                             equation='w * dx'
                         ),
                         ODEConfig(
-                            variable='xo',
-                            equation='vxo'
-                        ),
-                        ODEConfig(
-                            variable='yo',
-                            equation='vyo'
+                            variable='w',
+                            equation='a/r'
                         ),
                         ODEConfig(
                             variable='t',
@@ -267,14 +210,6 @@ class GeneratedKXEnv(gym.Env):
                     type='Real'
                 ),
                 VariableDeclarationConfig(
-                    name='vxo',
-                    type='Real'
-                ),
-                VariableDeclarationConfig(
-                    name='vyo',
-                    type='Real'
-                ),
-                VariableDeclarationConfig(
                     name='t',
                     type='Real'
                 )
@@ -286,7 +221,7 @@ class GeneratedKXEnv(gym.Env):
             ),
             loop_execution=LoopExecutionConfig(
                 iterations='inf',
-                loop_invariant_formula='loopinv(x, y, v, dx, dy, xo, yo)',
+                loop_invariant_formula='loopinv(x, y, v, dx, dy, xo, yo, r)',
                 loop_body=SequenceActionConfig(
                     actions=[
                         SequenceActionConfig(
@@ -302,13 +237,13 @@ class GeneratedKXEnv(gym.Env):
                         ),
                         HybridProgramStepConfig(
                             hp_name='stepFunc',
-                            invariant_formula="t>=0, isWellformedDir(dx,dy),\n          (-t*V <= xo - old(xo) & xo - old(xo) <= t*V),\n          (-t*V <= yo - old(yo) & yo - old(yo) <= t*V),\n          (x'=0*dx -> x = old(x)),\n          (x'=0*dx -> y = old(y)),\n          (x'=v*dx -> -t * v <= x - old(x) & x - old(x) <= t * v),\n          (x'=v*dx -> -t * v <= y - old(y) & y - old(y) <= t * v)"
+                            invariant_formula='t>=0, isWellformedDir(dx, dy)'
                         )
                     ]
                 )
             ),
             postcondition=PostconditionConfig(
-                formula='(v>0 -> (x - xo)^2 + (y - yo)^2 > 0)'
+                formula='ensure(x, y, xo, yo)'
             )
         )
 
@@ -321,25 +256,22 @@ class GeneratedKXEnv(gym.Env):
         self.predicates = {}
 
         # Constants
-        self.constants['ep'] = 0.0
-        self.constants['W'] = 0.0
-        self.constants['V'] = 0.0
+        self.constants['ep'] = 
+        self.constants['b'] = 
+        self.constants['A'] = 
+        self.constants['W'] = 
 
         # Functions (lambdas for easy evaluation)
-        self.functions['stopDist'] = lambda v: 0
-        self.functions['accelComp'] = lambda v: self.constants['ep']*(v+self.constants['V'])
+        self.functions['stopDist'] = lambda v: v**2 / (2*self.constants['b'])
+        self.functions['accelComp'] = lambda v: (self.constants['A']/self.constants['b'] + 1) * (self.constants['A']/2 * self.constants['ep']**2 + self.constants['ep']*v)
         self.functions['admissibleSeparation'] = lambda v: self.functions['stopDist'](v) + self.functions['accelComp'](v)
 
         # Predicates (lambdas for easy evaluation)
-        self.predicates['isWellformedDir'] = lambda dx, dy: self._approx_eq(dx**2 + dy**2, 1)
-        self.predicates['bounds'] = lambda : ((self.constants['ep']) > (0)) and ((self.constants['V']) >= (0))
-        self.predicates['initialState'] = lambda x, y, v, dx, dy, xo, yo: (self._approx_eq(v, 0)) and ((((x-xo)**2 + (y-yo)**2) > (0)) and (self.predicates['isWellformedDir'](dx,dy)))
-        self.predicates['assumptions'] = lambda x, y, v, dx, dy, xo, yo: (self.predicates['bounds']()) and (self.predicates['initialState'](x,y,v,dx,dy,xo,yo))
-        self.predicates['loopinv'] = lambda x, y, v, dx, dy, xo, yo: ((not (((v) >= (0)) and ((self.predicates['isWellformedDir'](dx,dy)) and ((v>0)))) or (((np.abs(x-xo)) > (self.functions['stopDist'](v))) or ((np.abs(y-yo)) > (self.functions['stopDist'](v))))))
+
 
         # --- State Variables ---
         # Mapping of state variable names to their index in the observation array
-        self._state_keys = ['x', 'y', 'v', 'a', 'dx', 'dy', 'w', 'r', 'xo', 'yo', 'vxo', 'vyo', 't']
+        self._state_keys = ['x', 'y', 'v', 'a', 'dx', 'dy', 'w', 'r', 'xo', 'yo', 't']
         # Current state values (dictionary for easy access by name)
         # Initialize to 0.0 as placeholders; these will be overwritten by reset()
         self.state = {key: 0.0 for key in self._state_keys} 
@@ -356,78 +288,65 @@ class GeneratedKXEnv(gym.Env):
         # --- Action Space (from controlFunc) ---
         # The action space is a Dict to handle choices and nondeterministic assignments.
         self.action_space = spaces.Dict({
-                'choice_ChoiceLevel_0': spaces.Discrete(2),
-                'assign_vxo': spaces.Box(low=-np.inf, high=np.inf, shape=(), dtype=np.float32),
-                'assign_vyo': spaces.Box(low=-np.inf, high=np.inf, shape=(), dtype=np.float32),
-                'choice_ChoiceLevel_1': spaces.Discrete(2),
-                'assign_v': spaces.Box(low=-np.inf, high=np.inf, shape=(), dtype=np.float32),
+                'choice_ChoiceLevel_0': spaces.Discrete(3),
                 'assign_w': spaces.Box(low=-np.inf, high=np.inf, shape=(), dtype=np.float32),
                 'assign_r': spaces.Box(low=-np.inf, high=np.inf, shape=(), dtype=np.float32),
                 'assign_xo': spaces.Box(low=-np.inf, high=np.inf, shape=(), dtype=np.float32),
                 'assign_yo': spaces.Box(low=-np.inf, high=np.inf, shape=(), dtype=np.float32),
                 })
-        self._action_space_keys = ['choice_ChoiceLevel_0', 'assign_vxo', 'assign_vyo', 'choice_ChoiceLevel_1', 'assign_v', 'assign_w', 'assign_r', 'assign_xo', 'assign_yo']
+        self._action_space_keys = ['choice_ChoiceLevel_0', 'assign_w', 'assign_r', 'assign_xo', 'assign_yo']
         self._control_func_action_config = ChoiceActionConfig(
                 level_name='ChoiceLevel_0',
                 choices=[
                     SequenceActionConfig(
                         actions=[
-                            NondeterministicAssignmentActionConfig(
-                                variable='vxo'
-                            ),
-                            NondeterministicAssignmentActionConfig(
-                                variable='vyo'
-                            ),
-                            ActionConstraintConfig(
-                                formula='vxo^2+vyo^2<=V^2'
+                            DeterministicAssignmentActionConfig(
+                                variable='a',
+                                value='-b'
                             )
                         ]
                     ),
-                    ChoiceActionConfig(
-                        level_name='ChoiceLevel_1',
-                        choices=[
-                            SequenceActionConfig(
-                                actions=[
-                                    DeterministicAssignmentActionConfig(
-                                        variable='v',
-                                        value='0'
-                                    ),
-                                    DeterministicAssignmentActionConfig(
-                                        variable='w',
-                                        value='0'
-                                    )
-                                ]
+                    SequenceActionConfig(
+                        actions=[
+                            ActionConstraintConfig(
+                                formula='v = 0'
                             ),
-                            SequenceActionConfig(
-                                actions=[
-                                    NondeterministicAssignmentActionConfig(
-                                        variable='v'
-                                    ),
-                                    ActionConstraintConfig(
-                                        formula='0<=v'
-                                    ),
-                                    NondeterministicAssignmentActionConfig(
-                                        variable='w'
-                                    ),
-                                    ActionConstraintConfig(
-                                        formula='-W<=w & w<=W'
-                                    ),
-                                    NondeterministicAssignmentActionConfig(
-                                        variable='r'
-                                    ),
-                                    NondeterministicAssignmentActionConfig(
-                                        variable='xo'
-                                    ),
-                                    NondeterministicAssignmentActionConfig(
-                                        variable='yo'
-                                    ),
-                                    ActionConstraintConfig(
-                                        formula='r!=0 & r*w = v'
-                                    ),
-                                    ActionConstraintConfig(
-                                        formula=' abs(x-xo) > admissibleSeparation(v)\n        | abs(y-yo) > admissibleSeparation(v)'
-                                    )
-                                ]
+                            DeterministicAssignmentActionConfig(
+                                variable='a',
+                                value='0'
+                            ),
+                            DeterministicAssignmentActionConfig(
+                                variable='w',
+                                value='0'
+                            )
+                        ]
+                    ),
+                    SequenceActionConfig(
+                        actions=[
+                            DeterministicAssignmentActionConfig(
+                                variable='a',
+                                value='A'
+                            ),
+                            NondeterministicAssignmentActionConfig(
+                                variable='w'
+                            ),
+                            ActionConstraintConfig(
+                                formula='-W<=w & w<=W'
+                            ),
+                            NondeterministicAssignmentActionConfig(
+                                variable='r'
+                            ),
+                            NondeterministicAssignmentActionConfig(
+                                variable='xo'
+                            ),
+                            NondeterministicAssignmentActionConfig(
+                                variable='yo'
+                            ),
+                            ActionConstraintConfig(
+                                formula='r!=0 & r*w = v'
+                            ),
+                            ActionConstraintConfig(
+                                formula='abs(x-xo) > admissibleSeparation(v)\n        | abs(y-yo) > admissibleSeparation(v)'
                             )
                         ]
                     )
@@ -436,8 +355,8 @@ class GeneratedKXEnv(gym.Env):
 
         # --- ODE Solver Setup (from stepFunc) ---
         # Mapping from state variable names to their index in the ODE solver's y array
-        self._ode_state_map = {'x': 0, 'y': 1, 'v': 2, 'a': 3, 'dx': 4, 'dy': 5, 'w': 6, 'r': 7, 'xo': 8, 'yo': 9, 'vxo': 10, 'vyo': 11, 't': 12}
-        self._ode_state_idx_map = {0: 'x', 1: 'y', 2: 'v', 3: 'a', 4: 'dx', 5: 'dy', 6: 'w', 7: 'r', 8: 'xo', 9: 'yo', 10: 'vxo', 11: 'vyo', 12: 't'} # Map index to name
+        self._ode_state_map = {'x': 0, 'y': 1, 'v': 2, 'a': 3, 'dx': 4, 'dy': 5, 'w': 6, 'r': 7, 'xo': 8, 'yo': 9, 't': 10}
+        self._ode_state_idx_map = {0: 'x', 1: 'y', 2: 'v', 3: 'a', 4: 'dx', 5: 'dy', 6: 'w', 7: 'r', 8: 'xo', 9: 'yo', 10: 't'} # Map index to name
 
         self._ode_func_str = '''
             def ode_func(t_val, y_array):
@@ -452,9 +371,7 @@ class GeneratedKXEnv(gym.Env):
                 r = y_array[7]
                 xo = y_array[8]
                 yo = y_array[9]
-                vxo = y_array[10]
-                vyo = y_array[11]
-                t = y_array[12]
+                t = y_array[10]
 
                 # Ensure self.state is updated with current ODE values for expression evaluation
                 for i, var_name in self._ode_state_idx_map.items():
@@ -464,16 +381,14 @@ class GeneratedKXEnv(gym.Env):
                 dydt = [
                     v * dx, # dx/dt
                     v * dy, # dy/dt
-                    0.0, # dv/dt
+                    a, # dv/dt
                     0.0, # da/dt
                     -w * dy, # ddx/dt
                     w * dx, # ddy/dt
-                    0.0, # dw/dt
+                    a/r, # dw/dt
                     0.0, # dr/dt
-                    vxo, # dxo/dt
-                    vyo, # dyo/dt
-                    0.0, # dvxo/dt
-                    0.0, # dvyo/dt
+                    0.0, # dxo/dt
+                    0.0, # dyo/dt
                     1, # dt/dt
                 ]
                 return dydt
@@ -482,7 +397,7 @@ class GeneratedKXEnv(gym.Env):
             def event_t_max(t_val, y_array):
                 # Event: t exceeds ep
                 # Returns 0 when t == ep
-                return self.constants['ep'] - y_array[12]
+                return self.constants['ep'] - y_array[10]
             event_t_max.terminal = True
             event_t_max.direction = -1 # Trigger when ep - t goes from positive to negative (t > ep)
 
@@ -1173,8 +1088,6 @@ class GeneratedKXEnv(gym.Env):
         self.state['r'] = 1.0
         self.state['xo'] = 5.0
         self.state['yo'] = 0.0
-        self.state['vxo'] = 0.0
-        self.state['vyo'] = 0.0
         self.state['t'] = 0.0
 
         z3_base_solution = self._solve_initial_state_with_z3(self._problem_config.precondition.formula)
@@ -1229,34 +1142,13 @@ class GeneratedKXEnv(gym.Env):
         else:
             # Z3 failed, fall back to heuristics (existing code).
             print(f"Warning: Z3 solver failed to find a satisfying initial state for the precondition: '{self._problem_config.precondition.formula}'. Falling back to heuristics. This may lead to the initial state not satisfying the precondition, which could cause immediate termination or warnings during reset. Consider revising the precondition or ensuring it is satisfiable with the given definitions.")
-            if not z3_base_solution and 2 > 0:
+            if not z3_base_solution and 0 > 0:
                 # Apply explicit assignments from the precondition (fallback)
-                self.state['v'] = 0.0
-
-            if not z3_base_solution:
-                # Ensure dx, dy satisfy isWellformedDir (approximate unit vector) (fallback)
-                norm_sq = self.state['dx']**2 + self.state['dy']**2
-                ud_val = self.constants.get('Ud', 0.0) # Get Ud from constants, default to 0.0 if not found
-                # The actual isWellformedDir is '1-Ud <= dx^2+dy^2 & dx^2 + dy^2 <= 1+Ud'
-                # For fallback, we normalize to 1 if it's too far off, or if Ud is 0.
-                if not self._approx_eq(norm_sq, 1.0):
-                    norm = np.sqrt(norm_sq)
-                    if norm > self.equality_tolerance: # Avoid division by zero with tolerance
-                        self.state['dx'] /= norm
-                        self.state['dy'] /= norm
-                    else: # Default to (1,0) if too small
-                        self.state['dx'] = 1.0
-                        self.state['dy'] = 0.0
-
-            if not z3_base_solution:
-                # Ensure robot and obstacle are not at the same position (fallback)
-                if self._approx_eq(self.state['x'], self.state['xo']) and self._approx_eq(self.state['y'], self.state['yo']):
-                    self.state['x'] += 0.1 # Slightly perturb x to ensure separation
 
         # Verify the full precondition after setting initial states
         # Evaluate each conjunct of the precondition to identify specific failures
         failing_formula = None
-        precondition_conjuncts = self._split_top_level_and_local('((ep > 0 & V >= 0) & (v = 0 & (x-xo)^2 + (y-yo)^2 > 0 & (dx^2 + dy^2 = 1)))')
+        precondition_conjuncts = self._split_top_level_and_local('assumptions(x, y, v, dx, dy, xo, yo)')
         precondition_satisfied = True
         for conj_str in precondition_conjuncts:
             # Evaluate each conjunct. _evaluate_expression will handle the parsing.
@@ -1369,7 +1261,7 @@ class GeneratedKXEnv(gym.Env):
         # This means the robot must NOT be at the obstacle's position.
         # If it becomes <= 0, safety is violated.
         # Postcondition is a raw KeYmaera X string, parsed at runtime by _evaluate_expression
-        postcondition_satisfied = self._evaluate_expression(f'(v>0 -> (x - xo)^2 + (y - yo)^2 > 0)', is_constraint=True)
+        postcondition_satisfied = self._evaluate_expression(f'ensure(x, y, xo, yo)', is_constraint=True)
         if not postcondition_satisfied:
             reward -= 100.0 # Safety violation
             terminated = True

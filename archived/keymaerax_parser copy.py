@@ -45,7 +45,7 @@ class Definition(ASTNode):
         indent = "  " * level
 
         value_str = ""
-        if self.definition_value is not None:
+        if self.definition_value:
             cleaned_value = ' '.join(self.definition_value.split())
             value_str = f" = {cleaned_value}"
 
