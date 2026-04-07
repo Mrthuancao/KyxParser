@@ -14,27 +14,25 @@ Definitions
 
   // Directional Integrity:
   // Ensures the orientation vector (dx, dy) remains normalized.
-  // @progress: shape={-((dx^2 + dy^2) - 1)^2}
+  // @progress: reward=10, shape={-((dx**2 + dy**2) - 1)**2}, on_success=continue:status=none, on_failure=continue:status=none
   Bool isWellformedDir(Real dx, Real dy) <-> dx^2 + dy^2 = 1;
 
   // Physical Validity:
   // Prevents the agent from entering physically impossible states (negative velocity).
-  // @safety: penalty=-500, on_fail=truncate, status=failure
+  // @safety: penalty=-500, on_failure=truncate:status=failure, on_success=continue:status=none
   Bool isPhysicallyValid(Real v, Real r) <-> (
     v >= 0 & r != 0
   );
 
   // Collision Avoidance (Core Safety):
-  // The primary safety invariant. The shape encourages maximizing the gap 
+  // The primary safety invariant. The shape encourages maximizing the gap
   // between current distance and required stopping distance.
-  // @safety: penalty=-1000, shape={(abs(x-xo) - stopDist(v)) + (abs(y-yo) - stopDist(v))}, on_fail=truncate, status=failure
-  Bool isSafe(Real x, Real y, Real v, Real xo, Real yo) <-> (
-    abs(x-xo) > stopDist(v) | abs(y-yo) > stopDist(v)
-  );
+  // @safety: penalty=-1000, shape={(abs(x-xo) - stopDist(v)) + (abs(y-yo) - stopDist(v))}, on_failure=truncate:status=failure, on_success=continue:status=none
+  Bool isSafe(Real x, Real y, Real v, Real xo, Real yo) <-> (abs(x-xo) > stopDist(v) | abs(y-yo) > stopDist(v));
 
   // Velocity Efficiency:
   // Encourages the agent to maintain a productive velocity.
-  // @progress: shape={v > 0 ? 1/v : v}
+  // @progress: shape={1/v if v > 0 else v}, on_success=continue:status=none, on_failure=continue:status=none
   Bool isEfficient(Real v) <-> ( v >= 0 );
 
   // Global Bounds
@@ -45,7 +43,7 @@ Definitions
   );
 
   // Initial Conditions
-  Bool initialState(Real x, Real y, Real v, Real dx, Real dy, Real xo, Real yo) <-> (        
+  Bool initialState(Real x, Real y, Real v, Real dx, Real dy, Real xo, Real yo) <-> (
     v = 0
     & (x-xo)^2 + (y-yo)^2 > 0
     & isWellformedDir(dx, dy)
@@ -58,18 +56,21 @@ Definitions
   // Safety Invariant (Aggregate):
   // Combines sub-predicates for the formal proof.
   Bool loopinv(Real x, Real y, Real v, Real dx, Real dy, Real xo, Real yo, Real r) <-> (
-    isPhysicallyValid(v, r) 
-    & isWellformedDir(dx, dy) 
+    isPhysicallyValid(v, r)
+    & isWellformedDir(dx, dy)
     & isSafe(x, y, v, xo, yo)
     & isEfficient(v)
   );
-  
+
   // Goal Condition:
-  // @progress: reward=500, on_fail=terminate, status=success
+  // This predicate defines the goal of avoiding the obstacle.
+  // If the condition is true (robot is not at the obstacle), it's a success and the episode terminates.
+  // If the condition is false (robot is at the obstacle), it's a failure and the episode terminates.
+  // @progress: reward=500, penalty=-1000, on_success=terminate:status=success, on_failure=terminate:status=failure
   Bool ensure(Real x, Real y, Real xo, Real yo) <-> (
     (x - xo)^2 + (y - yo)^2 > 0
   );
-  
+
   // Control Logic
   HP controlFunc ::= {
       // Option 1: Brake on current curve or remain stopped
@@ -89,7 +90,7 @@ Definitions
     };;
 
     // Continuous Dynamics
-    HP stepFunc ::= { 
+    HP stepFunc ::= {
         x' = v * dx, y' = v * dy, v' = a,
         dx' = -w * dy, dy' = w * dx, w' = a/r,
         t' = 1 & t <= ep & v >= 0

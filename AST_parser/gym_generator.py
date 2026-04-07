@@ -1,7 +1,13 @@
+import gymnasium as gym
+from gymnasium import spaces
+import numpy as np
+from scipy.integrate import solve_ivp
+import math # For math functions like sqrt, sin, cos, etc.
 import textwrap
+import re # For regex replacements in _evaluate_expression
+import z3 # For SMT solving in reset()
+
 from typing import List, Dict, Any, Optional, Tuple, Union
-import re
-import z3 # <--- ADDED Z3 IMPORT
 
 # Assuming pyast_config.py is in the same directory and contains the ASTConfigNode classes
 from pyast_config import (
@@ -505,38 +511,49 @@ def generate_gym_environment_code(config: GymEnvironmentConfig, envName: str = "
     # New: Code for _split_top_level_and_local method, to be inserted as a class method
     _split_top_level_and_local_method_code = textwrap.dedent("""
     def _split_top_level_and_local(self, formula_str: str) -> List[str]:
+        \"\"\"
+        Splits a formula string by top-level '&' operators, respecting brace nesting.
+        This is a simplified version of the parser's split_by_operator_outside_braces
+        tailored for logical conjunctions.
+        \"\"\"
         parts = []
-        balance = 0
-        start = 0
-        # Normalize spaces around '&'
-        formula_str = re.sub(r'\\s*&\\s*', '&', formula_str)
+        brace_level = 0
+        current_part_start = 0
         
-        for i, char in enumerate(formula_str):
-            if char == '(':
-                balance += 1
-            elif char == ')':
-                balance -= 1
-            elif char == '&' and balance == 0:
-                part = formula_str[start:i].strip()
+        # Normalize spaces around '&' for consistent splitting
+        formula_str = re.sub(r'\\s*&\\s*', '&', formula_str)
+
+        i = 0
+        while i < len(formula_str):
+            if formula_str[i] == '(':
+                brace_level += 1
+            elif formula_str[i] == ')':
+                brace_level -= 1
+
+            if formula_str[i] == '&' and brace_level == 0:
+                part = formula_str[current_part_start:i].strip()
                 if part:
                     parts.append(part)
-                start = i + 1
-        
-        last_part = formula_str[start:].strip()
+                current_part_start = i + 1
+            i += 1
+
+        # Add the last part after the loop finishes
+        last_part = formula_str[current_part_start:].strip()
         if last_part:
             parts.append(last_part)
-            
         return parts if parts else [formula_str.strip()]
     """)
 
     # Template for the _evaluate_expression method, with robust parsing logic at runtime
     _evaluate_expression_method_template = textwrap.dedent("""
     def _evaluate_expression(self, expr_str: str, local_vars: Optional[Dict[str, Any]] = None, is_constraint: bool = False) -> Any:
-        # Safe evaluation of expressions using environment's context.
-        # This method parses KeYmaera X expressions at runtime.
-        # If is_constraint is True, returns False on evaluation error.
+        \"\"\"
+        Safe evaluation of expressions using environment's context.
+        This method parses KeYmaera X expressions at runtime.
+        If is_constraint is True, returns False on evaluation error.
+        \"\"\"
         
-        if local_vars is None:
+        if local_vars is None: # FIX: Changed '===' to 'is'
             local_vars = {}
         
         # Strip KeYmaera X constraint prefix '?' if present
@@ -690,8 +707,8 @@ def generate_gym_environment_code(config: GymEnvironmentConfig, envName: str = "
                     for kx_op, py_op_format in relational_ops:
                         if len(kx_op) == 1 and sub_expr[i] == kx_op:
                             # Special check for '=', ensure it's not part of '==', '!=', '<=', '>='
-                            if kx_op == '=' and (i > 0 and sub_expr[i-1] in '<>=!') or \
-                                            (i < len(sub_expr) - 1 and sub_expr[i+1] == '='):
+                            if kx_op == '=' and ((i > 0 and sub_expr[i-1] in '<>=!') or \\
+                                            (i < len(sub_expr) - 1 and sub_expr[i+1] == '=')):
                                 continue 
                             rel_op_found_kx = kx_op
                             rel_op_found_py = py_op_format
@@ -926,7 +943,7 @@ def generate_gym_environment_code(config: GymEnvironmentConfig, envName: str = "
                 # This constant has a fixed numeric value. Store it as a Python float.
                 fixed_constants[const_decl.name] = float(const_decl.value)
             else:
-                # This constant either has no value, or its value is an expression.
+                # This constant either has no value, or its value is an an expression.
                 # For Z3, we treat it as a variable that needs to be solved.
                 z3_symbol_map[const_decl.name] = z3.Real(const_decl.name)
 
@@ -1150,9 +1167,12 @@ class {env_name_for_class}(gym.Env):
     def _apply_meta_effect(self, metadata: Dict[str, Any], current_reward: float, current_terminated: bool, current_truncated: bool, is_failure_case: bool) -> Tuple[float, bool, bool]:
         \"\"\"
         Applies reward/penalty/termination/truncation effects based on metadata.
-        'on_fail' can be 'truncate', 'terminate'.
-        'status' can be 'success', 'failure'.
-        'penalty' (float) for failure, 'reward' (float) for success.
+        'on_success': 'action:status=value' (e.g., 'terminate:status=success', 'continue:status=none')
+        'on_failure': 'action:status=value' (e.g., 'truncate:status=failure', 'terminate:status=failure')
+        
+        action can be 'continue', 'terminate', 'truncate'.
+        status can be 'success', 'failure', 'none'.
+
         is_failure_case: True if this call is due to a condition failing, False if it's a success path.
         \"\"\"
         reward_change = 0.0
@@ -1160,22 +1180,28 @@ class {env_name_for_class}(gym.Env):
         new_truncated = current_truncated
 
         if metadata:
+            event_key = 'on_failure' if is_failure_case else 'on_success'
+            event_config_str = metadata.get(event_key)
+
             if is_failure_case:
-                penalty = float(metadata.get('penalty', 0.0)) # Default penalty is 0 if not specified
+                penalty = float(metadata.get('penalty', 0.0))
                 reward_change += penalty
-                on_fail = metadata.get('on_fail')
-                if on_fail == 'terminate':
-                    new_terminated = True
-                elif on_fail == 'truncate':
-                    new_truncated = True
             else: # Success case
-                success_reward = float(metadata.get('reward', 0.0)) # Default reward is 0 if not specified
+                success_reward = float(metadata.get('reward', 0.0))
                 reward_change += success_reward
-                # Success doesn't usually terminate/truncate unless explicitly specified,
-                # but for some problems, reaching a goal might terminate.
-                # If metadata specifies 'on_success': 'terminate', it could be added here.
-                # For now, assume 'on_fail' only applies to failure.
-        
+
+            if event_config_str:
+                parts = event_config_str.split(':')
+                action = parts[0]
+                # status_part = parts[1] if len(parts) > 1 else 'status=none'
+                # status = status_part.split('=')[1] # Not directly used for logic, but could be for info
+
+                if action == 'terminate':
+                    new_terminated = True
+                elif action == 'truncate':
+                    new_truncated = True
+                # 'continue' means no change to terminated/truncated state, so no 'else' needed here.
+
         return current_reward + reward_change, new_terminated, new_truncated
 
     def _evaluate_shape_expression(self, shape_expr: str) -> float:
@@ -1280,21 +1306,29 @@ class {env_name_for_class}(gym.Env):
 
         elif isinstance(action_config, ActionConstraintConfig):
             constraint_met = self._evaluate_expression(action_config.formula, is_constraint=True)
+            
+            # Try to find metadata for this constraint if it's a predicate call
+            predicate_name_match = re.match(r'^\\s*(\\w+)\\s*\\(', action_config.formula)
+            if predicate_name_match:
+                pred_name = predicate_name_match.group(1)
+                metadata = self._get_predicate_metadata(pred_name)
+            else:
+                # Default metadata for generic constraints
+                metadata = {{'type': 'safety', 'penalty': '-100.0', 'on_failure': 'terminate:status=failure'}}
+            
             if not constraint_met:
-                # Try to find metadata for this constraint if it's a predicate call
-                predicate_name_match = re.match(r'^\\s*(\\w+)\\s*\\(', action_config.formula)
-                if predicate_name_match:
-                    pred_name = predicate_name_match.group(1)
-                    metadata = self._get_predicate_metadata(pred_name)
+                reward, terminated, truncated = self._apply_meta_effect(metadata, reward, terminated, False, is_failure_case=True)
+                # If metadata didn't specify termination/truncation, and it's not 'continue', then it's a failure to apply
+                if not terminated and not truncated and metadata.get('on_failure', '').split(':')[0] == 'continue':
+                    applied_successfully = True # Constraint failed but we are told to continue
                 else:
-                    # Default failure metadata for generic constraints
-                    metadata = {{'type': 'safety', 'penalty': '-100.0', 'on_fail': 'terminate', 'status': 'failure'}}
-                
-                # Apply effects using the helper
-                reward, terminated, applied_successfully = self._apply_meta_effect(metadata, reward, terminated, False, is_failure_case=True)
-                # If metadata didn't specify termination/truncation, default to termination
-                if not terminated and not applied_successfully and metadata.get('on_fail') != 'truncate':
-                    terminated = True
+                    applied_successfully = False # Constraint failed and we should terminate/truncate
+            else:
+                # If constraint is met, apply 'on_success' effects if any
+                if metadata.get('on_success') and metadata.get('on_success').split(':')[0] != 'continue':
+                    reward, terminated, truncated = self._apply_meta_effect(metadata, reward, terminated, False, is_failure_case=False)
+                applied_successfully = True # Constraint met, so action was successfully applied
+
             return reward, terminated, applied_successfully
 
         elif isinstance(action_config, CallHybridProgramConfig):
@@ -1345,20 +1379,42 @@ class {env_name_for_class}(gym.Env):
         info = self._get_info()
 
         # --- Initial Loop Invariant Check (before control/dynamics) ---
-        # Evaluate the loop invariant. If it fails here, something is wrong with the state
-        # or the previous step's outcome.
         loop_invariant_formula_kx = self._problem_config.loop_execution.loop_invariant_formula
-        loop_invariant_satisfied = self._evaluate_expression(loop_invariant_formula_kx, is_constraint=True)
-        if not loop_invariant_satisfied:
-            # This is a critical failure, the system is in an invalid state.
-            # A more sophisticated approach would be to expand loopinv and check each conjunct
-            # to apply specific metadata. For now, a generic severe penalty and termination.
-            print(f"Warning: Loop invariant violated BEFORE step execution: {{loop_invariant_formula_kx}}")
+        expanded_loop_inv = self._expand_formula(loop_invariant_formula_kx, self._definitions_config)
+        loop_inv_conjuncts = self._split_top_level_and_local(expanded_loop_inv)
+        
+        loop_invariant_satisfied_pre_step = True
+        for conj_str in loop_inv_conjuncts:
+            conjunct_result = self._evaluate_expression(conj_str, is_constraint=True)
+            predicate_name_match = re.match(r'^\\s*(\\w+)\\s*\\(', conj_str)
+            pred_name = predicate_name_match.group(1) if predicate_name_match else None
+            metadata = self._get_predicate_metadata(pred_name) if pred_name else {{}}
+
+            if not conjunct_result:
+                loop_invariant_satisfied_pre_step = False
+                # Apply failure effects
+                reward, terminated, truncated = self._apply_meta_effect(
+                    metadata or {{'type': 'safety', 'penalty': '-100.0', 'on_failure': 'terminate:status=failure'}},
+                    reward, terminated, truncated, is_failure_case=True
+                )
+                if terminated or truncated:
+                    return self._get_obs(), reward, terminated, truncated, info
+            else:
+                # Apply success effects if any (only if action is not 'continue')
+                if metadata.get('on_success') and metadata.get('on_success').split(':')[0] != 'continue':
+                    reward, terminated, truncated = self._apply_meta_effect(metadata, reward, terminated, truncated, is_failure_case=False)
+                    if terminated or truncated:
+                        return self._get_obs(), reward, terminated, truncated, info
+
+        if not loop_invariant_satisfied_pre_step:
+            # Fallback for general loopinv failure if not caught by specific conjuncts
+            print(f"Warning: Loop invariant violated BEFORE step execution (general failure): {{loop_invariant_formula_kx}}")
             reward, terminated, truncated = self._apply_meta_effect(
-                {{'type': 'safety', 'penalty': '-500.0', 'on_fail': 'terminate', 'status': 'failure'}},
+                {{'type': 'safety', 'penalty': '-500.0', 'on_failure': 'terminate:status=failure'}},
                 reward, terminated, truncated, is_failure_case=True
             )
             return self._get_obs(), reward, terminated, truncated, info # Terminate early
+
 
         # --- 1. Apply Control Function (Discrete Action) ---
         control_reward, control_terminated, control_applied = self._apply_control_action(action)
@@ -1387,7 +1443,7 @@ class {env_name_for_class}(gym.Env):
                 # Link to isPhysicallyValid metadata if applicable, or a default
                 phys_valid_meta = self._get_predicate_metadata('isPhysicallyValid')
                 reward, terminated, truncated = self._apply_meta_effect(
-                    phys_valid_meta or {{'type': 'safety', 'penalty': '-100.0', 'on_fail': 'terminate', 'status': 'failure'}},
+                    phys_valid_meta or {{'type': 'safety', 'penalty': '-100.0', 'on_failure': 'terminate:status=failure'}},
                     reward, terminated, truncated, is_failure_case=True
                 )
                 ode_terminated_by_event = True # Treat as terminated by event
@@ -1422,7 +1478,7 @@ class {env_name_for_class}(gym.Env):
                     if self.state.get('v', 0.0) < -self.equality_tolerance: # Use tolerance for v < 0 check
                         phys_valid_meta = self._get_predicate_metadata('isPhysicallyValid')
                         reward, terminated, truncated = self._apply_meta_effect(
-                            phys_valid_meta or {{'type': 'safety', 'penalty': '-100.0', 'on_fail': 'truncate', 'status': 'failure'}}, # Default to truncate as per problem description example
+                            phys_valid_meta or {{'type': 'safety', 'penalty': '-100.0', 'on_failure': 'truncate:status=failure'}}, # Default to truncate as per problem description example
                             reward, terminated, truncated, is_failure_case=True
                         )
                         ode_terminated_by_event = True
@@ -1431,7 +1487,7 @@ class {env_name_for_class}(gym.Env):
                 else: # Integration failed (status 2)
                     # print(f"ODE integration failed: {{solution.message}}")
                     reward, terminated, truncated = self._apply_meta_effect(
-                        {{'type': 'safety', 'penalty': '-150.0', 'on_fail': 'terminate', 'status': 'failure'}},
+                        {{'type': 'safety', 'penalty': '-150.0', 'on_failure': 'terminate:status=failure'}},
                         reward, terminated, truncated, is_failure_case=True
                     )
                     ode_terminated_by_event = True
@@ -1439,7 +1495,7 @@ class {env_name_for_class}(gym.Env):
             except Exception as e:
                 # print(f"Error during ODE integration: {{e}}")
                 reward, terminated, truncated = self._apply_meta_effect(
-                    {{'type': 'safety', 'penalty': '-200.0', 'on_fail': 'terminate', 'status': 'failure'}},
+                    {{'type': 'safety', 'penalty': '-200.0', 'on_failure': 'terminate:status=failure'}},
                     reward, terminated, truncated, is_failure_case=True
                 )
                 ode_terminated_by_event = True
@@ -1453,45 +1509,38 @@ class {env_name_for_class}(gym.Env):
 
         # --- 3. Evaluate Loop Invariant and Apply Rewards/Penalties/Shaping ---
         # Re-evaluate loop invariant after ODEs
-        loop_invariant_satisfied_post_ode = self._evaluate_expression(loop_invariant_formula_kx, is_constraint=True)
-        if not loop_invariant_satisfied_post_ode:
-            # If loop invariant fails here, it's a safety violation from continuous dynamics.
-            # Check specific components of the loop invariant for their metadata.
-            
-            # Check isPhysicallyValid
-            is_physically_valid_satisfied = self.predicates['isPhysicallyValid'](self.state['v'], self.state['r'])
-            if not is_physically_valid_satisfied:
-                phys_valid_meta = self._get_predicate_metadata('isPhysicallyValid')
-                reward, terminated, truncated = self._apply_meta_effect(phys_valid_meta, reward, terminated, truncated, is_failure_case=True)
-                if terminated or truncated:
-                    return self._get_obs(), reward, terminated, truncated, info
+        loop_invariant_satisfied_post_ode = True
+        for conj_str in loop_inv_conjuncts: # Reuse loop_inv_conjuncts from earlier
+            conjunct_result = self._evaluate_expression(conj_str, is_constraint=True)
+            predicate_name_match = re.match(r'^\\s*(\\w+)\\s*\\(', conj_str)
+            pred_name = predicate_name_match.group(1) if predicate_name_match else None
+            metadata = self._get_predicate_metadata(pred_name) if pred_name else {{}}
 
-            # Check isWellformedDir (often a progress component, but can be safety too)
-            is_wellformed_dir_satisfied = self.predicates['isWellformedDir'](self.state['dx'], self.state['dy'])
-            if not is_wellformed_dir_satisfied:
-                wellformed_meta = self._get_predicate_metadata('isWellformedDir')
-                reward, terminated, truncated = self._apply_meta_effect(wellformed_meta, reward, terminated, truncated, is_failure_case=True)
-                if terminated or truncated:
-                    return self._get_obs(), reward, terminated, truncated, info
-            
-            # Check isSafe
-            is_safe_satisfied = self.predicates['isSafe'](self.state['x'], self.state['y'], self.state['v'], self.state['xo'], self.state['yo'])
-            if not is_safe_satisfied:
-                safe_meta = self._get_predicate_metadata('isSafe')
-                reward, terminated, truncated = self._apply_meta_effect(safe_meta, reward, terminated, truncated, is_failure_case=True)
-                if terminated or truncated:
-                    return self._get_obs(), reward, terminated, truncated, info
-
-            # If none of the above specific checks terminated/truncated, but loopinv still failed
-            # (e.g., due to '...' part of loopinv not explicitly checked above, or a general failure)
-            if not terminated and not truncated:
-                print(f"Warning: Loop invariant violated AFTER ODEs (general failure): {{loop_invariant_formula_kx}}")
+            if not conjunct_result:
+                loop_invariant_satisfied_post_ode = False
+                # Apply failure effects
                 reward, terminated, truncated = self._apply_meta_effect(
-                    {{'type': 'safety', 'penalty': '-300.0', 'on_fail': 'terminate', 'status': 'failure'}},
+                    metadata or {{'type': 'safety', 'penalty': '-100.0', 'on_failure': 'terminate:status=failure'}},
                     reward, terminated, truncated, is_failure_case=True
                 )
                 if terminated or truncated:
                     return self._get_obs(), reward, terminated, truncated, info
+            else:
+                # Apply success effects if any (only if action is not 'continue')
+                if metadata.get('on_success') and metadata.get('on_success').split(':')[0] != 'continue':
+                    reward, terminated, truncated = self._apply_meta_effect(metadata, reward, terminated, truncated, is_failure_case=False)
+                    if terminated or truncated:
+                        return self._get_obs(), reward, terminated, truncated, info
+
+        if not loop_invariant_satisfied_post_ode:
+            # Fallback for general loopinv failure if not caught by specific conjuncts
+            print(f"Warning: Loop invariant violated AFTER ODEs (general failure): {{loop_invariant_formula_kx}}")
+            reward, terminated, truncated = self._apply_meta_effect(
+                {{'type': 'safety', 'penalty': '-300.0', 'on_failure': 'terminate:status=failure'}},
+                reward, terminated, truncated, is_failure_case=True
+            )
+            if terminated or truncated:
+                return self._get_obs(), reward, terminated, truncated, info
 
         # --- Reward Shaping (from progress predicates) ---
         # isWellformedDir (progress type, shape: -((dx^2 + dy^2) - 1)^2)
@@ -1515,13 +1564,11 @@ class {env_name_for_class}(gym.Env):
 
         if postcondition_satisfied:
             reward, terminated, truncated = self._apply_meta_effect(
-                ensure_meta or {{'type': 'progress', 'reward': '500.0', 'on_fail': 'terminate', 'status': 'success'}}, # Default success reward if no meta
-                reward, terminated, truncated, is_failure_case=False
+                ensure_meta, reward, terminated, truncated, is_failure_case=False
             )
         else:
             reward, terminated, truncated = self._apply_meta_effect(
-                ensure_meta or {{'type': 'progress', 'penalty': '-100.0', 'on_fail': 'terminate', 'status': 'failure'}}, # Default failure penalty if no meta
-                reward, terminated, truncated, is_failure_case=True
+                ensure_meta, reward, terminated, truncated, is_failure_case=True
             )
             
             # Also apply shape if available for the postcondition (ensure)
@@ -1795,7 +1842,7 @@ def _generate_reset_logic(variables: List[VariableDeclarationConfig], preconditi
     reset_code_lines.append("")
 
     # 3. Special handling for dx, dy (isWellformedDir) (fallback if Z3 fails)
-    if re.search(r'dx\^2\s*\+\s*dy\^2', expanded_precondition_kx):
+    if re.search(r'dx\\^2\\s*\\+\\s*dy\\^2', expanded_precondition_kx):
         reset_code_lines.append(f"        if not z3_base_solution:") # Only run if Z3 failed
         reset_code_lines.append(f"            # Ensure dx, dy satisfy isWellformedDir (approximate unit vector) (fallback)")
         reset_code_lines.append(f"            norm_sq = self.state['dx']**2 + self.state['dy']**2")
@@ -1888,25 +1935,25 @@ if __name__ == "__main__":
     # Predicates
     # Note: 'isWellformedDir' and 'initialState' use '=', which will now be approx.
     # Changed isWellformedDir to use equality for testing the fix
-    isWellformedDir_pred = PredicateDefinitionConfig(name='isWellformedDir', parameters=[('Real', 'dx'), ('Real', 'dy')], body='dx^2 + dy^2 = 1', metadata={'type': 'progress', 'shape': '-((dx^2 + dy^2) - 1)^2'})
+    isWellformedDir_pred = PredicateDefinitionConfig(name='isWellformedDir', parameters=[('Real', 'dx'), ('Real', 'dy')], body='dx^2 + dy^2 = 1', metadata={'type': 'progress', 'shape': '-((dx^2 + dy^2) - 1)^2', 'on_success': 'continue:status=none', 'on_failure': 'continue:status=none'})
     # FIX: Corrected bounds predicate to match 0 <= Ud < 1
     bounds_pred = PredicateDefinitionConfig(name='bounds', parameters=[], body='A >= 0\n    & b > 0\n    & ep > 0\n    & V >= 0\n    & 0<=Ud\n    & Ud < 1') # Use & for AND, added V, Ud bounds
     initialState_pred = PredicateDefinitionConfig(name='initialState', parameters=[('Real', 'x'), ('Real', 'y'), ('Real', 'v'), ('Real', 'dx'), ('Real', 'dy'), ('Real', 'xo'), ('Real', 'yo')], body='v = 0 & (x-xo)^2 + (y-yo)^2 > 0 & isWellformedDir(dx,dy)') # Use &
     
     # Added metadata for safety predicates
-    isPhysicallyValid_pred = PredicateDefinitionConfig(name='isPhysicallyValid', parameters=[('Real', 'v'), ('Real', 'r')], body='v >= 0 & r != 0', metadata={'type': 'safety', 'penalty': '-500', 'on_fail': 'truncate', 'status': 'failure'})
-    isSafe_pred = PredicateDefinitionConfig(name='isSafe', parameters=[('Real', 'x'), ('Real', 'y'), ('Real', 'v'), ('Real', 'xo'), ('Real', 'yo')], body='abs(x-xo) > stopDist(v) | abs(y-yo) > stopDist(v)', metadata={'type': 'safety', 'penalty': '-1000', 'shape': '(abs(x-xo) - stopDist(v)) + (abs(y-yo) - stopDist(v))', 'on_fail': 'truncate', 'status': 'failure'})
-    isEfficient_pred = PredicateDefinitionConfig(name='isEfficient', parameters=[('Real', 'v')], body='v >= 0', metadata={'type': 'progress', 'shape': 'v > 0 ? 1/v : v'})
+    isPhysicallyValid_pred = PredicateDefinitionConfig(name='isPhysicallyValid', parameters=[('Real', 'v'), ('Real', 'r')], body='v >= 0 & r != 0', metadata={'type': 'safety', 'penalty': '-500', 'on_failure': 'truncate:status=failure', 'on_success': 'continue:status=none'})
+    isSafe_pred = PredicateDefinitionConfig(name='isSafe', parameters=[('Real', 'x'), ('Real', 'y'), ('Real', 'v'), ('Real', 'xo'), ('Real', 'yo')], body='abs(x-xo) > stopDist(v) | abs(y-yo) > stopDist(v)', metadata={'type': 'safety', 'penalty': '-1000', 'shape': '(abs(x-xo) - stopDist(v)) + (abs(y-yo) - stopDist(v))', 'on_failure': 'truncate:status=failure', 'on_success': 'continue:status=none'})
+    isEfficient_pred = PredicateDefinitionConfig(name='isEfficient', parameters=[('Real', 'v')], body='v >= 0', metadata={'type': 'progress', 'shape': 'if v > 0 then 1/v else v', 'on_success': 'continue:status=none', 'on_failure': 'continue:status=none'})
     
     # Corrected loopinv body and parameters
     loopinv_pred = PredicateDefinitionConfig(name='loopinv', parameters=[('Real', 'x'), ('Real', 'y'), ('Real', 'v'), ('Real', 'dx'), ('Real', 'dy'), ('Real', 'xo'), ('Real', 'yo'), ('Real', 'r')], body='isPhysicallyValid(v, r) & isWellformedDir(dx, dy) & isSafe(x, y, v, xo, yo)')
     
     assumptions_pred = PredicateDefinitionConfig(name='assumptions', parameters=[('Real', 'x'), ('Real', 'y'), ('Real', 'v'), ('Real', 'dx'), ('Real', 'dy'), ('Real', 'xo'), ('Real', 'yo')], body='bounds() & initialState(x,y,v,dx,dy,xo,yo)')
     
-    ensure_pred = PredicateDefinitionConfig(name='ensure', parameters=[('Real', 'x'), ('Real', 'y'), ('Real', 'xo'), ('Real', 'yo')], body='(x - xo)^2 + (y - yo)^2 > 0', metadata={'type': 'progress', 'reward': '500', 'on_fail': 'terminate', 'status': 'success'})
+    ensure_pred = PredicateDefinitionConfig(name='ensure', parameters=[('Real', 'x'), ('Real', 'y'), ('Real', 'xo'), ('Real', 'yo')], body='(x - xo)^2 + (y - yo)^2 > 0', metadata={'type': 'progress', 'reward': '500', 'penalty': '-1000', 'on_success': 'terminate:status=success', 'on_failure': 'terminate:status=failure'})
 
 
-    # controlFunc Action Config
+    # Control Logic
     # This structure directly reflects the problem description's controlFunc
     # Choice 0: a := -b
     # Choice 1: v = 0; a := 0; w := 0
