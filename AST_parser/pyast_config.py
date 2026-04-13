@@ -1,3 +1,5 @@
+# pyast_config.py
+
 import logging
 from typing import List, Dict, Any, Optional, Union, Tuple
 
@@ -94,39 +96,43 @@ class DefinitionsConfig(ASTConfigNode):
                 f"{indent}  [Hybrid Programs]:\n{hybrid_programs_str or f'{indent}    (None)'}")
 
 class ConstantDefinitionConfig(ASTConfigNode):
-    def __init__(self, name: str, type: str, value: Optional[str] = None):
+    def __init__(self, name: str, type: str, value: Optional[str] = None, metadata: Optional[Dict] = None):
         self.name = name
         self.type = type
         self.value = value
+        self.metadata = metadata or {}
 
     def _repr_indent(self, level=0):
         indent = "  " * level
-        value_str = f", Value='{self.value}'" if self.value is not None else ""
-        return f"{indent}[ConstantDefinition]({self.name}): Type='{self.type}'{value_str}"
+        meta = f", Meta={self.metadata}" if self.metadata else ""
+        return f"{indent}[ConstantDefinition]({self.name}): Type='{self.type}', Value='{self.value}'{meta}"
 
 class FunctionDefinitionConfig(ASTConfigNode):
-    def __init__(self, name: str, return_type: str, parameters: List[Tuple[str, str]], body: str):
+    def __init__(self, name: str, return_type: str, parameters: List[Tuple[str, str]], body: str, metadata: Optional[Dict] = None):
         self.name = name
         self.return_type = return_type
         self.parameters = parameters # List of (type, name) tuples
         self.body = body
+        self.metadata = metadata or {}
 
     def _repr_indent(self, level=0):
         indent = "  " * level
-        params_str = ", ".join([f"{t} {n}" for t, n in self.parameters])
-        body_display = self.body # Do not truncate or format here
-        return f"{indent}[FunctionDefinition]({self.name}): Returns='{self.return_type}', Params=({params_str}), Body='{body_display}'"
+        params = ", ".join([f"{t} {n}" for t, n in self.parameters])
+        meta = f", Meta={self.metadata}" if self.metadata else ""
+        return f"{indent}[FunctionDefinition]({self.name}): Returns='{self.return_type}', Params=({params}), Body='{self.body}'{meta}"
 
 class PredicateDefinitionConfig(ASTConfigNode):
-    def __init__(self, name: str, parameters: List[Tuple[str, str]], body: str):
+    def __init__(self, name: str, parameters: List[Tuple[str, str]], body: str, metadata: Optional[Dict] = None):
         self.name = name
         self.parameters = parameters # List of (type, name) tuples
         self.body = body
+        self.metadata = metadata or {}
 
     def _repr_indent(self, level=0):
         indent = "  " * level
         params_str = ", ".join([f"{t} {n}" for t, n in self.parameters])
-        
+        meta = f", Meta={self.metadata}" if self.metadata else ""
+
         body_display = self.body.strip()
         # Apply formatting for readability if it contains logical operators
         # This is a heuristic to match the expected multi-line output for predicates
@@ -160,7 +166,7 @@ class PredicateDefinitionConfig(ASTConfigNode):
         if len(single_line_body_for_len) > 80: # Arbitrary threshold for display
             body_display = single_line_body_for_len[:77] + "..."
 
-        return f"{indent}[PredicateDefinition]({self.name}): Params=({params_str}), Body='{body_display}'"
+        return f"{indent}[PredicateDefinition]({self.name}): Params=({params_str}), Body='{body_display}'{meta}"
 
 class HybridProgramConfig(ASTConfigNode):
     """Base class for specific hybrid program configurations."""
@@ -173,17 +179,20 @@ class HybridProgramConfig(ASTConfigNode):
 
 class ControlFuncConfig(HybridProgramConfig):
     """Configuration for a control function (discrete choices and assignments)."""
-    def __init__(self, name: str, action_space_config: Optional['ActionConfig'] = None):
+    def __init__(self, name: str, action_space_config: Optional['ActionConfig'] = None, metadata: Optional[Dict] = None):
         super().__init__(name)
         self.action_space_config = action_space_config
+        self.metadata = metadata or {}
 
     def _repr_indent(self, level=0):
         indent = "  " * level
+        meta = f" [Meta: {self.metadata}]" if self.metadata else ""
+
         if self.action_space_config:
             raw_body_snippet = self.action_space_config.to_string_representation()
             if len(raw_body_snippet) > 80:
                 raw_body_snippet = raw_body_snippet[:77] + "..."
-            return (f"{indent}[HybridProgram]({self.name})\n"
+            return (f"{indent}[HybridProgram]({self.name}){meta}\n"
                     f"{indent}  [Body (parsed)]: '{raw_body_snippet}'\n"
                     f"{self.action_space_config._repr_indent(level + 1)}")
         return f"{indent}[HybridProgram]({self.name}): No action space defined."
@@ -208,15 +217,18 @@ class EvolutionDomainConfig(ASTConfigNode):
 
 class StepFuncConfig(HybridProgramConfig):
     """Configuration for a step function (differential equations)."""
-    def __init__(self, name: str, odes: List[ODEConfig], evolution_domain: Optional[EvolutionDomainConfig] = None, duration: Optional[str] = None, raw_body_snippet: Optional[str] = None):
+    def __init__(self, name: str, odes: List[ODEConfig], evolution_domain: Optional[EvolutionDomainConfig] = None, duration: Optional[str] = None, raw_body_snippet: Optional[str] = None, metadata: Optional[Dict] = None):
         super().__init__(name)
         self.odes = odes
         self.evolution_domain = evolution_domain
         self.duration = duration # e.g., 'ep' for the t' = 1 & t <= ep part
         self.raw_body_snippet = raw_body_snippet # Added to store raw body for display
+        self.metadata = metadata or {}
 
     def _repr_indent(self, level=0):
         indent = "  " * level
+
+        meta = f" [Meta: {self.metadata}]" if self.metadata else ""
         odes_lines = [ode._repr_indent(level + 2) for ode in self.odes]
         duration_str = f", Duration='{self.duration}'" if self.duration else ""
 
@@ -230,7 +242,7 @@ class StepFuncConfig(HybridProgramConfig):
                 body_display = body_display[:77] + "..."
             body_parsed_str = f"{indent}  [Body (parsed)]: '{body_display}'\n"
 
-        return (f"{indent}[HybridProgram]({self.name}){duration_str}\n"
+        return (f"{indent}[HybridProgram]({self.name}){duration_str}{meta}\n"
                 f"{body_parsed_str}" # Add this line
                 f"{indent}  [ODEs]:\n{ode_block_str}\n"
                 f"{domain_block_str}")

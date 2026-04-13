@@ -25,10 +25,14 @@ class KeYmaeraXParser:
         # 1. Remove multi-line comments (/* ... */)
         self.source_code = re.sub(r'/\*.*?\*/', lambda m: ' ' * len(m.group(0)), self.source_code, flags=re.DOTALL)
         # 2. Remove single-line comments (//)
-        self.source_code = re.sub(r'//.*', '', self.source_code)
+        # BUT keep metadata comments (//@)
+        # This regex looks for // that is NOT followed by @
+        self.source_code = re.sub(r'//(?![ \t]*@).*', '', self.source_code)
         # 3. Normalize line endings and remove excessive blank lines
         self.source_code = re.sub(r'\n\s*\n', '\n', self.source_code)
         self.source_code = self.source_code.strip()
+        
+        # print("Source code cleanup complete. Cleaned source:", self.source_code)
         logging.debug("Source code cleanup complete.")
 
     # Helper method to split by an operator, respecting brace nesting
@@ -202,153 +206,215 @@ class KeYmaeraXParser:
         logging.debug(f"Created DefinitionsBlock ASTNode.")
 
         # Use a mutable list of characters for efficient replacement of processed blocks.
-        mutable_definitions_block = list(definitions_block)
+        # This allows us to "remove" parsed content by replacing it with spaces,
+        # which regexes will then naturally skip over.
+        mutable_definitions_block_chars = list(definitions_block)
 
-        # --- 1. Extract Hybrid Programs (HP) first ---
-
-        # Pattern to find the HP header up to the opening brace '{'
-        HP_HEADER_PATTERN = re.compile(
-            r'HP\s+(\w+)\s*::=\s*\{',
-            re.DOTALL
+        # Pre-compile patterns for efficiency
+        # HP_START_PATTERN: Matches the header of an HP definition, including metadata.
+        # Uses `[^\n]*` for single-line comments and `*` for multiple metadata lines.
+        HP_START_PATTERN = re.compile(
+            r'(?P<metadata>(?://\s*@[^\n]*\n)*)?' # Capture all leading comment lines for HP metadata
+            r'\s*HP\s+(?P<name>\w+)\s*::=\s*\{',
+            re.DOTALL # Allows '.' to match newlines for the overall pattern, though metadata is line-limited
         )
-        logging.debug("Starting HP extraction.")
-        current_search_pos = 0
-        while current_search_pos < len(mutable_definitions_block):
-            # Search for the next HP header from the current position
-            search_string = "".join(mutable_definitions_block[current_search_pos:])
-            match = HP_HEADER_PATTERN.search(search_string)
+        
+        # DEF_FULL_PATTERN: Matches a complete Real or Bool definition, including metadata,
+        # parameters, value, and the terminating semicolon.
+        # Uses `[^\n]*` for single-line comments.
+        DEF_FULL_PATTERN = re.compile(
+            r'(?P<raw_comments>(?:^[ \t]*//[^\n]*\n)*)' # Capture all leading comment lines (strictly single-line)
+            r'[ \t]*(?P<type>Real|Bool)\s+(?P<name>\w+)' # Type and Name
+            r'(?:\s*\((?P<params>.*?)\))?' # Optional parameters (can span multiple lines)
+            r'(?:\s*(?:<->|=)\s*(?P<value>.*?))?' # Optional value/body (can span multiple lines)
+            r';', # Terminating semicolon
+            re.DOTALL | re.MULTILINE # DOTALL for multi-line params/value, MULTILINE for '^' to match start of line
+        )
 
-            if match:
-                hp_header_start_idx = current_search_pos + match.start()
-                open_brace_idx = current_search_pos + match.end() - 1
-                hp_name = match.group(1).strip()
+        # current_search_global_offset tracks the position in the original `definitions_block`
+        # (and thus in `mutable_definitions_block_chars`) where the next search should begin.
+        current_search_global_offset = 0
+
+        # Loop until no more definitions can be found
+        while True:
+            # Recreate the string from the mutable list for each search.
+            # Regex `search` will naturally skip over the ' ' characters from previous replacements.
+            current_definitions_text_for_search = "".join(mutable_definitions_block_chars)
+            
+            # Search for the next HP header and Real/Bool definition from the current offset
+            hp_match = HP_START_PATTERN.search(current_definitions_text_for_search, current_search_global_offset)
+            def_match = DEF_FULL_PATTERN.search(current_definitions_text_for_search, current_search_global_offset)
+
+            # Determine which definition type appears next (or if none are left)
+            next_hp_idx = hp_match.start() if hp_match else float('inf')
+            next_def_idx = def_match.start() if def_match else float('inf')
+
+            if next_hp_idx == float('inf') and next_def_idx == float('inf'):
+                # No more definitions of either type found in the remaining text
+                logging.debug("No more definitions found. Exiting parsing loop.")
+                break # Exit the loop
+
+            if next_hp_idx < next_def_idx:
+                # Process Hybrid Program (HP) because its header appeared first
+                hp_header_start_idx = hp_match.start()
+                open_brace_idx = hp_match.end() - 1 # The '{' is at the end of the HP header match
+                hp_name = hp_match.group('name')
+                raw_meta = hp_match.group('metadata')
+                metadata_dict = self._parse_metadata_string(raw_meta) if raw_meta else {}
                 logging.debug(f"Found HP header for '{hp_name}' at global index {hp_header_start_idx}.")
 
-                full_current_block_string = "".join(mutable_definitions_block)
-
+                # Use the full current string for brace matching
                 closing_brace_idx = self._find_matching_brace_span(
-                    full_current_block_string,
+                    current_definitions_text_for_search,
                     open_brace_idx
                 )
 
                 if closing_brace_idx is not None:
-                    hp_body_raw = "".join(mutable_definitions_block[open_brace_idx : closing_brace_idx + 1]).strip()
+                    hp_body_raw = current_definitions_text_for_search[open_brace_idx : closing_brace_idx + 1].strip()
                     logging.debug(f"Extracted HP '{hp_name}' body (raw): '{hp_body_raw[:100]}...'")
 
                     full_hp_block_end_idx = closing_brace_idx + 1
-
-                    if full_hp_block_end_idx + 1 < len(mutable_definitions_block) and \
-                       "".join(mutable_definitions_block[full_hp_block_end_idx : full_hp_block_end_idx + 2]).strip() == ';;':
-                        full_hp_block_end_idx += 2
-                    elif full_hp_block_end_idx < len(mutable_definitions_block) and \
-                         mutable_definitions_block[full_hp_block_end_idx] == ';':
-                        full_hp_block_end_idx += 1
-
+                    
+                    # Check for optional HP terminators (;; or ;) immediately after the closing brace
+                    # We need to find the *absolute* index of these terminators from the start of the full string
+                    temp_str_after_brace = current_definitions_text_for_search[full_hp_block_end_idx:].lstrip()
+                    if temp_str_after_brace.startswith(';;'):
+                        terminator_idx = current_definitions_text_for_search.find(';;', full_hp_block_end_idx)
+                        if terminator_idx != -1:
+                            full_hp_block_end_idx = terminator_idx + 2
+                    elif temp_str_after_brace.startswith(';'):
+                        terminator_idx = current_definitions_text_for_search.find(';', full_hp_block_end_idx)
+                        if terminator_idx != -1:
+                            full_hp_block_end_idx = terminator_idx + 1
+                    
                     hp_node = HybridProgram(hp_name, hp_body_raw)
+                    hp_node.metadata = metadata_dict
                     defs_node.add_child(hp_node)
                     logging.debug(f"Added HybridProgram ASTNode for '{hp_name}' to DefinitionsBlock.")
 
-                    # --- New: Parse HP body directly here ---
+                    # Parse HP body structure if specific functions are defined
                     body_content = hp_body_raw.strip()
                     if hp_name == 'controlFunc':
                         self._parse_program_fragment(body_content, hp_node)
                         logging.debug(f"Parsed controlFunc structure for '{hp_name}'.")
                     elif hp_name == 'stepFunc':
-                        logging.debug(f"Parsing stepFunc structure for '{hp_name}'. Raw body: {body_content[:100]}...")
-                        ode_node = ASTNode("OrdinaryDifferentialEquations")
-                        domain_node = ASTNode("EvolutionDomain")
-
-                        clean_body_no_braces = body_content
-                        if clean_body_no_braces.startswith('{') and clean_body_no_braces.endswith('}'):
-                            clean_body_no_braces = clean_body_no_braces[1:-1].strip()
-                        clean_body = re.sub(r'\s+', ' ', clean_body_no_braces).strip()
-                        logging.debug(f"stepFunc body after cleaning: {clean_body[:100]}...")
-
-                        parts = [p.strip() for p in KeYmaeraXParser.split_by_operator_outside_braces(clean_body, ',') if p.strip()]
-                        logging.debug(f"stepFunc parts after splitting by comma: {parts}")
-
-                        for part in parts:
-                            if not part: continue
-
-                            sub_parts = KeYmaeraXParser.split_by_operator_outside_braces(part, '&')
-                            logging.debug(f"stepFunc sub-parts for '{part}' after splitting by '&': {sub_parts}")
-
-                            if not sub_parts:
-                                continue
-
-                            ode_or_formula = sub_parts[0]
-                            if "'" in ode_or_formula:
-                                ode_node.add_child(ASTNode("ODE", value=ode_or_formula))
-                                logging.debug(f"Added ODE: {ode_or_formula}")
-                            else:
-                                domain_node.add_child(ASTNode("Constraint", value=ode_or_formula))
-                                logging.debug(f"Added Constraint (from ODE/formula part): {ode_or_formula}")
-
-                            for domain_constraint in sub_parts[1:]:
-                                if domain_constraint:
-                                    domain_node.add_child(ASTNode("Constraint", value=domain_constraint))
-                                    logging.debug(f"Added Constraint (from domain part): {domain_constraint}")
-
-                        hp_node.add_child(ode_node)
-                        if domain_node.children:
-                            hp_node.add_child(domain_node)
-                        logging.debug(f"Finished parsing stepFunc structure for '{hp_name}'. ODE nodes: {len(ode_node.children)}, Domain nodes: {len(domain_node.children)}")
-                    # --- End HP body parsing ---
-
+                        self._parse_step_func_structure(hp_body_raw, hp_node)
+                    
+                    # Replace the processed HP block with spaces in the mutable character list
                     for i in range(hp_header_start_idx, full_hp_block_end_idx):
-                        if i < len(mutable_definitions_block):
-                            mutable_definitions_block[i] = ' '
-
-                    current_search_pos = full_hp_block_end_idx
+                        if i < len(mutable_definitions_block_chars):
+                            mutable_definitions_block_chars[i] = ' '
+                    
+                    # Advance search position past the *original* end of the processed block
+                    current_search_global_offset = full_hp_block_end_idx
                 else:
                     logging.warning(f"Unbalanced braces for HP '{hp_name}' starting at index {open_brace_idx}. Skipping this block.")
-                    current_search_pos = open_brace_idx + 1
+                    # Advance search past the problematic open brace to avoid an infinite loop
+                    current_search_global_offset = open_brace_idx + 1
             else:
-                logging.debug("No more HP definitions found in current segment. Breaking HP extraction loop.")
-                break
+                # Process Real/Bool Definition because its header appeared first
+                def_start_idx = def_match.start()
+                d_type = def_match.group('type')
+                d_name = def_match.group('name')
+                d_params = def_match.group('params')
+                d_val = (def_match.group('value') or "").strip()
+                raw_comments = def_match.group('raw_comments') or ""
 
-        remaining_text_after_hps = "".join(mutable_definitions_block)
-        logging.debug(f"Finished HP extraction. Remaining text for simple definitions:\n'{remaining_text_after_hps.strip()[:200]}...'")
+                m_data = self._parse_metadata_string(raw_comments)
 
-        # --- 2. Parse simple Definitions (DEF Real/Bool) ---
-        parts = self.split_by_operator_outside_braces(remaining_text_after_hps, ';')
-        logging.debug(f"Simple definitions parts after splitting by ';': {parts}")
+                if d_type == "Bool" and d_val.startswith('(') and d_val.endswith(')'):
+                    d_val = d_val[1:-1].strip()
 
-        for part in parts:
-            line = part.strip()
-            if not line:
-                continue
-
-            def_match = re.search(r'(Real|Bool)\s+(\w+)(?:\s*\((.*?)\))?\s*(?:<->|=)\s*(.*?)$', line, re.DOTALL)
-
-            if def_match:
-                def_type = def_match.group(1)
-                name = def_match.group(2)
-                params = def_match.group(3)
-                value = def_match.group(4).strip()
-                logging.debug(f"Found Real/Bool definition with value: Type='{def_type}', Name='{name}', Value='{value}'")
-
-                # FIX: Conditionally remove outer parentheses for Bool types only
-                if def_type == "Bool" and value.startswith('(') and value.endswith(')'):
-                    value = value[1:-1].strip()
-
-                def_node = Definition(name, def_type, value=value)
-
-                if params:
-                    param_list = [p.strip() for p in self.split_by_operator_outside_braces(params, ',')]
-                    param_node = ASTNode("Parameters", ", ".join(param_list))
-                    def_node.add_child(param_node)
-
+                def_node = Definition(d_name, d_type, value=d_val)
+                def_node.metadata = m_data
+                
+                if d_params:
+                    param_list = [p.strip() for p in self.split_by_operator_outside_braces(d_params, ',')]
+                    def_node.add_child(ASTNode("Parameters", ", ".join(param_list)))
+                
                 defs_node.add_child(def_node)
-                continue
+                logging.debug(f"Added Definition ASTNode for '{d_name}' (Type: {d_type}) to DefinitionsBlock.")
 
-            const_match = re.search(r'(Real|Bool)\s+(\w+)\s*$', line, re.DOTALL)
-            if const_match:
-                def_type = const_match.group(1)
-                name = const_match.group(2)
-                defs_node.add_child(Definition(name, def_type))
-                logging.debug(f"Found simple constant definition: Type='{def_type}', Name='{name}'")
-        logging.debug("Finished _parse_definitions.")
+                # Replace the processed definition block with spaces
+                def_end_idx = def_match.end()
+                for i in range(def_start_idx, def_end_idx):
+                    if i < len(mutable_definitions_block_chars):
+                        mutable_definitions_block_chars[i] = ' '
+                
+                # Advance search position past the end of the processed block
+                current_search_global_offset = def_end_idx
+
+        # After the loop, check for any unparsed content (non-space characters)
+        remaining_text_after_loop = "".join(mutable_definitions_block_chars).strip()
+        if remaining_text_after_loop:
+            logging.warning(f"Unparsed content remaining in Definitions block: '{remaining_text_after_loop[:200]}...'")
+
+        
+    def _parse_metadata_string(self, raw_metadata: Optional[str]) -> dict:
+        """
+        Converts RL-Annotation lines into a dictionary.
+        Supports: // @category: key1=val1, key2={complex_expr}
+        """
+        metadata = {}
+        if not raw_metadata: 
+            return metadata
+        
+        # 1. Extract the category (safety, progress, stability)
+        # This looks for the word immediately following the '@' and before the ':'
+        category_match = re.search(r'@(\w+):', raw_metadata)
+        if category_match:
+            metadata['type'] = category_match.group(1).strip()
+
+        # 2. Extract key-value pairs
+        # Logic:
+        # (\w+)          -> The key (e.g., reward, penalty, shape)
+        # \s*=\s*        -> The equals sign with optional whitespace
+        # (              -> Start value capture group
+        #   \{.*?\}      -> Option A: Anything inside curly braces (non-greedy)
+        #   |            -> OR
+        #   [^,\n]+      -> Option B: Anything that isn't a comma or newline
+        # )              -> End value capture group
+        kv_pattern = r'(\w+)\s*=\s*({.*?}|[^,\n]+)'
+        
+        kv_matches = re.findall(kv_pattern, raw_metadata, re.DOTALL)
+        
+        for key, val in kv_matches:
+            clean_val = val.strip()
+            # Remove surrounding curly braces if they exist for the final dict
+            if clean_val.startswith('{') and clean_val.endswith('}'):
+                clean_val = clean_val[1:-1].strip()
+            
+            metadata[key.strip()] = clean_val
+
+        return metadata
+    
+    
+    def _parse_step_func_structure(self, body_content: str, hp_node: ASTNode):
+        """FIX: Extracted stepFunc logic into a clean helper"""
+        ode_node = ASTNode("OrdinaryDifferentialEquations")
+        domain_node = ASTNode("EvolutionDomain")
+
+        clean_body = body_content.strip()
+        if clean_body.startswith('{') and clean_body.endswith('}'):
+            clean_body = clean_body[1:-1].strip()
+
+        parts = [p.strip() for p in self.split_by_operator_outside_braces(clean_body, ',') if p.strip()]
+        for part in parts:
+            sub_parts = self.split_by_operator_outside_braces(part, '&')
+            if not sub_parts: continue
+
+            ode_or_formula = sub_parts[0]
+            if "'" in ode_or_formula:
+                ode_node.add_child(ASTNode("ODE", value=ode_or_formula))
+            else:
+                domain_node.add_child(ASTNode("Constraint", value=ode_or_formula))
+
+            for domain_constraint in sub_parts[1:]:
+                domain_node.add_child(ASTNode("Constraint", value=domain_constraint))
+
+        hp_node.add_child(ode_node)
+        if domain_node.children:
+            hp_node.add_child(domain_node)
 
 
     def _parse_program_variables(self):
@@ -377,48 +443,52 @@ class KeYmaeraXParser:
 
 
     def _parse_program_fragment(self, program_fragment_string: str, parent_node: ASTNode):
-        logging.debug(f"_parse_program_fragment called for: '{program_fragment_string[:80]}...'")
         fragment = program_fragment_string.strip()
         if not fragment:
-            logging.debug("Empty fragment, returning from _parse_program_fragment.")
             return
 
-        split_by_operator = self.split_by_operator_outside_braces
+        # 1. Peel off ALL outer braces until we find the actual content.
+        # This prevents {{...}} from confusing the splitter.
+        while fragment.startswith('{') and fragment.endswith('}'):
+            # Check if these braces actually match each other
+            if self._find_matching_brace_span(fragment, 0) == len(fragment) - 1:
+                fragment = fragment[1:-1].strip()
+            else:
+                break # Braces are like {a};{b}, don't peel.
 
-        if fragment.startswith('{') and fragment.endswith('}'):
-            fragment_content = fragment[1:-1].strip()
-            logging.debug(f"Stripped outer braces. Content: '{fragment_content[:80]}...'")
-        else:
-            fragment_content = fragment
+        if not fragment:
+            return
 
-        choice_parts = split_by_operator(fragment_content, '++')
+        # 2. Check for Choice Operator (++)
+        # Use the helper to split, ensuring we only split at the TOP level of this fragment
+        choice_parts = self.split_by_operator_outside_braces(fragment, '++')
+        
         if len(choice_parts) > 1:
-            logging.debug(f"Detected ChoiceOperator (++) with {len(choice_parts)} parts.")
             choice_node = ASTNode("ChoiceOperator (++)")
             parent_node.add_child(choice_node)
             for i, part in enumerate(choice_parts):
                 child_choice_node = ASTNode(f"Choice {i+1}")
                 choice_node.add_child(child_choice_node)
+                # Recurse into the part
                 self._parse_program_fragment(part, child_choice_node)
             return
 
-        statements = [s.strip() for s in split_by_operator(fragment_content, ';') if s.strip()]
-        if len(statements) > 1 or (len(statements) == 1 and ';' in fragment_content):
-            logging.debug(f"Detected Sequence (;) with {len(statements)} statements.")
+        # 3. Check for Sequence Operator (;)
+        statements = self.split_by_operator_outside_braces(fragment, ';')
+        
+        # If we have multiple statements OR a single statement that ends in a semicolon
+        if len(statements) > 1 or (len(statements) == 1 and fragment.endswith(';')):
             for stmt_value in statements:
-                if stmt_value:
+                if stmt_value.strip():
                     self._parse_program_fragment(stmt_value, parent_node)
             return
 
-        if fragment_content:
-            if fragment_content.startswith('?'):
-                # FIX: Remove leading '?' for ActionConstraintConfig
-                parent_node.add_child(ASTNode("Test", value=fragment_content[1:]))
-                logging.debug(f"Added Test statement: '{fragment_content[1:]}'")
-            else:
-                parent_node.add_child(ASTNode("Statement", value=fragment_content))
-                logging.debug(f"Added Statement: '{fragment_content}'")
-        logging.debug("Finished _parse_program_fragment for this level.")
+        # 4. Base Case: It's a single Action/Test
+        if fragment.startswith('?'):
+            parent_node.add_child(ASTNode("Test", value=fragment[1:].strip()))
+        else:
+            # Check for assignment or HP call
+            parent_node.add_child(ASTNode("Statement", value=fragment))
 
 
     def _parse_problem(self):
@@ -589,6 +659,8 @@ def convert_keymaerax_ast_to_intermediate_pyast(kx_ast_root: ASTNode) -> GymEnvi
         
         for def_node_kx in defs_block_kx.children:
             logging.debug(f"Converting definition AST node: {def_node_kx.node_type} (name: {getattr(def_node_kx, 'name', 'N/A')}, type: {getattr(def_node_kx, 'definition_type', 'N/A')})")
+            metadata = getattr(def_node_kx, 'metadata', {})
+            
             if def_node_kx.node_type == "Definition" and hasattr(def_node_kx, 'definition_type'):
                 parameters = []
                 params_node = next((c for c in def_node_kx.children if c.node_type == "Parameters"), None)
@@ -612,7 +684,7 @@ def convert_keymaerax_ast_to_intermediate_pyast(kx_ast_root: ASTNode) -> GymEnvi
                                 control_func_root_action, 0
                             )
                         # Pass action_space_config directly to constructor
-                        control_func_config = ControlFuncConfig(name=def_node_kx.name, action_space_config=action_space_config)
+                        control_func_config = ControlFuncConfig(name=def_node_kx.name, action_space_config=action_space_config, metadata=metadata)
                         definitions_config.hybrid_programs.append(control_func_config)
                         logging.debug("Appended ControlFuncConfig to hybrid_programs.")
                     elif def_node_kx.name == "stepFunc":
@@ -654,7 +726,7 @@ def convert_keymaerax_ast_to_intermediate_pyast(kx_ast_root: ASTNode) -> GymEnvi
                         
                         evolution_domain = EvolutionDomainConfig(constraints=evolution_domain_constraints) if evolution_domain_constraints else None
                         # Pass raw_body_snippet to StepFuncConfig
-                        step_func_config = StepFuncConfig(name=def_node_kx.name, odes=odes, evolution_domain=evolution_domain, duration=duration_expr, raw_body_snippet=def_node_kx.body)
+                        step_func_config = StepFuncConfig(name=def_node_kx.name, odes=odes, evolution_domain=evolution_domain, duration=duration_expr, raw_body_snippet=def_node_kx.body, metadata=metadata)
                         definitions_config.hybrid_programs.append(step_func_config)
                         logging.debug("Appended StepFuncConfig to hybrid_programs.")
                     else:
@@ -665,21 +737,24 @@ def convert_keymaerax_ast_to_intermediate_pyast(kx_ast_root: ASTNode) -> GymEnvi
                             name=def_node_kx.name,
                             return_type=def_node_kx.definition_type,
                             parameters=parameters,
-                            body=def_node_kx.definition_value
+                            body=def_node_kx.definition_value,
+                            metadata=metadata
                         ))
                         logging.debug(f"Appended FunctionDefinitionConfig: {def_node_kx.name}")
                     else:
                         definitions_config.constants.append(ConstantDefinitionConfig(
                             name=def_node_kx.name,
                             type=def_node_kx.definition_type, # Using 'type' now
-                            value=def_node_kx.definition_value
+                            value=def_node_kx.definition_value,
+                            metadata=metadata
                         ))
                         logging.debug(f"Appended ConstantDefinitionConfig: {def_node_kx.name}")
                 elif def_node_kx.definition_type == "Bool":
                     definitions_config.predicates.append(PredicateDefinitionConfig(
                         name=def_node_kx.name,
                         parameters=parameters,
-                        body=def_node_kx.definition_value
+                        body=def_node_kx.definition_value,
+                        metadata=metadata
                     ))
                     logging.debug(f"Appended PredicateDefinitionConfig: {def_node_kx.name}")
             else:

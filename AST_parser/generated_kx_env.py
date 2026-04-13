@@ -22,17 +22,26 @@ class GeneratedKXEnv(gym.Env):
                 ConstantDefinitionConfig(
                     name='ep',
                     type='Real',
-                    value=None
+                    value='',
+                    metadata={}
+                ),
+                ConstantDefinitionConfig(
+                    name='b',
+                    type='Real',
+                    value='',
+                    metadata={}
+                ),
+                ConstantDefinitionConfig(
+                    name='A',
+                    type='Real',
+                    value='',
+                    metadata={}
                 ),
                 ConstantDefinitionConfig(
                     name='W',
                     type='Real',
-                    value=None
-                ),
-                ConstantDefinitionConfig(
-                    name='V',
-                    type='Real',
-                    value=None
+                    value='',
+                    metadata={}
                 )
             ],
             functions=[
@@ -42,7 +51,8 @@ class GeneratedKXEnv(gym.Env):
                     parameters=[
     ('Real', 'v')
 ],
-                    body='0'
+                    body='v^2 / (2*b)',
+                    metadata={}
                 ),
                 FunctionDefinitionConfig(
                     name='accelComp',
@@ -50,7 +60,8 @@ class GeneratedKXEnv(gym.Env):
                     parameters=[
     ('Real', 'v')
 ],
-                    body='ep*(v+V)'
+                    body='((A/b + 1) * (A/2 * ep^2 + ep*v))',
+                    metadata={}
                 ),
                 FunctionDefinitionConfig(
                     name='admissibleSeparation',
@@ -58,7 +69,8 @@ class GeneratedKXEnv(gym.Env):
                     parameters=[
     ('Real', 'v')
 ],
-                    body='stopDist(v) + accelComp(v)'
+                    body='stopDist(v) + accelComp(v)',
+                    metadata={}
                 )
             ],
             predicates=[
@@ -68,12 +80,65 @@ class GeneratedKXEnv(gym.Env):
     ('Real', 'dx'),
     ('Real', 'dy')
 ],
-                    body='dx^2 + dy^2 = 1'
+                    body='dx^2 + dy^2 = 1',
+                    metadata={
+    'type': 'progress',
+    'reward': '10',
+    'shape': '-((dx**2 + dy**2) - 1)**2',
+    'on_success': 'continue:status=none',
+    'on_failure': 'continue:status=none'
+}
+                ),
+                PredicateDefinitionConfig(
+                    name='isPhysicallyValid',
+                    parameters=[
+    ('Real', 'v'),
+    ('Real', 'r')
+],
+                    body='v >= 0 & r != 0',
+                    metadata={
+    'type': 'safety',
+    'penalty': '-500',
+    'on_failure': 'truncate:status=failure',
+    'on_success': 'continue:status=none'
+}
+                ),
+                PredicateDefinitionConfig(
+                    name='isSafe',
+                    parameters=[
+    ('Real', 'x'),
+    ('Real', 'y'),
+    ('Real', 'v'),
+    ('Real', 'xo'),
+    ('Real', 'yo')
+],
+                    body='abs(x-xo) > stopDist(v) | abs(y-yo) > stopDist(v)',
+                    metadata={
+    'type': 'safety',
+    'penalty': '-1000',
+    'shape': '(abs(x-xo) - stopDist(v)) + (abs(y-yo) - stopDist(v))',
+    'on_failure': 'truncate:status=failure',
+    'on_success': 'continue:status=none'
+}
+                ),
+                PredicateDefinitionConfig(
+                    name='isEfficient',
+                    parameters=[
+    ('Real', 'v')
+],
+                    body='v >= 0',
+                    metadata={
+    'type': 'progress',
+    'shape': '1/v if v > 0 else v',
+    'on_success': 'continue:status=none',
+    'on_failure': 'continue:status=none'
+}
                 ),
                 PredicateDefinitionConfig(
                     name='bounds',
                     parameters=[],
-                    body='ep > 0                                                                                                          \n    & V >= 0'
+                    body='A >= 0\n    & b > 0\n    & ep > 0',
+                    metadata={}
                 ),
                 PredicateDefinitionConfig(
                     name='initialState',
@@ -86,7 +151,8 @@ class GeneratedKXEnv(gym.Env):
     ('Real', 'xo'),
     ('Real', 'yo')
 ],
-                    body='v = 0\n    & (x-xo)^2 + (y-yo)^2 > 0\n    & isWellformedDir(dx,dy)'
+                    body='v = 0\n    & (x-xo)^2 + (y-yo)^2 > 0\n    & isWellformedDir(dx, dy)\n    & r != 0',
+                    metadata={}
                 ),
                 PredicateDefinitionConfig(
                     name='assumptions',
@@ -99,7 +165,8 @@ class GeneratedKXEnv(gym.Env):
     ('Real', 'xo'),
     ('Real', 'yo')
 ],
-                    body='bounds() & initialState(x,y,v,dx,dy,xo,yo)'
+                    body='bounds() & initialState(x, y, v, dx, dy, xo, yo)',
+                    metadata={}
                 ),
                 PredicateDefinitionConfig(
                     name='loopinv',
@@ -110,9 +177,28 @@ class GeneratedKXEnv(gym.Env):
     ('Real', 'dx'),
     ('Real', 'dy'),
     ('Real', 'xo'),
+    ('Real', 'yo'),
+    ('Real', 'r')
+],
+                    body='isPhysicallyValid(v, r)\n    & isWellformedDir(dx, dy)\n    & isSafe(x, y, v, xo, yo)\n    & isEfficient(v)',
+                    metadata={}
+                ),
+                PredicateDefinitionConfig(
+                    name='ensure',
+                    parameters=[
+    ('Real', 'x'),
+    ('Real', 'y'),
+    ('Real', 'xo'),
     ('Real', 'yo')
 ],
-                    body='v >= 0\n    & isWellformedDir(dx,dy)\n    & (v>0 -> abs(x-xo) > stopDist(v) | abs(y-yo) > stopDist(v))'
+                    body='(x - xo)^2 + (y - yo)^2 > 0',
+                    metadata={
+    'type': 'progress',
+    'reward': '500',
+    'penalty': '-1000',
+    'on_success': 'terminate:status=success',
+    'on_failure': 'terminate:status=failure'
+}
                 )
             ],
             hybrid_programs=[
@@ -123,67 +209,59 @@ class GeneratedKXEnv(gym.Env):
                         choices=[
                             SequenceActionConfig(
                                 actions=[
-                                    NondeterministicAssignmentActionConfig(
-                                        variable='vxo'
-                                    ),
-                                    NondeterministicAssignmentActionConfig(
-                                        variable='vyo'
-                                    ),
-                                    ActionConstraintConfig(
-                                        formula='vxo^2+vyo^2<=V^2'
+                                    DeterministicAssignmentActionConfig(
+                                        variable='a',
+                                        value='-b'
                                     )
                                 ]
                             ),
-                            ChoiceActionConfig(
-                                level_name='ChoiceLevel_1',
-                                choices=[
-                                    SequenceActionConfig(
-                                        actions=[
-                                            DeterministicAssignmentActionConfig(
-                                                variable='v',
-                                                value='0'
-                                            ),
-                                            DeterministicAssignmentActionConfig(
-                                                variable='w',
-                                                value='0'
-                                            )
-                                        ]
+                            SequenceActionConfig(
+                                actions=[
+                                    ActionConstraintConfig(
+                                        formula='v = 0'
                                     ),
-                                    SequenceActionConfig(
-                                        actions=[
-                                            NondeterministicAssignmentActionConfig(
-                                                variable='v'
-                                            ),
-                                            ActionConstraintConfig(
-                                                formula='0<=v'
-                                            ),
-                                            NondeterministicAssignmentActionConfig(
-                                                variable='w'
-                                            ),
-                                            ActionConstraintConfig(
-                                                formula='-W<=w & w<=W'
-                                            ),
-                                            NondeterministicAssignmentActionConfig(
-                                                variable='r'
-                                            ),
-                                            NondeterministicAssignmentActionConfig(
-                                                variable='xo'
-                                            ),
-                                            NondeterministicAssignmentActionConfig(
-                                                variable='yo'
-                                            ),
-                                            ActionConstraintConfig(
-                                                formula='r!=0 & r*w = v'
-                                            ),
-                                            ActionConstraintConfig(
-                                                formula=' abs(x-xo) > admissibleSeparation(v)\n        | abs(y-yo) > admissibleSeparation(v)'
-                                            )
-                                        ]
+                                    DeterministicAssignmentActionConfig(
+                                        variable='a',
+                                        value='0'
+                                    ),
+                                    DeterministicAssignmentActionConfig(
+                                        variable='w',
+                                        value='0'
+                                    )
+                                ]
+                            ),
+                            SequenceActionConfig(
+                                actions=[
+                                    DeterministicAssignmentActionConfig(
+                                        variable='a',
+                                        value='A'
+                                    ),
+                                    NondeterministicAssignmentActionConfig(
+                                        variable='w'
+                                    ),
+                                    ActionConstraintConfig(
+                                        formula='-W<=w & w<=W'
+                                    ),
+                                    NondeterministicAssignmentActionConfig(
+                                        variable='r'
+                                    ),
+                                    NondeterministicAssignmentActionConfig(
+                                        variable='xo'
+                                    ),
+                                    NondeterministicAssignmentActionConfig(
+                                        variable='yo'
+                                    ),
+                                    ActionConstraintConfig(
+                                        formula='r!=0 & r*w = v'
+                                    ),
+                                    ActionConstraintConfig(
+                                        formula='abs(x-xo) > admissibleSeparation(v)\n        | abs(y-yo) > admissibleSeparation(v)'
                                     )
                                 ]
                             )
                         ]
-                    )
+                    ),
+                    metadata={}
                 ),
                 StepFuncConfig(
                     name='stepFunc',
@@ -197,6 +275,10 @@ class GeneratedKXEnv(gym.Env):
                             equation='v * dy'
                         ),
                         ODEConfig(
+                            variable='v',
+                            equation='a'
+                        ),
+                        ODEConfig(
                             variable='dx',
                             equation='-w * dy'
                         ),
@@ -205,12 +287,8 @@ class GeneratedKXEnv(gym.Env):
                             equation='w * dx'
                         ),
                         ODEConfig(
-                            variable='xo',
-                            equation='vxo'
-                        ),
-                        ODEConfig(
-                            variable='yo',
-                            equation='vyo'
+                            variable='w',
+                            equation='a/r'
                         ),
                         ODEConfig(
                             variable='t',
@@ -220,7 +298,9 @@ class GeneratedKXEnv(gym.Env):
                     evolution_domain=EvolutionDomainConfig(
                         constraints=['t <= ep', 'v >= 0']
                     ),
-                    duration=None
+                    duration=None,
+                    raw_body_snippet="{\n        x' = v * dx, y' = v * dy, v' = a,\n        dx' = -w * dy, dy' = w * dx, w' = a/r,\n        t' = 1 & t <= ep & v >= 0\n      }",
+                    metadata={}
                 )
             ]
         )
@@ -267,14 +347,6 @@ class GeneratedKXEnv(gym.Env):
                     type='Real'
                 ),
                 VariableDeclarationConfig(
-                    name='vxo',
-                    type='Real'
-                ),
-                VariableDeclarationConfig(
-                    name='vyo',
-                    type='Real'
-                ),
-                VariableDeclarationConfig(
                     name='t',
                     type='Real'
                 )
@@ -286,7 +358,7 @@ class GeneratedKXEnv(gym.Env):
             ),
             loop_execution=LoopExecutionConfig(
                 iterations='inf',
-                loop_invariant_formula='loopinv(x, y, v, dx, dy, xo, yo)',
+                loop_invariant_formula='loopinv(x, y, v, dx, dy, xo, yo, r)',
                 loop_body=SequenceActionConfig(
                     actions=[
                         SequenceActionConfig(
@@ -302,13 +374,13 @@ class GeneratedKXEnv(gym.Env):
                         ),
                         HybridProgramStepConfig(
                             hp_name='stepFunc',
-                            invariant_formula="t>=0, isWellformedDir(dx,dy),\n          (-t*V <= xo - old(xo) & xo - old(xo) <= t*V),\n          (-t*V <= yo - old(yo) & yo - old(yo) <= t*V),\n          (x'=0*dx -> x = old(x)),\n          (x'=0*dx -> y = old(y)),\n          (x'=v*dx -> -t * v <= x - old(x) & x - old(x) <= t * v),\n          (x'=v*dx -> -t * v <= y - old(y) & y - old(y) <= t * v)"
+                            invariant_formula='t>=0, isWellformedDir(dx, dy)'
                         )
                     ]
                 )
             ),
             postcondition=PostconditionConfig(
-                formula='(v>0 -> (x - xo)^2 + (y - yo)^2 > 0)'
+                formula='ensure(x, y, xo, yo)'
             )
         )
 
@@ -322,24 +394,29 @@ class GeneratedKXEnv(gym.Env):
 
         # Constants
         self.constants['ep'] = 0.0
+        self.constants['b'] = 0.0
+        self.constants['A'] = 0.0
         self.constants['W'] = 0.0
-        self.constants['V'] = 0.0
 
         # Functions (lambdas for easy evaluation)
-        self.functions['stopDist'] = lambda v: 0
-        self.functions['accelComp'] = lambda v: self.constants['ep']*(v+self.constants['V'])
+        self.functions['stopDist'] = lambda v: v**2 / (2*self.constants['b'])
+        self.functions['accelComp'] = lambda v: (self.constants['A']/self.constants['b'] + 1) * (self.constants['A']/2 * self.constants['ep']**2 + self.constants['ep']*v)
         self.functions['admissibleSeparation'] = lambda v: self.functions['stopDist'](v) + self.functions['accelComp'](v)
 
         # Predicates (lambdas for easy evaluation)
         self.predicates['isWellformedDir'] = lambda dx, dy: self._approx_eq(dx**2 + dy**2, 1)
-        self.predicates['bounds'] = lambda : ((self.constants['ep']) > (0)) and ((self.constants['V']) >= (0))
-        self.predicates['initialState'] = lambda x, y, v, dx, dy, xo, yo: (self._approx_eq(v, 0)) and ((((x-xo)**2 + (y-yo)**2) > (0)) and (self.predicates['isWellformedDir'](dx,dy)))
-        self.predicates['assumptions'] = lambda x, y, v, dx, dy, xo, yo: (self.predicates['bounds']()) and (self.predicates['initialState'](x,y,v,dx,dy,xo,yo))
-        self.predicates['loopinv'] = lambda x, y, v, dx, dy, xo, yo: ((not (((v) >= (0)) and ((self.predicates['isWellformedDir'](dx,dy)) and ((v>0)))) or (((np.abs(x-xo)) > (self.functions['stopDist'](v))) or ((np.abs(y-yo)) > (self.functions['stopDist'](v))))))
+        self.predicates['isPhysicallyValid'] = lambda v, r: ((v) >= (0)) and ((r) != (0))
+        self.predicates['isSafe'] = lambda x, y, v, xo, yo: ((np.abs(x-xo)) > (self.functions['stopDist'](v))) or ((np.abs(y-yo)) > (self.functions['stopDist'](v)))
+        self.predicates['isEfficient'] = lambda v: (v) >= (0)
+        self.predicates['bounds'] = lambda : ((self.constants['A']) >= (0)) and (((self.constants['b']) > (0)) and ((self.constants['ep']) > (0)))
+        self.predicates['initialState'] = lambda x, y, v, dx, dy, xo, yo: (self._approx_eq(v, 0)) and ((((x-xo)**2 + (y-yo)**2) > (0)) and ((self.predicates['isWellformedDir'](dx, dy)) and ((self.state['r']) != (0))))
+        self.predicates['assumptions'] = lambda x, y, v, dx, dy, xo, yo: (self.predicates['bounds']()) and (self.predicates['initialState'](x, y, v, dx, dy, xo, yo))
+        self.predicates['loopinv'] = lambda x, y, v, dx, dy, xo, yo, r: (self.predicates['isPhysicallyValid'](v, r)) and ((self.predicates['isWellformedDir'](dx, dy)) and ((self.predicates['isSafe'](x, y, v, xo, yo)) and (self.predicates['isEfficient'](v))))
+        self.predicates['ensure'] = lambda x, y, xo, yo: ((x - xo)**2 + (y - yo)**2) > (0)
 
         # --- State Variables ---
         # Mapping of state variable names to their index in the observation array
-        self._state_keys = ['x', 'y', 'v', 'a', 'dx', 'dy', 'w', 'r', 'xo', 'yo', 'vxo', 'vyo', 't']
+        self._state_keys = ['x', 'y', 'v', 'a', 'dx', 'dy', 'w', 'r', 'xo', 'yo', 't']
         # Current state values (dictionary for easy access by name)
         # Initialize to 0.0 as placeholders; these will be overwritten by reset()
         self.state = {key: 0.0 for key in self._state_keys} 
@@ -356,78 +433,65 @@ class GeneratedKXEnv(gym.Env):
         # --- Action Space (from controlFunc) ---
         # The action space is a Dict to handle choices and nondeterministic assignments.
         self.action_space = spaces.Dict({
-                'choice_ChoiceLevel_0': spaces.Discrete(2),
-                'assign_vxo': spaces.Box(low=-np.inf, high=np.inf, shape=(), dtype=np.float32),
-                'assign_vyo': spaces.Box(low=-np.inf, high=np.inf, shape=(), dtype=np.float32),
-                'choice_ChoiceLevel_1': spaces.Discrete(2),
-                'assign_v': spaces.Box(low=-np.inf, high=np.inf, shape=(), dtype=np.float32),
+                'choice_ChoiceLevel_0': spaces.Discrete(3),
                 'assign_w': spaces.Box(low=-np.inf, high=np.inf, shape=(), dtype=np.float32),
                 'assign_r': spaces.Box(low=-np.inf, high=np.inf, shape=(), dtype=np.float32),
                 'assign_xo': spaces.Box(low=-np.inf, high=np.inf, shape=(), dtype=np.float32),
                 'assign_yo': spaces.Box(low=-np.inf, high=np.inf, shape=(), dtype=np.float32),
                 })
-        self._action_space_keys = ['choice_ChoiceLevel_0', 'assign_vxo', 'assign_vyo', 'choice_ChoiceLevel_1', 'assign_v', 'assign_w', 'assign_r', 'assign_xo', 'assign_yo']
+        self._action_space_keys = ['choice_ChoiceLevel_0', 'assign_w', 'assign_r', 'assign_xo', 'assign_yo']
         self._control_func_action_config = ChoiceActionConfig(
                 level_name='ChoiceLevel_0',
                 choices=[
                     SequenceActionConfig(
                         actions=[
-                            NondeterministicAssignmentActionConfig(
-                                variable='vxo'
-                            ),
-                            NondeterministicAssignmentActionConfig(
-                                variable='vyo'
-                            ),
-                            ActionConstraintConfig(
-                                formula='vxo^2+vyo^2<=V^2'
+                            DeterministicAssignmentActionConfig(
+                                variable='a',
+                                value='-b'
                             )
                         ]
                     ),
-                    ChoiceActionConfig(
-                        level_name='ChoiceLevel_1',
-                        choices=[
-                            SequenceActionConfig(
-                                actions=[
-                                    DeterministicAssignmentActionConfig(
-                                        variable='v',
-                                        value='0'
-                                    ),
-                                    DeterministicAssignmentActionConfig(
-                                        variable='w',
-                                        value='0'
-                                    )
-                                ]
+                    SequenceActionConfig(
+                        actions=[
+                            ActionConstraintConfig(
+                                formula='v = 0'
                             ),
-                            SequenceActionConfig(
-                                actions=[
-                                    NondeterministicAssignmentActionConfig(
-                                        variable='v'
-                                    ),
-                                    ActionConstraintConfig(
-                                        formula='0<=v'
-                                    ),
-                                    NondeterministicAssignmentActionConfig(
-                                        variable='w'
-                                    ),
-                                    ActionConstraintConfig(
-                                        formula='-W<=w & w<=W'
-                                    ),
-                                    NondeterministicAssignmentActionConfig(
-                                        variable='r'
-                                    ),
-                                    NondeterministicAssignmentActionConfig(
-                                        variable='xo'
-                                    ),
-                                    NondeterministicAssignmentActionConfig(
-                                        variable='yo'
-                                    ),
-                                    ActionConstraintConfig(
-                                        formula='r!=0 & r*w = v'
-                                    ),
-                                    ActionConstraintConfig(
-                                        formula=' abs(x-xo) > admissibleSeparation(v)\n        | abs(y-yo) > admissibleSeparation(v)'
-                                    )
-                                ]
+                            DeterministicAssignmentActionConfig(
+                                variable='a',
+                                value='0'
+                            ),
+                            DeterministicAssignmentActionConfig(
+                                variable='w',
+                                value='0'
+                            )
+                        ]
+                    ),
+                    SequenceActionConfig(
+                        actions=[
+                            DeterministicAssignmentActionConfig(
+                                variable='a',
+                                value='A'
+                            ),
+                            NondeterministicAssignmentActionConfig(
+                                variable='w'
+                            ),
+                            ActionConstraintConfig(
+                                formula='-W<=w & w<=W'
+                            ),
+                            NondeterministicAssignmentActionConfig(
+                                variable='r'
+                            ),
+                            NondeterministicAssignmentActionConfig(
+                                variable='xo'
+                            ),
+                            NondeterministicAssignmentActionConfig(
+                                variable='yo'
+                            ),
+                            ActionConstraintConfig(
+                                formula='r!=0 & r*w = v'
+                            ),
+                            ActionConstraintConfig(
+                                formula='abs(x-xo) > admissibleSeparation(v)\n        | abs(y-yo) > admissibleSeparation(v)'
                             )
                         ]
                     )
@@ -436,8 +500,8 @@ class GeneratedKXEnv(gym.Env):
 
         # --- ODE Solver Setup (from stepFunc) ---
         # Mapping from state variable names to their index in the ODE solver's y array
-        self._ode_state_map = {'x': 0, 'y': 1, 'v': 2, 'a': 3, 'dx': 4, 'dy': 5, 'w': 6, 'r': 7, 'xo': 8, 'yo': 9, 'vxo': 10, 'vyo': 11, 't': 12}
-        self._ode_state_idx_map = {0: 'x', 1: 'y', 2: 'v', 3: 'a', 4: 'dx', 5: 'dy', 6: 'w', 7: 'r', 8: 'xo', 9: 'yo', 10: 'vxo', 11: 'vyo', 12: 't'} # Map index to name
+        self._ode_state_map = {'x': 0, 'y': 1, 'v': 2, 'a': 3, 'dx': 4, 'dy': 5, 'w': 6, 'r': 7, 'xo': 8, 'yo': 9, 't': 10}
+        self._ode_state_idx_map = {0: 'x', 1: 'y', 2: 'v', 3: 'a', 4: 'dx', 5: 'dy', 6: 'w', 7: 'r', 8: 'xo', 9: 'yo', 10: 't'} # Map index to name
 
         self._ode_func_str = '''
             def ode_func(t_val, y_array):
@@ -452,9 +516,7 @@ class GeneratedKXEnv(gym.Env):
                 r = y_array[7]
                 xo = y_array[8]
                 yo = y_array[9]
-                vxo = y_array[10]
-                vyo = y_array[11]
-                t = y_array[12]
+                t = y_array[10]
 
                 # Ensure self.state is updated with current ODE values for expression evaluation
                 for i, var_name in self._ode_state_idx_map.items():
@@ -464,16 +526,14 @@ class GeneratedKXEnv(gym.Env):
                 dydt = [
                     v * dx, # dx/dt
                     v * dy, # dy/dt
-                    0.0, # dv/dt
+                    a, # dv/dt
                     0.0, # da/dt
                     -w * dy, # ddx/dt
                     w * dx, # ddy/dt
-                    0.0, # dw/dt
+                    a/r, # dw/dt
                     0.0, # dr/dt
-                    vxo, # dxo/dt
-                    vyo, # dyo/dt
-                    0.0, # dvxo/dt
-                    0.0, # dvyo/dt
+                    0.0, # dxo/dt
+                    0.0, # dyo/dt
                     1, # dt/dt
                 ]
                 return dydt
@@ -482,7 +542,7 @@ class GeneratedKXEnv(gym.Env):
             def event_t_max(t_val, y_array):
                 # Event: t exceeds ep
                 # Returns 0 when t == ep
-                return self.constants['ep'] - y_array[12]
+                return self.constants['ep'] - y_array[10]
             event_t_max.terminal = True
             event_t_max.direction = -1 # Trigger when ep - t goes from positive to negative (t > ep)
 
@@ -588,6 +648,83 @@ class GeneratedKXEnv(gym.Env):
                 break
 
         return expanded_formula
+
+    def _get_predicate_metadata(self, predicate_name: str) -> Dict[str, Any]:
+        """Retrieves metadata for a given predicate name."""
+        for pred_config in self._definitions_config.predicates:
+            if pred_config.name == predicate_name:
+                return pred_config.metadata
+        return {} # Return empty dict if not found
+
+    def _apply_meta_effect(self, metadata: Dict[str, Any], current_reward: float, current_terminated: bool, current_truncated: bool, is_failure_case: bool) -> Tuple[float, bool, bool]:
+        """
+        Applies reward/penalty/termination/truncation effects based on metadata.
+        'on_success': 'action:status=value' (e.g., 'terminate:status=success', 'continue:status=none')
+        'on_failure': 'action:status=value' (e.g., 'truncate:status=failure', 'terminate:status=failure')
+
+        action can be 'continue', 'terminate', 'truncate'.
+        status can be 'success', 'failure', 'none'.
+
+        is_failure_case: True if this call is due to a condition failing, False if it's a success path.
+        """
+        reward_change = 0.0
+        new_terminated = current_terminated
+        new_truncated = current_truncated
+
+        if metadata:
+            event_key = 'on_failure' if is_failure_case else 'on_success'
+            event_config_str = metadata.get(event_key)
+
+            if is_failure_case:
+                penalty = float(metadata.get('penalty', 0.0))
+                reward_change += penalty
+            else: # Success case
+                success_reward = float(metadata.get('reward', 0.0))
+                reward_change += success_reward
+
+            if event_config_str:
+                parts = event_config_str.split(':')
+                action = parts[0]
+                # status_part = parts[1] if len(parts) > 1 else 'status=none'
+                # status = status_part.split('=')[1] # Not directly used for logic, but could be for info
+
+                if action == 'terminate':
+                    new_terminated = True
+                elif action == 'truncate':
+                    new_truncated = True
+                # 'continue' means no change to terminated/truncated state, so no 'else' needed here.
+
+        return current_reward + reward_change, new_terminated, new_truncated
+
+    def _evaluate_shape_expression(self, shape_expr: str) -> float:
+        """
+        Evaluates a shape expression from metadata.
+        Shape expressions might use ternary operators (e.g., 'v > 0 ? 1/v : v').
+        """
+        if not shape_expr:
+            return 0.0
+
+        # Handle ternary operator 'condition ? value_if_true : value_if_false'
+        # This is a simple regex-based parser, might need more robustness for complex cases.
+        match = re.match(r'(.+)\s*\?\s*(.+)\s*:\s*(.+)', shape_expr)
+        if match:
+            condition_str, true_val_str, false_val_str = match.groups()
+            try:
+                condition_result = self._evaluate_expression(condition_str)
+                if condition_result:
+                    return float(self._evaluate_expression(true_val_str))
+                else:
+                    return float(self._evaluate_expression(false_val_str))
+            except Exception as e:
+                print(f"Warning: Error evaluating shape ternary expression '{shape_expr}': {e}")
+                return 0.0
+        else:
+            # If not a ternary, just evaluate as a regular expression
+            try:
+                return float(self._evaluate_expression(shape_expr))
+            except Exception as e:
+                print(f"Warning: Error evaluating shape expression '{shape_expr}': {e}")
+                return 0.0
 
 
     def _kx_expr_to_z3_formula(self, kx_expr: str, z3_symbol_map: Dict[str, Any], fixed_constants: Dict[str, Union[int, float]]) -> Any:
@@ -785,7 +922,7 @@ class GeneratedKXEnv(gym.Env):
                 # This constant has a fixed numeric value. Store it as a Python float.
                 fixed_constants[const_decl.name] = float(const_decl.value)
             else:
-                # This constant either has no value, or its value is an expression.
+                # This constant either has no value, or its value is an an expression.
                 # For Z3, we treat it as a variable that needs to be solved.
                 z3_symbol_map[const_decl.name] = z3.Real(const_decl.name)
 
@@ -836,11 +973,13 @@ class GeneratedKXEnv(gym.Env):
 
 
     def _evaluate_expression(self, expr_str: str, local_vars: Optional[Dict[str, Any]] = None, is_constraint: bool = False) -> Any:
-        # Safe evaluation of expressions using environment's context.
-        # This method parses KeYmaera X expressions at runtime.
-        # If is_constraint is True, returns False on evaluation error.
+        """
+        Safe evaluation of expressions using environment's context.
+        This method parses KeYmaera X expressions at runtime.
+        If is_constraint is True, returns False on evaluation error.
+        """
 
-        if local_vars is None:
+        if local_vars is None: # FIX: Changed '===' to 'is'
             local_vars = {}
 
         # Strip KeYmaera X constraint prefix '?' if present
@@ -994,7 +1133,8 @@ class GeneratedKXEnv(gym.Env):
                     for kx_op, py_op_format in relational_ops:
                         if len(kx_op) == 1 and sub_expr[i] == kx_op:
                             # Special check for '=', ensure it's not part of '==', '!=', '<=', '>='
-                            if kx_op == '=' and (i > 0 and sub_expr[i-1] in '<>=!') or                                             (i < len(sub_expr) - 1 and sub_expr[i+1] == '='):
+                            if kx_op == '=' and ((i > 0 and sub_expr[i-1] in '<>=!') or \
+                                            (i < len(sub_expr) - 1 and sub_expr[i+1] == '=')):
                                 continue 
                             rel_op_found_kx = kx_op
                             rel_op_found_py = py_op_format
@@ -1095,13 +1235,30 @@ class GeneratedKXEnv(gym.Env):
             return reward, terminated, applied_successfully
 
         elif isinstance(action_config, ActionConstraintConfig):
-            # Formula is a raw KeYmaera X string, parsed at runtime by _evaluate_expression
             constraint_met = self._evaluate_expression(action_config.formula, is_constraint=True)
+
+            # Try to find metadata for this constraint if it's a predicate call
+            predicate_name_match = re.match(r'^\s*(\w+)\s*\(', action_config.formula)
+            if predicate_name_match:
+                pred_name = predicate_name_match.group(1)
+                metadata = self._get_predicate_metadata(pred_name)
+            else:
+                # Default metadata for generic constraints
+                metadata = {'type': 'safety', 'penalty': '-100.0', 'on_failure': 'terminate:status=failure'}
+
             if not constraint_met:
-                # print(f"Constraint violated: {{action_config.formula}}")
-                reward -= 100.0 # Penalty for invalid action
-                terminated = True
-                applied_successfully = False
+                reward, terminated, truncated = self._apply_meta_effect(metadata, reward, terminated, False, is_failure_case=True)
+                # If metadata didn't specify termination/truncation, and it's not 'continue', then it's a failure to apply
+                if not terminated and not truncated and metadata.get('on_failure', '').split(':')[0] == 'continue':
+                    applied_successfully = True # Constraint failed but we are told to continue
+                else:
+                    applied_successfully = False # Constraint failed and we should terminate/truncate
+            else:
+                # If constraint is met, apply 'on_success' effects if any
+                if metadata.get('on_success') and metadata.get('on_success').split(':')[0] != 'continue':
+                    reward, terminated, truncated = self._apply_meta_effect(metadata, reward, terminated, False, is_failure_case=False)
+                applied_successfully = True # Constraint met, so action was successfully applied
+
             return reward, terminated, applied_successfully
 
         elif isinstance(action_config, CallHybridProgramConfig):
@@ -1133,27 +1290,36 @@ class GeneratedKXEnv(gym.Env):
 
 
     def _split_top_level_and_local(self, formula_str: str) -> List[str]:
+        """
+        Splits a formula string by top-level '&' operators, respecting brace nesting.
+        This is a simplified version of the parser's split_by_operator_outside_braces
+        tailored for logical conjunctions.
+        """
         parts = []
-        balance = 0
-        start = 0
-        # Normalize spaces around '&'
+        brace_level = 0
+        current_part_start = 0
+
+        # Normalize spaces around '&' for consistent splitting
         formula_str = re.sub(r'\s*&\s*', '&', formula_str)
 
-        for i, char in enumerate(formula_str):
-            if char == '(':
-                balance += 1
-            elif char == ')':
-                balance -= 1
-            elif char == '&' and balance == 0:
-                part = formula_str[start:i].strip()
+        i = 0
+        while i < len(formula_str):
+            if formula_str[i] == '(':
+                brace_level += 1
+            elif formula_str[i] == ')':
+                brace_level -= 1
+
+            if formula_str[i] == '&' and brace_level == 0:
+                part = formula_str[current_part_start:i].strip()
                 if part:
                     parts.append(part)
-                start = i + 1
+                current_part_start = i + 1
+            i += 1
 
-        last_part = formula_str[start:].strip()
+        # Add the last part after the loop finishes
+        last_part = formula_str[current_part_start:].strip()
         if last_part:
             parts.append(last_part)
-
         return parts if parts else [formula_str.strip()]
 
 
@@ -1173,8 +1339,6 @@ class GeneratedKXEnv(gym.Env):
         self.state['r'] = 1.0
         self.state['xo'] = 5.0
         self.state['yo'] = 0.0
-        self.state['vxo'] = 0.0
-        self.state['vyo'] = 0.0
         self.state['t'] = 0.0
 
         z3_base_solution = self._solve_initial_state_with_z3(self._problem_config.precondition.formula)
@@ -1189,7 +1353,7 @@ class GeneratedKXEnv(gym.Env):
             for _ in range(num_perturbation_attempts):
                 trial_state = z3_base_solution.copy()
                 for var_name, value in z3_base_solution.items():
-                    if var_name in self._state_keys:
+                    if var_name in self.state:
                         perturb = self.np_random.uniform(-perturbation_magnitude, perturbation_magnitude)
                         trial_state[var_name] = value + perturb
 
@@ -1233,30 +1397,10 @@ class GeneratedKXEnv(gym.Env):
                 # Apply explicit assignments from the precondition (fallback)
                 self.state['v'] = 0.0
 
-            if not z3_base_solution:
-                # Ensure dx, dy satisfy isWellformedDir (approximate unit vector) (fallback)
-                norm_sq = self.state['dx']**2 + self.state['dy']**2
-                ud_val = self.constants.get('Ud', 0.0) # Get Ud from constants, default to 0.0 if not found
-                # The actual isWellformedDir is '1-Ud <= dx^2+dy^2 & dx^2 + dy^2 <= 1+Ud'
-                # For fallback, we normalize to 1 if it's too far off, or if Ud is 0.
-                if not self._approx_eq(norm_sq, 1.0):
-                    norm = np.sqrt(norm_sq)
-                    if norm > self.equality_tolerance: # Avoid division by zero with tolerance
-                        self.state['dx'] /= norm
-                        self.state['dy'] /= norm
-                    else: # Default to (1,0) if too small
-                        self.state['dx'] = 1.0
-                        self.state['dy'] = 0.0
-
-            if not z3_base_solution:
-                # Ensure robot and obstacle are not at the same position (fallback)
-                if self._approx_eq(self.state['x'], self.state['xo']) and self._approx_eq(self.state['y'], self.state['yo']):
-                    self.state['x'] += 0.1 # Slightly perturb x to ensure separation
-
         # Verify the full precondition after setting initial states
         # Evaluate each conjunct of the precondition to identify specific failures
         failing_formula = None
-        precondition_conjuncts = self._split_top_level_and_local('((ep > 0 & V >= 0) & (v = 0 & (x-xo)^2 + (y-yo)^2 > 0 & (dx^2 + dy^2 = 1)))')
+        precondition_conjuncts = self._split_top_level_and_local('((A >= 0 & b > 0 & ep > 0) & (v = 0 & (x-xo)^2 + (y-yo)^2 > 0 & (dx^2 + dy^2 = 1) & r != 0))')
         precondition_satisfied = True
         for conj_str in precondition_conjuncts:
             # Evaluate each conjunct. _evaluate_expression will handle the parsing.
@@ -1283,10 +1427,48 @@ class GeneratedKXEnv(gym.Env):
         truncated = False
         info = self._get_info()
 
+        # --- Initial Loop Invariant Check (before control/dynamics) ---
+        loop_invariant_formula_kx = self._problem_config.loop_execution.loop_invariant_formula
+        expanded_loop_inv = self._expand_formula(loop_invariant_formula_kx, self._definitions_config)
+        loop_inv_conjuncts = self._split_top_level_and_local(expanded_loop_inv)
+
+        loop_invariant_satisfied_pre_step = True
+        for conj_str in loop_inv_conjuncts:
+            conjunct_result = self._evaluate_expression(conj_str, is_constraint=True)
+            predicate_name_match = re.match(r'^\s*(\w+)\s*\(', conj_str)
+            pred_name = predicate_name_match.group(1) if predicate_name_match else None
+            metadata = self._get_predicate_metadata(pred_name) if pred_name else {}
+
+            if not conjunct_result:
+                loop_invariant_satisfied_pre_step = False
+                # Apply failure effects
+                reward, terminated, truncated = self._apply_meta_effect(
+                    metadata or {'type': 'safety', 'penalty': '-100.0', 'on_failure': 'terminate:status=failure'},
+                    reward, terminated, truncated, is_failure_case=True
+                )
+                if terminated or truncated:
+                    return self._get_obs(), reward, terminated, truncated, info
+            else:
+                # Apply success effects if any (only if action is not 'continue')
+                if metadata.get('on_success') and metadata.get('on_success').split(':')[0] != 'continue':
+                    reward, terminated, truncated = self._apply_meta_effect(metadata, reward, terminated, truncated, is_failure_case=False)
+                    if terminated or truncated:
+                        return self._get_obs(), reward, terminated, truncated, info
+
+        if not loop_invariant_satisfied_pre_step:
+            # Fallback for general loopinv failure if not caught by specific conjuncts
+            print(f"Warning: Loop invariant violated BEFORE step execution (general failure): {loop_invariant_formula_kx}")
+            reward, terminated, truncated = self._apply_meta_effect(
+                {'type': 'safety', 'penalty': '-500.0', 'on_failure': 'terminate:status=failure'},
+                reward, terminated, truncated, is_failure_case=True
+            )
+            return self._get_obs(), reward, terminated, truncated, info # Terminate early
+
+
         # --- 1. Apply Control Function (Discrete Action) ---
         control_reward, control_terminated, control_applied = self._apply_control_action(action)
         reward += control_reward
-        terminated = control_terminated
+        terminated = terminated or control_terminated
 
         if not control_applied:
             # Invalid action chosen or constraint violated during control phase
@@ -1300,23 +1482,21 @@ class GeneratedKXEnv(gym.Env):
         ep_val = self.constants['ep'] # Get the 'ep' constant value
         t_span = (0, ep_val) # Integrate up to time limit 'ep'
 
+        ode_terminated_by_event = False
+
         if ep_val <= 0:
             # If ep is non-positive, no meaningful time evolution occurs.
-            # This might indicate an invalid control action or problem setup.
             self.state['t'] = 0.0 # Time does not advance or is reset
             if ep_val < 0:
                 print(f"Warning: 'ep' constant is negative ({ep_val}). Skipping ODE integration and penalizing.")
-                reward -= 100.0 # Penalty for invalid time duration
-                terminated = True
-            # else (ep_val == 0): No time passes, but not necessarily an error if intended.
+                # Link to isPhysicallyValid metadata if applicable, or a default
+                phys_valid_meta = self._get_predicate_metadata('isPhysicallyValid')
+                reward, terminated, truncated = self._apply_meta_effect(
+                    phys_valid_meta or {'type': 'safety', 'penalty': '-100.0', 'on_failure': 'terminate:status=failure'},
+                    reward, terminated, truncated, is_failure_case=True
+                )
+                ode_terminated_by_event = True # Treat as terminated by event
         else:
-            # Set up ODE events for domain constraints
-            # Events are functions that return 0 when an event occurs.
-            # terminal=True means integration stops. direction=-1 means event triggers when value goes from + to -
-
-            # Ensure self.state reflects current values for ODE func/events
-            # The ODE func and events will get 'self' and use self.state
-
             try:
                 solution = solve_ivp(
                     self._ode_func_compiled, 
@@ -1334,7 +1514,6 @@ class GeneratedKXEnv(gym.Env):
                         self.state[var_name] = final_y[i]
                 elif solution.status == 1: # An event occurred
                     # Update state to the point where the event occurred
-                    # Check if y_events is not empty before accessing
                     if solution.y_events and solution.y_events[0].size > 0:
                         final_y = solution.y_events[0][0] 
                     else:
@@ -1344,43 +1523,114 @@ class GeneratedKXEnv(gym.Env):
                         self.state[var_name] = final_y[i]
 
                     # Check which event terminated it
-                    # For this problem, events are domain constraints (t <= ep, v >= 0)
                     # If v < 0, it's a domain violation -> termination
-                    # We need to re-evaluate after updating self.state
-                    # Note: ODE events themselves use floating-point comparisons internally.
-                    # This check here is a re-evaluation after the fact.
                     if self.state.get('v', 0.0) < -self.equality_tolerance: # Use tolerance for v < 0 check
-                        reward -= 100.0 # Penalty for v < 0
-                        terminated = True
-                    # If t > ep, it means the time limit was reached, which is expected behavior
-                    # so no additional penalty for that specific event, as it's part of the evolution domain.
+                        phys_valid_meta = self._get_predicate_metadata('isPhysicallyValid')
+                        reward, terminated, truncated = self._apply_meta_effect(
+                            phys_valid_meta or {'type': 'safety', 'penalty': '-100.0', 'on_failure': 'truncate:status=failure'}, # Default to truncate as per problem description example
+                            reward, terminated, truncated, is_failure_case=True
+                        )
+                        ode_terminated_by_event = True
+                    # If t > ep, it means the time limit was reached, which is expected behavior.
+                    # No additional penalty for that specific event, as it's part of the evolution domain.
                 else: # Integration failed (status 2)
                     # print(f"ODE integration failed: {solution.message}")
-                    reward -= 150.0 # Severe penalty for integration failure
-                    terminated = True
+                    reward, terminated, truncated = self._apply_meta_effect(
+                        {'type': 'safety', 'penalty': '-150.0', 'on_failure': 'terminate:status=failure'},
+                        reward, terminated, truncated, is_failure_case=True
+                    )
+                    ode_terminated_by_event = True
 
             except Exception as e:
                 # print(f"Error during ODE integration: {e}")
-                reward -= 200.0 # Very severe penalty for unexpected errors
-                terminated = True
+                reward, terminated, truncated = self._apply_meta_effect(
+                    {'type': 'safety', 'penalty': '-200.0', 'on_failure': 'terminate:status=failure'},
+                    reward, terminated, truncated, is_failure_case=True
+                )
+                ode_terminated_by_event = True
 
-        # --- 3. Check Problem Postcondition ---
-        # (x - xo)^2 + (y - yo)^2 > 0
-        # This means the robot must NOT be at the obstacle's position.
-        # If it becomes <= 0, safety is violated.
-        # Postcondition is a raw KeYmaera X string, parsed at runtime by _evaluate_expression
-        postcondition_satisfied = self._evaluate_expression(f'(v>0 -> (x - xo)^2 + (y - yo)^2 > 0)', is_constraint=True)
-        if not postcondition_satisfied:
-            reward -= 100.0 # Safety violation
-            terminated = True
+        terminated = terminated or ode_terminated_by_event
+        truncated = truncated or ode_terminated_by_event # If ODE event truncates, propagate
+
+        # If ODE integration or control action led to termination/truncation, return early
+        if terminated or truncated:
+            return self._get_obs(), reward, terminated, truncated, info
+
+        # --- 3. Evaluate Loop Invariant and Apply Rewards/Penalties/Shaping ---
+        # Re-evaluate loop invariant after ODEs
+        loop_invariant_satisfied_post_ode = True
+        for conj_str in loop_inv_conjuncts: # Reuse loop_inv_conjuncts from earlier
+            conjunct_result = self._evaluate_expression(conj_str, is_constraint=True)
+            predicate_name_match = re.match(r'^\s*(\w+)\s*\(', conj_str)
+            pred_name = predicate_name_match.group(1) if predicate_name_match else None
+            metadata = self._get_predicate_metadata(pred_name) if pred_name else {}
+
+            if not conjunct_result:
+                loop_invariant_satisfied_post_ode = False
+                # Apply failure effects
+                reward, terminated, truncated = self._apply_meta_effect(
+                    metadata or {'type': 'safety', 'penalty': '-100.0', 'on_failure': 'terminate:status=failure'},
+                    reward, terminated, truncated, is_failure_case=True
+                )
+                if terminated or truncated:
+                    return self._get_obs(), reward, terminated, truncated, info
+            else:
+                # Apply success effects if any (only if action is not 'continue')
+                if metadata.get('on_success') and metadata.get('on_success').split(':')[0] != 'continue':
+                    reward, terminated, truncated = self._apply_meta_effect(metadata, reward, terminated, truncated, is_failure_case=False)
+                    if terminated or truncated:
+                        return self._get_obs(), reward, terminated, truncated, info
+
+        if not loop_invariant_satisfied_post_ode:
+            # Fallback for general loopinv failure if not caught by specific conjuncts
+            print(f"Warning: Loop invariant violated AFTER ODEs (general failure): {loop_invariant_formula_kx}")
+            reward, terminated, truncated = self._apply_meta_effect(
+                {'type': 'safety', 'penalty': '-300.0', 'on_failure': 'terminate:status=failure'},
+                reward, terminated, truncated, is_failure_case=True
+            )
+            if terminated or truncated:
+                return self._get_obs(), reward, terminated, truncated, info
+
+        # --- Reward Shaping (from progress predicates) ---
+        # isWellformedDir (progress type, shape: -((dx^2 + dy^2) - 1)^2)
+        wellformed_meta = self._get_predicate_metadata('isWellformedDir')
+        if wellformed_meta.get('type') == 'progress' and 'shape' in wellformed_meta:
+            shape_value = self._evaluate_shape_expression(wellformed_meta['shape'])
+            reward += shape_value # Add to reward
+
+        # isEfficient (progress type, shape: v > 0 ? 1/v : v)
+        efficient_meta = self._get_predicate_metadata('isEfficient')
+        if efficient_meta.get('type') == 'progress' and 'shape' in efficient_meta:
+            shape_value = self._evaluate_shape_expression(efficient_meta['shape'])
+            reward += shape_value # Add to reward
+
+
+        # --- 4. Check Problem Postcondition (ensure) ---
+        # This is the goal of the problem.
+        postcondition_formula_kx = self._problem_config.postcondition.formula
+        postcondition_satisfied = self._evaluate_expression(postcondition_formula_kx, is_constraint=True)
+        ensure_meta = self._get_predicate_metadata('ensure') # Get metadata for 'ensure' predicate
+
+        if postcondition_satisfied:
+            reward, terminated, truncated = self._apply_meta_effect(
+                ensure_meta, reward, terminated, truncated, is_failure_case=False
+            )
         else:
-            # Small positive reward for staying safe, or for making progress
-            reward += 0.1 # Small survival reward
+            reward, terminated, truncated = self._apply_meta_effect(
+                ensure_meta, reward, terminated, truncated, is_failure_case=True
+            )
 
-        # --- 4. Check Truncation ---
+            # Also apply shape if available for the postcondition (ensure)
+            if ensure_meta.get('type') == 'progress' and 'shape' in ensure_meta:
+                shape_value = self._evaluate_shape_expression(ensure_meta['shape'])
+                reward += shape_value # Add to reward
+
+        # --- 5. Check Truncation ---
         if self.current_step >= self.max_episode_steps:
             truncated = True
-            reward -= 10.0 # Small penalty for truncating without reaching goal
+            # Small penalty for truncating without reaching goal, unless already terminated by ensure failure
+            if not terminated and not postcondition_satisfied:
+                reward -= 10.0 
 
         observation = self._get_obs()
         info = self._get_info()
