@@ -838,7 +838,7 @@ class GeneratedKXEnv(gym.Env):
 
             # --- Relational Operators (next level down) ---
             # Note: '=' in KeYmaera X maps to '==' for Z3 exact equality
-            relational_ops = [('!=', '!='), ('<=', '<='), ('>=', '>='), ('<', '<'), ('<', '<'), ('=', '==')]
+            relational_ops = [('!=', '!='), ('<=', '<='), ('>=', '>='), ('<', '<'), ('>', '>'), ('=', '==')]
 
             balance = 0
             rel_op_found_kx = None
@@ -864,7 +864,8 @@ class GeneratedKXEnv(gym.Env):
                     for kx_op, py_op_format in relational_ops:
                         if len(kx_op) == 1 and expression_str[i] == kx_op:
                             # Special check for '=', ensure it's not part of '==', '!=', '<=', '>='
-                            if kx_op == '=' and ((i > 0 and expression_str[i-1] in '<>=!') or                                             (i < len(expression_str) - 1 and expression_str[i+1] == '=')):
+                            if kx_op == '=' and ((i > 0 and expression_str[i-1] in '<>=!') or \
+                                            (i < len(expression_str) - 1 and expression_str[i+1] == '=')):
                                 continue 
                             rel_op_found_kx = kx_op
                             rel_op_found_py = py_op_format
@@ -875,7 +876,10 @@ class GeneratedKXEnv(gym.Env):
             if rel_op_found_kx:
                 left = _parse_logical_and_relational_expression_z3(expression_str[:rel_op_idx].strip())
                 right = _parse_logical_and_relational_expression_z3(expression_str[rel_op_idx+len(rel_op_found_kx):].strip())
-                return f"({left}) {rel_op_found_py} ({right})" 
+                if rel_op_found_kx == '=':
+                    return f"{left} {py_op_format} {right}" # Use py_op_format directly for Z3 '=='
+                else:
+                    return f"({left}) {py_op_format} ({right})" 
 
             # Base case: no logical or relational operators found, return the expression as is.
             # This should now be an arithmetic expression or a literal.
@@ -885,7 +889,7 @@ class GeneratedKXEnv(gym.Env):
         expr_transformed = _parse_logical_and_relational_expression_z3(expr_transformed)
 
         # Final evaluation in a Z3-aware context
-        eval_globals = {'z3': z3, 'z3_symbol_map': z3_symbol_map}
+        eval_globals = {{'z3': z3, 'z3_symbol_map': z3_symbol_map}}
         for const_name, const_value in fixed_constants.items():
             if isinstance(const_value, int):
                 eval_globals[const_name] = z3.IntVal(const_value)
@@ -895,7 +899,7 @@ class GeneratedKXEnv(gym.Env):
         try:
             return eval(expr_transformed, eval_globals)
         except Exception as e:
-            raise ValueError(f"Failed to evaluate Z3 expression '{kx_expr}' (transformed: '{expr_transformed}'): {e}")
+            raise ValueError(f"Failed to evaluate Z3 expression '{{kx_expr}}' (transformed: '{{expr_transformed}}'): {{e}}")
 
 
 
@@ -935,7 +939,7 @@ class GeneratedKXEnv(gym.Env):
             # Pass both z3_symbol_map and fixed_constants
             z3_formula = self._kx_expr_to_z3_formula(expanded_precondition, z3_symbol_map, fixed_constants)
         except ValueError as e:
-            print(f"Z3 Solver Error: Failed to convert precondition to Z3 formula: {e}")
+            print(f"Z3 Solver Error: Failed to convert precondition to Z3 formula: {{e}}")
             return None
 
         # print(f"Z3 formula for precondition: {z3_formula}")
@@ -964,10 +968,10 @@ class GeneratedKXEnv(gym.Env):
             solved_values.update(fixed_constants)
             return solved_values
         elif check_result == z3.unsat:
-            print(f"Z3 Solver: Precondition is UNSAT. No initial state exists for: '{precondition_kx}'")
+            print(f"Z3 Solver: Precondition is UNSAT. No initial state exists for: '{{precondition_kx}}'")
             return None
         else: # z3.unknown
-            print(f"Z3 Solver: Precondition satisfiability UNKNOWN for: '{precondition_kx}'")
+            print(f"Z3 Solver: Precondition satisfiability UNKNOWN for: '{{precondition_kx}}'")
             return None
 
 
@@ -1160,11 +1164,11 @@ class GeneratedKXEnv(gym.Env):
             # With explicit prefixing, eval_locals can be much simpler.
             # Only local_vars are truly 'local' to the eval call.
             # All other references are now explicit (self.state['x'], self.constants['A'], etc.)
-            eval_globals_for_eval = {'np': np, 'math': math, '_approx_eq': self._approx_eq, 'self': self}
+            eval_globals_for_eval = {{'np': np, 'math': math, '_approx_eq': self._approx_eq, 'self': self}}
             result = eval(expr_py_final, eval_globals_for_eval, local_vars)
             return result
         except Exception as e:
-            print(f"Error evaluating expression '{expr_str}' (transformed: '{expr_py_final}'): {e}")
+            print(f"Error evaluating expression '{{expr_str}}' (transformed: '{{expr_py_final}}'): {{e}}")
             if is_constraint:
                 return False # For constraints, return False on error
             raise # Re-raise for non-constraint expressions
