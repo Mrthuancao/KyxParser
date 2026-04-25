@@ -402,7 +402,7 @@ KX_EXPR_TO_Z3_FORMULA_METHOD_CODE = textwrap.dedent("""
         expr_transformed = _parse_logical_and_relational_expression_z3(expr_transformed)
 
         # Final evaluation in a Z3-aware context
-        eval_globals = {{'z3': z3, 'z3_symbol_map': z3_symbol_map}}
+        eval_globals = {'z3': z3, 'z3_symbol_map': z3_symbol_map}
         for const_name, const_value in fixed_constants.items():
             if isinstance(const_value, int):
                 eval_globals[const_name] = z3.IntVal(const_value)

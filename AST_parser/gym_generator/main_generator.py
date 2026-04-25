@@ -22,7 +22,7 @@ from pyast_config import (
 # Import helper functions from other generator modules
 from gym_generator.ast_serialization import serialize_ast_node
 from gym_generator.expression_helpers import format_kx_expr_for_python_lambda_body_generator, expand_formula
-from gym_generator.gym_logic_helpers import generate_action_space_and_logic, generate_ode_solver_logic, generate_reset_logic
+from gym_generator.gym_logic_sub_generators import generate_action_space_and_logic, generate_ode_solver_logic, generate_reset_logic
 from gym_generator.embedded_methods import (
     SPLIT_TOP_LEVEL_AND_LOCAL_METHOD_CODE,
     EVALUATE_EXPRESSION_METHOD_TEMPLATE,
