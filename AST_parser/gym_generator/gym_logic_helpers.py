@@ -16,8 +16,8 @@ from pyast_config import (
 )
 
 # Import helper functions from other generator modules
-from generator.expression_helpers import format_kx_expr_for_python_lambda_body_generator, expand_formula
-from generator.ast_serialization import serialize_ast_node
+from gym_generator.expression_helpers import format_kx_expr_for_python_lambda_body_generator, expand_formula
+from gym_generator.ast_serialization import serialize_ast_node
 
 # Note: gymnasium.spaces is needed for action space definition but is imported in the generated code itself.
 # We don't import it here directly to avoid circular dependencies if pyast_config.py were to import from here.

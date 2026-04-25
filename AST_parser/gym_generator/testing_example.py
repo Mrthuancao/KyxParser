@@ -16,7 +16,7 @@ from pyast_config import (
 )
 
 # Import the main generator function
-from generator.main_generator import generate_gym_environment_code
+from gym_generator.main_generator import generate_gym_environment_code
 
 def get_example_gym_config() -> GymEnvironmentConfig:
     """

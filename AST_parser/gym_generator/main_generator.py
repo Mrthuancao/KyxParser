@@ -20,10 +20,10 @@ from pyast_config import (
 )
 
 # Import helper functions from other generator modules
-from generator.ast_serialization import serialize_ast_node
-from generator.expression_helpers import format_kx_expr_for_python_lambda_body_generator, expand_formula
-from generator.gym_logic_helpers import generate_action_space_and_logic, generate_ode_solver_logic, generate_reset_logic
-from generator.embedded_methods import (
+from gym_generator.ast_serialization import serialize_ast_node
+from gym_generator.expression_helpers import format_kx_expr_for_python_lambda_body_generator, expand_formula
+from gym_generator.gym_logic_helpers import generate_action_space_and_logic, generate_ode_solver_logic, generate_reset_logic
+from gym_generator.embedded_methods import (
     SPLIT_TOP_LEVEL_AND_LOCAL_METHOD_CODE,
     EVALUATE_EXPRESSION_METHOD_TEMPLATE,
     KX_EXPR_TO_Z3_FORMULA_METHOD_CODE,
@@ -456,7 +456,7 @@ class {env_name_for_class}(gym.Env):
             return reward, terminated, applied_successfully
 
         elif isinstance(action_config, NondeterministicAssignmentActionConfig):
-            assign_key = f"assign_{action_config.variable}"
+            assign_key = f"assign_{{action_config.variable}}"
             if assign_key in agent_action:
                 self.state[action_config.variable] = agent_action[assign_key]
             else:
