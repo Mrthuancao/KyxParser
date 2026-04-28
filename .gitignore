@@ -1,6 +1,29 @@
+# Directories to ignore
 GuidedSampler/
 z3/
+.venv/             # Ignore Python virtual environment directory (visible in your terminal prompt and paths)
+__pycache__/       # Ignore Python bytecode cache directories (already present)
+.vscode/           # Ignore VS Code specific settings (often user-specific)
 
-# Ignore Python bytecode files (these are typically generated and not meant for version control)
-*.pyc
-__pycache__/
+# Python-specific generated files
+*.pyc              # Ignore Python bytecode files (already present)
+*.pyo              # Ignore optimized Python bytecode files
+*.pyd              # Ignore Python dynamic module files
+
+# Jupyter Notebook specific files
+.ipynb_checkpoints/ # Ignore Jupyter Notebook checkpoint directories
+*.ipynb_checkpoints # Some systems might generate checkpoints with this pattern
+
+# Generated files based on prefixes seen in your project
+generated_*/       # Ignore any directory starting with "generated_"
+generated_*.py     # Ignore Python files starting with "generated_" (e.g., generated_kx_with_cisb.py)
+generated_*.pyc    # Ignore compiled generated Python files
+
+# Model artifacts and other temporary archives
+*.zip              # Ignore all zip files (e.g., ppo_kx_model.zip).
+                   # Be cautious with this if you have zip files you *do* want to track.
+                   # If only specific zip files are generated, list them explicitly:
+                   # ppo_kx_model.zip
+
+# Operating System specific files
+.DS_Store          # macOS specific file for custom folder attributes
