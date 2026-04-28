@@ -3,6 +3,7 @@ GuidedSampler/
 z3/
 .venv/             # Ignore Python virtual environment directory (visible in your terminal prompt and paths)
 __pycache__/       # Ignore Python bytecode cache directories (already present)
+AST_parser/__pycache__/ # Ignore bytecode cache for the AST_parser directory
 .vscode/           # Ignore VS Code specific settings (often user-specific)
 
 # Python-specific generated files
