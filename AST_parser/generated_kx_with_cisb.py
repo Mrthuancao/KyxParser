@@ -387,6 +387,7 @@ class GeneratedKXEnv(gym.Env):
 
         # --- Semantic Gap Bridging: Floating Point Equality Tolerance ---
         self.equality_tolerance = 1e-9 # Default absolute tolerance for np.isclose
+        self.z3_equality_tolerance = 1e-6 # Tolerance for Z3's approximate equality for '=' and '!='
 
         # --- KeYmaera X Definitions ---
         self.constants = {}
@@ -494,7 +495,7 @@ class GeneratedKXEnv(gym.Env):
                                 formula='r!=0 & r*w = v'
                             ),
                             ActionConstraintConfig(
-                                formula='abs(x-xo) > admissibleSeparation(v)\n        | abs(y-yo) > admissibleSeparation(v)'
+                                formula='abs(x-xo) > admissibleSeparation(v)\n        | abs(y-yo) > admissibleSeparable(v)'
                             )
                         ]
                     )
@@ -581,6 +582,23 @@ class GeneratedKXEnv(gym.Env):
         self._cisb = []
         self._cisb_size = cisb_size
         self._cisb_populate_attempts = cisb_populate_attempts
+
+        # Define reasonable bounds for random sampling for state variables and constants.
+        # These ranges should reflect the expected operational domain of the system.
+        # Adjust these ranges based on the specific problem.
+        self.sample_ranges = {
+            'x': (-10.0, 10.0), 'y': (-10.0, 10.0), 'v': (0.0, 0.0), # v is fixed to 0 by precondition
+            'dx': (-1.0, 1.0), 'dy': (-1.0, 1.0),
+            'w': (-2.0, 2.0), # w is not fixed by precondition, can be anything
+            'r': (0.1, 10.0), # r must be non-zero by precondition
+            'xo': (-10.0, 10.0), 'yo': (-10.0, 10.0),
+            # Constants that Z3 might solve for, or need to be within bounds
+            'ep': (0.1, 5.0), # ep > 0 by bounds()
+            'b': (0.1, 5.0),  # b > 0 by bounds()
+            'A': (0.0, 5.0),  # A >= 0 by bounds()
+            'W': (0.0, 2.0)   # W >= 0 (often implicit for magnitude)
+        }
+
         self._populate_cisb() # Populate the buffer during environment initialization
 
         # The first reset will be called by the Gymnasium API, no need to call it here.
@@ -711,16 +729,16 @@ class GeneratedKXEnv(gym.Env):
     def _evaluate_shape_expression(self, shape_expr: str) -> float:
         """
         Evaluates a shape expression from metadata.
-        Shape expressions might use ternary operators (e.g., 'v > 0 ? 1/v : v').
+        Shape expressions might use KeYmaera X ternary operators (e.g., '1/v if v > 0 else v').
         """
         if not shape_expr:
             return 0.0
 
-        # Handle ternary operator 'condition ? value_if_true : value_if_false'
-        # This is a simple regex-based parser, might need more robustness for complex cases.
-        match = re.match(r'(.+)\s*\?\s*(.+)\s*:\s*(.+)', shape_expr)
+        # Handle KeYmaera X style ternary operator 'value_if_true if condition else value_if_false'
+        # Regex: (.+) if (.+) else (.+)
+        match = re.match(r'(.+)\s+if\s+(.+)\s+else\s+(.+)', shape_expr)
         if match:
-            condition_str, true_val_str, false_val_str = match.groups()
+            true_val_str, condition_str, false_val_str = match.groups()
             try:
                 condition_result = self._evaluate_expression(condition_str)
                 if condition_result:
@@ -896,12 +914,12 @@ class GeneratedKXEnv(gym.Env):
                 return f"z3.Not({operand})"
 
             # --- Relational Operators (next level down) ---
-            # Note: '=' in KeYmaera X maps to '==' for Z3 exact equality
+            # Note: '=' in KeYmaera X maps to '==' for Z3 exact equality, but we want approximate
             relational_ops = [('!=', '!='), ('<=', '<='), ('>=', '>='), ('<', '<'), ('>', '>'), ('=', '==')]
 
             balance = 0
             rel_op_found_kx = None
-            rel_op_found_py = None
+            rel_op_found_py = None # This will be the Z3 equivalent string
             rel_op_idx = -1
 
             # Scan left-to-right for relational operators
@@ -935,8 +953,15 @@ class GeneratedKXEnv(gym.Env):
             if rel_op_found_kx:
                 left = _parse_logical_and_relational_expression_z3(expression_str[:rel_op_idx].strip())
                 right = _parse_logical_and_relational_expression_z3(expression_str[rel_op_idx+len(rel_op_found_kx):].strip())
-                # For Z3, '==' is used for equality, and other relational ops are direct
-                return f"({left}) {rel_op_found_py} ({right})"
+                if rel_op_found_kx == '=':
+                    # For Z3, KeYmaera X's '=' should be treated with a tolerance similar to _approx_eq
+                    return f"z3.And({left} >= {right} - self.z3_equality_tolerance, {left} <= {right} + self.z3_equality_tolerance)"
+                elif rel_op_found_kx == '!=':
+                    # For Z3, KeYmaera X's '!=' should be the negation of approximate equality
+                    return f"z3.Not(z3.And({left} >= {right} - self.z3_equality_tolerance, {left} <= {right} + self.z3_equality_tolerance))"
+                else:
+                    # Other relational operators are direct
+                    return f"({left}) {rel_op_found_py} ({right})"
 
 
             # Base case: no logical or relational operators found, return the expression as is.
@@ -947,7 +972,7 @@ class GeneratedKXEnv(gym.Env):
         expr_transformed = _parse_logical_and_relational_expression_z3(expr_transformed)
 
         # Final evaluation in a Z3-aware context
-        eval_globals = {'z3': z3, 'z3_symbol_map': z3_symbol_map}
+        eval_globals = {'z3': z3, 'z3_symbol_map': z3_symbol_map, 'self': self} # Pass self for z3_equality_tolerance
         for const_name, const_value in fixed_constants.items():
             if isinstance(const_value, int):
                 eval_globals[const_name] = z3.IntVal(const_value)
@@ -965,6 +990,8 @@ class GeneratedKXEnv(gym.Env):
         Uses Z3 to find a satisfying assignment for initial state variables and constants
         based on the expanded KeYmaera X precondition.
         Returns a dictionary of solved values (variable/constant name -> float) or None if unsatisfiable.
+        This method is primarily for fallback if CISB is empty, or for single-shot checks.
+        For diverse sampling, _populate_cisb uses a more advanced Z3.Optimize approach.
         """
         # 1. Prepare Z3 symbols (Real for all variables and constants that need to be solved)
         z3_symbol_map = {}
@@ -999,18 +1026,10 @@ class GeneratedKXEnv(gym.Env):
         s = z3.Solver()
         s.add(z3_formula)
 
-        # --- REMOVE OR COMMENT OUT THESE BLOCKS ---
-        # The following loops over-constrain Z3 by forcing variables to be exactly
-        # equal to sampled Python floats, which can lead to unsatisfiability
-        # due to floating-point precision issues with Z3's exact 'Real' arithmetic.
-        #
-        # for var_name, value in self.state.items():
-        #     if var_name in z3_symbol_map and var_name not in ['v', 't']:
-        #         s.add(z3_symbol_map[var_name] == value)
-        # for const_name, value in self.constants.items():
-        #     if const_name in z3_symbol_map and const_name not in fixed_constants:
-        #          s.add(z3_symbol_map[const_name] == value)
-        # --- END REMOVAL/COMMENT-OUT ---
+        # Add general bounds for all Z3 variables to keep the search space reasonable
+        for var_name, z3_var in z3_symbol_map.items():
+            low, high = self.sample_ranges.get(var_name, (-100.0, 100.0))
+            s.add(z3_var >= low, z3_var <= high)
 
         # 4. Check for satisfiability
         check_result = s.check()
@@ -1030,6 +1049,19 @@ class GeneratedKXEnv(gym.Env):
             # Add values for fixed constants
             # These are already numeric, no need for Z3 evaluation
             solved_values.update(fixed_constants)
+
+            # Normalize dx, dy to ensure `isWellformedDir` holds for the Python `_approx_eq` check.
+            if 'dx' in solved_values and 'dy' in solved_values:
+                dx_val = solved_values['dx']
+                dy_val = solved_values['dy']
+                magnitude = math.sqrt(dx_val**2 + dy_val**2)
+                if magnitude > 1e-6: # Avoid division by zero
+                    solved_values['dx'] = dx_val / magnitude
+                    solved_values['dy'] = dy_val / magnitude
+                else: # Default to unit vector if magnitude is zero
+                    solved_values['dx'] = 1.0
+                    solved_values['dy'] = 0.0
+
             return solved_values
         elif check_result == z3.unsat:
             # print(f"Z3 UNSAT for precondition: {precondition_kx}") # For debugging Z3 unsatisfiability
@@ -1064,9 +1096,9 @@ class GeneratedKXEnv(gym.Env):
         # Combine all known identifiers from the environment that need prefixing
         # Exclude 'np' and 'math' as they are global modules and should not be prefixed.
         all_env_identifiers = list(self.state.keys()) + \
-                              list(self.constants.keys()) + \
-                              list(self.functions.keys()) + \
-                              list(self.predicates.keys())
+                               list(self.constants.keys()) + \
+                               list(self.functions.keys()) + \
+                               list(self.predicates.keys())
 
         # Sort by length descending to handle cases where one identifier is a substring of another (e.g., 'dx' before 'x')
         all_env_identifiers_sorted = sorted(all_env_identifiers, key=len, reverse=True)
@@ -1394,96 +1426,138 @@ class GeneratedKXEnv(gym.Env):
     def _populate_cisb(self):
         """
         Populates the Contrastive Initial State Buffer (CISB) with diverse initial states
-        that satisfy the problem's precondition, using Z3 for verification.
+        that satisfy the problem's precondition, using Z3.Solver for verification and explicit blocking for diversity.
         """
         print(f"Populating Contrastive Initial State Buffer (CISB) with {self._cisb_size} states...")
         current_cisb_count = 0
         attempts = 0
 
-        # Define reasonable bounds for random sampling for state variables and constants.
-        # These ranges should reflect the expected operational domain of the system.
-        # Adjust these ranges based on the specific problem.
-        sample_ranges = {
-            'x': (-10.0, 10.0), 'y': (-10.0, 10.0), 'v': (0.0, 0.0), # v is fixed to 0 by precondition
-            'dx': (-1.0, 1.0), 'dy': (-1.0, 1.0),
-            'w': (-2.0, 2.0), # w is not fixed by precondition, can be anything
-            'r': (0.1, 10.0), # r must be non-zero by precondition
-            'xo': (-10.0, 10.0), 'yo': (-10.0, 10.0),
-            # Constants that Z3 might solve for, or need to be within bounds
-            'ep': (0.1, 5.0), # ep > 0 by bounds()
-            'b': (0.1, 5.0),  # b > 0 by bounds()
-            'A': (0.0, 5.0),  # A >= 0 by bounds()
-            'W': (0.0, 2.0)   # W >= 0 (often implicit for magnitude)
-        }
+        # 1. Prepare Z3 symbols (Real for all variables and constants that need to be solved)
+        z3_symbols = {}
+        fixed_constants_map = {} # Store actual values for fixed constants
 
-        # Collect all variable names that Z3 will be solving for (state vars + non-fixed constants)
-        z3_target_vars = set(self._state_keys)
+        # State variables
+        for var_decl in self._variables_config.state_variables:
+            z3_symbols[var_decl.name] = z3.Real(var_decl.name)
+
+        # Constants: If they have a fixed numeric value, use that value directly.
+        # Otherwise, treat them as Z3 Real variables to be solved for.
         for const_decl in self._definitions_config.constants:
-            if not (const_decl.value is not None and re.fullmatch(r'^-?\d+(\.\d+)?$', const_decl.value)):
-                z3_target_vars.add(const_decl.name)
+            if const_decl.value is not None and re.fullmatch(r'^-?\d+(\.\d+)?$', const_decl.value):
+                fixed_constants_map[const_decl.name] = float(const_decl.value)
+            else:
+                z3_symbols[const_decl.name] = z3.Real(const_decl.name)
 
+        # 2. Convert precondition to Z3 formula (this forms the hard constraints)
+        precondition_kx = self._problem_config.precondition.formula
+        try:
+            z3_precondition_formula = self._kx_expr_to_z3_formula(precondition_kx, z3_symbols, fixed_constants_map)
+        except ValueError as e:
+            print(f"CRITICAL ERROR: Failed to convert precondition to Z3 formula during CISB population: {e}")
+            return # Cannot populate CISB without a valid precondition
+
+        # 3. Create Z3 Solver
+        s = z3.Solver()
+        s.set(timeout=2000) # 2 seconds timeout per iteration
+        s.add(z3_precondition_formula) # Add the hard precondition
+
+        # Add general bounds for all Z3 variables to keep the search space reasonable
+        for var_name, z3_var in z3_symbols.items():
+            low, high = self.sample_ranges.get(var_name, (-100.0, 100.0)) # Use wide default if not in sample_ranges
+            s.add(z3_var >= low, z3_var <= high)
+
+        # Add hard constraints for initial state specific values (e.g., v=0, t=0)
+        if 'v' in z3_symbols: s.add(z3_symbols['v'] == 0)
+        if 't' in z3_symbols: s.add(z3_symbols['t'] == 0)
+
+        # 4. Iterate and solve for diverse samples
         while current_cisb_count < self._cisb_size and attempts < self._cisb_populate_attempts:
             attempts += 1
-            trial_values = {} # Stores sampled values for both state and constants
+            # No push/pop for soft constraints, as we are not using Optimize with soft constraints.
+            # The blocking clause will be added directly to the solver.
 
-            # 1. Randomly sample values for relevant variables/constants within defined ranges
-            for var_name in z3_target_vars:
-                if var_name in sample_ranges:
-                    trial_values[var_name] = self.np_random.uniform(*sample_ranges[var_name])
-                else:
-                    # Fallback for variables not in sample_ranges, use a wide default
-                    trial_values[var_name] = self.np_random.uniform(-10.0, 10.0)
+            check_result = s.check()
 
-            # Heuristic for dx, dy to make `isWellformedDir` more likely to be satisfied by Z3.
-            # Normalize them to approximately form a unit vector.
-            dx_val = trial_values.get('dx', 0.0)
-            dy_val = trial_values.get('dy', 0.0)
-            magnitude = math.sqrt(dx_val**2 + dy_val**2)
-            if magnitude > 1e-6:
-                trial_values['dx'] = dx_val / magnitude
-                trial_values['dy'] = dy_val / magnitude
-            else:
-                # If dx, dy are both near zero, set to a default unit vector
-                trial_values['dx'] = 1.0
-                trial_values['dy'] = 0.0
+            if check_result == z3.sat:
+                model = s.model()
+                solved_values = {}
+                # Extract values for Z3 variables
+                for k, v in z3_symbols.items():
+                    evaluated_val = model.evaluate(v, model_completion=True)
+                    if evaluated_val is not None:
+                        if hasattr(evaluated_val, 'as_fraction'):
+                            solved_values[k] = float(evaluated_val.as_fraction())
+                        elif hasattr(evaluated_val, 'as_long'):
+                            solved_values[k] = float(evaluated_val.as_long())
+                        else:
+                            solved_values[k] = float(str(evaluated_val))
+                # Add fixed constants
+                solved_values.update(fixed_constants_map)
 
-            # Ensure 'v' is 0.0 and 't' is 0.0 as per initialState and problem setup
-            trial_values['v'] = 0.0
-            trial_values['t'] = 0.0
+                # Normalize dx, dy to ensure `isWellformedDir` holds for the Python `_approx_eq` check.
+                if 'dx' in solved_values and 'dy' in solved_values:
+                    dx_val = solved_values['dx']
+                    dy_val = solved_values['dy']
+                    magnitude = math.sqrt(dx_val**2 + dy_val**2)
+                    if magnitude > 1e-6: # Avoid division by zero
+                        solved_values['dx'] = dx_val / magnitude
+                        solved_values['dy'] = dy_val / magnitude
+                    else: # Default to unit vector if magnitude is zero
+                        solved_values['dx'] = 1.0
+                        solved_values['dy'] = 0.0
 
-            # 2. Temporarily apply sampled values to `self.state` and `self.constants`
-            # This allows `_solve_initial_state_with_z3` to use these as hints/fixed values
-            # and ensures `_evaluate_expression` (used internally by Z3 conversion) has access.
-            original_state_copy = self.state.copy()
-            original_constants_copy = self.constants.copy()
-
-            for k, v in trial_values.items():
-                if k in self.state:
-                    self.state[k] = v
-                elif k in self.constants:
-                    self.constants[k] = v
-
-            # 3. Use Z3 to find a precise satisfying assignment for the precondition
-            z3_solution = self._solve_initial_state_with_z3(self._problem_config.precondition.formula)
-
-            # 4. Restore original `self.state` and `self.constants`
-            self.state.update(original_state_copy)
-            self.constants.update(original_constants_copy)
-
-            if z3_solution:
-                # Store the Z3-verified solution in the buffer
-                # The solution contains values for all state variables and relevant constants.
-                self._cisb.append(z3_solution)
+                self._cisb.append(solved_values)
                 current_cisb_count += 1
                 if current_cisb_count % 100 == 0:
                     print(f"  ... {current_cisb_count}/{self._cisb_size} states populated.")
+
+                # Add a strong blocking clause to ensure diversity for the next sample.
+                # This clause states that the next solution must NOT be within the epsilon-neighborhood
+                # of the current solution for ALL solved variables simultaneously.
+                current_solution_conditions = []
+                for var_name, z3_var in z3_symbols.items():
+                    val = solved_values.get(var_name)
+                    if val is not None:
+                        # Define the approximate equality for this variable
+                        approx_eq_condition = z3.And(
+                            z3_var >= val - self.z3_equality_tolerance,
+                            z3_var <= val + self.z3_equality_tolerance
+                        )
+                        current_solution_conditions.append(approx_eq_condition)
+
+                # The blocking clause is the negation of all variables being approximately equal to their previous values.
+                if current_solution_conditions: # Only add if there are variables to block
+                    s.add(z3.Not(z3.And(current_solution_conditions)))
+
+            elif check_result == z3.unsat:
+                # If unsat, it means no more solutions can be found given the current constraints (including blocking clauses).
+                # We should break the loop.
+                print(f"Z3 UNSAT during CISB population attempt {attempts}. No more diverse solutions found.")
+                break
+            else: # z3.unknown
+                print(f"Z3 UNKNOWN during CISB population attempt {attempts}. Continuing but might not be diverse.")
+                # We could break here too, or try to continue. For now, continue.
 
         if current_cisb_count < self._cisb_size:
             print(f"Warning: Could only populate {current_cisb_count} states for CISB after {attempts} attempts.")
         else:
             print(f"CISB population complete with {current_cisb_count} states.")
-            print(f"Sample initial state from CISB: {[print(sample) for sample in list(self._cisb[0:min(5, len(self._cisb))])]}") # Print one sample for verification
-            print(f"Number of unique initial states in CISB: {len(set(tuple(state.items()) for state in self._cisb))}")
+
+        # Verify diversity
+        unique_samples = set()
+        for sample in self._cisb:
+            # Convert dict to a tuple of (key, value) pairs for hashing
+            # Sort by key to ensure consistent order for hashing
+            # Round floats to a certain precision to account for floating point differences
+            rounded_sample = tuple(sorted([(k, round(v, 6)) for k, v in sample.items()]))
+            unique_samples.add(rounded_sample)
+
+        print(f"Number of unique initial states in CISB: {len(unique_samples)}")
+
+        # Print a few samples for verification
+        print("Sample initial states from CISB:")
+        for i, sample in enumerate(self._cisb[:min(5, len(self._cisb))]):
+            print(f"  Sample {i+1}: {sample}")
         if not self._cisb:
             print("CRITICAL ERROR: CISB is empty! This environment cannot function correctly without initial states.")
             print("Please check precondition and sampling ranges for satisfiability.")
@@ -1609,9 +1683,10 @@ class GeneratedKXEnv(gym.Env):
             # If the CISB is populated correctly, ep should always be > 0.
             # This case might indicate an issue with CISB or a very unusual state.
             print(f"Warning: 'ep' constant is non-positive ({ep_val}). Skipping ODE integration and penalizing.")
-            phys_valid_meta = self._get_predicate_metadata('bounds') # Use bounds predicate for this check
+            # Use bounds predicate for this check
+            bounds_meta = self._get_predicate_metadata('bounds')
             reward, terminated, truncated = self._apply_meta_effect(
-                phys_valid_meta or {'type': 'safety', 'penalty': '-200.0', 'on_failure': 'terminate:status=failure'},
+                bounds_meta or {'type': 'safety', 'penalty': '-200.0', 'on_failure': 'terminate:status=failure'},
                 reward, terminated, truncated, is_failure_case=True
             )
             ode_terminated_by_event = True # Treat as terminated by event
@@ -1714,7 +1789,7 @@ class GeneratedKXEnv(gym.Env):
             shape_value = self._evaluate_shape_expression(wellformed_meta['shape'])
             reward += shape_value # Add to reward
 
-        # isEfficient (progress type, shape: v > 0 ? 1/v : v)
+        # isEfficient (progress type, shape: 1/v if v > 0 else v)
         efficient_meta = self._get_predicate_metadata('isEfficient')
         if efficient_meta.get('type') == 'progress' and 'shape' in efficient_meta:
             shape_value = self._evaluate_shape_expression(efficient_meta['shape'])
