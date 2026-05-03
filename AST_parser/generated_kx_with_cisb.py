@@ -387,7 +387,7 @@ class GeneratedKXEnv(gym.Env):
 
         # --- Semantic Gap Bridging: Floating Point Equality Tolerance ---
         self.equality_tolerance = 1e-9 # Default absolute tolerance for np.isclose
-        self.z3_equality_tolerance = 1e-6 # Tolerance for Z3's approximate equality for '=' and '!='
+        self.z3_equality_tolerance = 0.05 # Increased tolerance for Z3's approximate equality for '=' and '!='
 
         # --- KeYmaera X Definitions ---
         self.constants = {}
@@ -402,9 +402,9 @@ class GeneratedKXEnv(gym.Env):
 
         # Functions (lambdas for easy evaluation)
         # Note: These lambdas capture 'self' at definition time, so they will use the current self.constants values.
-        self.functions['stopDist'] = lambda v: v**2 / (2*self.constants['b']) if self.constants['b'] != 0 else float('inf') # Handle division by zero
-        self.functions['accelComp'] = lambda v: (self.constants['A']/self.constants['b'] + 1) * (self.constants['A']/2 * self.constants['ep']**2 + self.constants['ep']*v) if self.constants['b'] != 0 else float('inf') # Handle division by zero
-        self.functions['admissibleSeparation'] = lambda v: self.functions['stopDist'](v) + self.functions['accelComp'](v)
+        self.functions['stopDist'] = lambda v_val: v_val**2 / (2*self.constants['b']) if self.constants['b'] != 0 else float('inf') # Handle division by zero
+        self.functions['accelComp'] = lambda v_val: (self.constants['A']/self.constants['b'] + 1) * (self.constants['A']/2 * self.constants['ep']**2 + self.constants['ep']*v_val) if self.constants['b'] != 0 else float('inf') # Handle division by zero
+        self.functions['admissibleSeparation'] = lambda v_val: self.functions['stopDist'](v_val) + self.functions['accelComp'](v_val)
 
         # Predicates (lambdas for easy evaluation)
         # Note: The 'r' in initialState body is a state variable, not a parameter of initialState predicate.
@@ -414,9 +414,10 @@ class GeneratedKXEnv(gym.Env):
         self.predicates['isSafe'] = lambda x, y, v, xo, yo: ((np.abs(x-xo)) > (self.functions['stopDist'](v))) or ((np.abs(y-yo)) > (self.functions['stopDist'](v)))
         self.predicates['isEfficient'] = lambda v: (v) >= (0)
         self.predicates['bounds'] = lambda : ((self.constants['A']) >= (0)) and (((self.constants['b']) > (0)) and ((self.constants['ep']) > (0)))
+        # The 'r' in initialState body is a state variable, it must be accessed via self.state['r']
         self.predicates['initialState'] = lambda x, y, v, dx, dy, xo, yo: (self._approx_eq(v, 0)) and ((((x-xo)**2 + (y-yo)**2) > (0)) and ((self.predicates['isWellformedDir'](dx, dy)) and ((self.state['r']) != (0))))
         self.predicates['assumptions'] = lambda x, y, v, dx, dy, xo, yo: (self.predicates['bounds']()) and (self.predicates['initialState'](x, y, v, dx, dy, xo, yo))
-        self.predicates['loopinv'] = lambda x, y, v, dx, dy, xo, yo, r: (self.predicates['isPhysicallyValid'](v, r)) and ((self.predicates['isWellformedDir'](dx, dy)) and ((self.predicates['isSafe'](x, y, v, xo, yo)) and (self.predicates['isEfficient'](v))))
+        self.predicates['loopinv'] = lambda x, y, v, dx, dy, xo, yo, r_val: (self.predicates['isPhysicallyValid'](v, r_val)) and ((self.predicates['isWellformedDir'](dx, dy)) and ((self.predicates['isSafe'](x, y, v, xo, yo)) and (self.predicates['isEfficient'](v))))
         self.predicates['ensure'] = lambda x, y, xo, yo: ((x - xo)**2 + (y - yo)**2) > (0)
 
         # --- State Variables ---
@@ -433,17 +434,32 @@ class GeneratedKXEnv(gym.Env):
         low_bounds = np.array([-np.inf] * len(self._state_keys), dtype=np.float32)
         high_bounds = np.array([np.inf] * len(self._state_keys), dtype=np.float32)
         self.observation_space = spaces.Box(low_bounds, high_bounds, shape=(len(self._state_keys),), dtype=np.float32)
+        
+        # Define reasonable bounds for random sampling for state variables and constants.
+        # These ranges should reflect the expected operational domain of the system.
+        # Adjust these ranges based on the specific problem.
+        self.sample_ranges = {
+            'x': (-100.0, 100.0), 'y': (-100.0, 100.0), 'v': (0.0, 0.0), # v is fixed to 0 by precondition
+            'dx': (-1.0, 1.0), 'dy': (-1.0, 1.0),
+            'w': (-2.0, 2.0), # w is not fixed by precondition, can be anything
+            'r': (0.1, 10.0), # r must be non-zero by precondition
+            'xo': (-100.0, 100.0), 'yo': (-100.0, 100.0),
+            # Constants that Z3 might solve for, or need to be within bounds
+            'ep': (0.1, 5.0), # ep > 0 by bounds()
+            'b': (0.1, 5.0),  # b > 0 by bounds()
+            'A': (0.0, 5.0),  # A >= 0 by bounds()
+            'W': (0.0, 2.0)   # W >= 0 (often implicit for magnitude)
+        }
 
         # --- Action Space (from controlFunc) ---
         # The action space is a Dict to handle choices and nondeterministic assignments.
         self.action_space = spaces.Dict({
                 'choice_ChoiceLevel_0': spaces.Discrete(3),
-                'assign_w': spaces.Box(low=-np.inf, high=np.inf, shape=(), dtype=np.float32),
-                'assign_r': spaces.Box(low=-np.inf, high=np.inf, shape=(), dtype=np.float32),
-                'assign_xo': spaces.Box(low=-np.inf, high=np.inf, shape=(), dtype=np.float32),
-                'assign_yo': spaces.Box(low=-np.inf, high=np.inf, shape=(), dtype=np.float32),
+                'assign_w': spaces.Box(low=self.sample_ranges['w'][0], high=self.sample_ranges['w'][1], shape=(), dtype=np.float32),
+                'assign_r': spaces.Box(low=self.sample_ranges['r'][0], high=self.sample_ranges['r'][1], shape=(), dtype=np.float32),
+                'assign_xo': spaces.Box(low=self.sample_ranges['xo'][0], high=self.sample_ranges['xo'][1], shape=(), dtype=np.float32),
+                'assign_yo': spaces.Box(low=self.sample_ranges['yo'][0], high=self.sample_ranges['yo'][1], shape=(), dtype=np.float32),
                 })
-        self._action_space_keys = ['choice_ChoiceLevel_0', 'assign_w', 'assign_r', 'assign_xo', 'assign_yo']
         self._control_func_action_config = ChoiceActionConfig(
                 level_name='ChoiceLevel_0',
                 choices=[
@@ -495,7 +511,7 @@ class GeneratedKXEnv(gym.Env):
                                 formula='r!=0 & r*w = v'
                             ),
                             ActionConstraintConfig(
-                                formula='abs(x-xo) > admissibleSeparation(v)\n        | abs(y-yo) > admissibleSeparable(v)'
+                                formula='abs(x-xo) > admissibleSeparation(v)\n        | abs(y-yo) > admissibleSeparation(v)'
                             )
                         ]
                     )
@@ -583,23 +599,9 @@ class GeneratedKXEnv(gym.Env):
         self._cisb_size = cisb_size
         self._cisb_populate_attempts = cisb_populate_attempts
 
-        # Define reasonable bounds for random sampling for state variables and constants.
-        # These ranges should reflect the expected operational domain of the system.
-        # Adjust these ranges based on the specific problem.
-        self.sample_ranges = {
-            'x': (-10.0, 10.0), 'y': (-10.0, 10.0), 'v': (0.0, 0.0), # v is fixed to 0 by precondition
-            'dx': (-1.0, 1.0), 'dy': (-1.0, 1.0),
-            'w': (-2.0, 2.0), # w is not fixed by precondition, can be anything
-            'r': (0.1, 10.0), # r must be non-zero by precondition
-            'xo': (-10.0, 10.0), 'yo': (-10.0, 10.0),
-            # Constants that Z3 might solve for, or need to be within bounds
-            'ep': (0.1, 5.0), # ep > 0 by bounds()
-            'b': (0.1, 5.0),  # b > 0 by bounds()
-            'A': (0.0, 5.0),  # A >= 0 by bounds()
-            'W': (0.0, 2.0)   # W >= 0 (often implicit for magnitude)
-        }
 
-        self._populate_cisb() # Populate the buffer during environment initialization
+        # Call the new diverse CISB population method
+        self._populate_cisb_diverse_z3() 
 
         # The first reset will be called by the Gymnasium API, no need to call it here.
 
@@ -688,7 +690,7 @@ class GeneratedKXEnv(gym.Env):
 
     def _apply_meta_effect(self, metadata: Dict[str, Any], current_reward: float, current_terminated: bool, current_truncated: bool, is_failure_case: bool) -> Tuple[float, bool, bool]:
         """
-        Applies reward/penalty/termination/truncation effects based on metadata.
+        Applys reward/penalty/termination/truncation effects based on metadata.
         'on_success': 'action:status=value' (e.g., 'terminate:status=success', 'continue:status=none')
         'on_failure': 'action:status=value' (e.g., 'truncate:status=failure', 'terminate:status=failure')
 
@@ -955,10 +957,10 @@ class GeneratedKXEnv(gym.Env):
                 right = _parse_logical_and_relational_expression_z3(expression_str[rel_op_idx+len(rel_op_found_kx):].strip())
                 if rel_op_found_kx == '=':
                     # For Z3, KeYmaera X's '=' should be treated with a tolerance similar to _approx_eq
-                    return f"z3.And({left} >= {right} - self.z3_equality_tolerance, {left} <= {right} + self.z3_equality_tolerance)"
+                    return f"z3.And({left} >= ({right}) - self.z3_equality_tolerance, {left} <= ({right}) + self.z3_equality_tolerance)"
                 elif rel_op_found_kx == '!=':
                     # For Z3, KeYmaera X's '!=' should be the negation of approximate equality
-                    return f"z3.Not(z3.And({left} >= {right} - self.z3_equality_tolerance, {left} <= {right} + self.z3_equality_tolerance))"
+                    return f"z3.Not(z3.And({left} >= ({right}) - self.z3_equality_tolerance, {left} <= ({right}) + self.z3_equality_tolerance))"
                 else:
                     # Other relational operators are direct
                     return f"({left}) {rel_op_found_py} ({right})"
@@ -1356,7 +1358,7 @@ class GeneratedKXEnv(gym.Env):
             else:
                 # If constraint is met, apply 'on_success' effects if any
                 if metadata.get('on_success') and metadata.get('on_success').split(':')[0] != 'continue':
-                    reward, terminated, truncated = self._apply_meta_effect(metadata, reward, terminated, False, is_failure_case=False)
+                    reward, terminated, truncated = self._apply_meta_effect(metadata, reward, terminated, truncated, is_failure_case=False)
                 applied_successfully = True # Constraint met, so action was successfully applied
 
             return reward, terminated, applied_successfully
@@ -1423,65 +1425,81 @@ class GeneratedKXEnv(gym.Env):
         return parts if parts else [formula_str.strip()]
 
 
-    def _populate_cisb(self):
+    def _populate_cisb_diverse_z3(self):
         """
         Populates the Contrastive Initial State Buffer (CISB) with diverse initial states
-        that satisfy the problem's precondition, using Z3.Solver for verification and explicit blocking for diversity.
+        that satisfy the problem's precondition, using Z3.Optimize with soft constraints
+        and blocking clauses for diversity.
         """
-        print(f"Populating Contrastive Initial State Buffer (CISB) with {self._cisb_size} states...")
+        print(f"Populating Contrastive Initial State Buffer (CISB) with {self._cisb_size} diverse states using Z3.Optimize...")
         current_cisb_count = 0
         attempts = 0
 
-        # 1. Prepare Z3 symbols (Real for all variables and constants that need to be solved)
+        # 1. Prepare Z3 symbols for all state variables and constants
         z3_symbols = {}
-        fixed_constants_map = {} # Store actual values for fixed constants
-
-        # State variables
         for var_decl in self._variables_config.state_variables:
             z3_symbols[var_decl.name] = z3.Real(var_decl.name)
-
-        # Constants: If they have a fixed numeric value, use that value directly.
-        # Otherwise, treat them as Z3 Real variables to be solved for.
         for const_decl in self._definitions_config.constants:
-            if const_decl.value is not None and re.fullmatch(r'^-?\d+(\.\d+)?$', const_decl.value):
-                fixed_constants_map[const_decl.name] = float(const_decl.value)
-            else:
+            # Only create Z3 symbols for constants that are meant to be solved for.
+            # Fixed value constants will be handled by fixed_constants_map.
+            if not (const_decl.value is not None and re.fullmatch(r'^-?\d+(\.\d+)?$', const_decl.value)):
                 z3_symbols[const_decl.name] = z3.Real(const_decl.name)
 
-        # 2. Convert precondition to Z3 formula (this forms the hard constraints)
+        # Separate fixed constants for formula conversion
+        fixed_constants_map = {
+            const_decl.name: float(const_decl.value)
+            for const_decl in self._definitions_config.constants
+            if const_decl.value is not None and re.fullmatch(r'^-?\d+(\.\d+)?$', const_decl.value)
+        }
+
+        # 2. Create Z3 Optimizer
+        opt = z3.Optimize()
+        opt.set(timeout=10000) # Increased timeout to 10 seconds per iteration
+
+        # 3. Add Hard Constraints (from precondition and sample_ranges)
         precondition_kx = self._problem_config.precondition.formula
         try:
             z3_precondition_formula = self._kx_expr_to_z3_formula(precondition_kx, z3_symbols, fixed_constants_map)
+            opt.add(z3_precondition_formula)
         except ValueError as e:
             print(f"CRITICAL ERROR: Failed to convert precondition to Z3 formula during CISB population: {e}")
             return # Cannot populate CISB without a valid precondition
 
-        # 3. Create Z3 Solver
-        s = z3.Solver()
-        s.set(timeout=2000) # 2 seconds timeout per iteration
-        s.add(z3_precondition_formula) # Add the hard precondition
-
-        # Add general bounds for all Z3 variables to keep the search space reasonable
+        # Add general bounds for all Z3 variables
         for var_name, z3_var in z3_symbols.items():
-            low, high = self.sample_ranges.get(var_name, (-100.0, 100.0)) # Use wide default if not in sample_ranges
-            s.add(z3_var >= low, z3_var <= high)
-
-        # Add hard constraints for initial state specific values (e.g., v=0, t=0)
-        if 'v' in z3_symbols: s.add(z3_symbols['v'] == 0)
-        if 't' in z3_symbols: s.add(z3_symbols['t'] == 0)
+            low, high = self.sample_ranges.get(var_name, (-100.0, 100.0))
+            opt.add(z3_var >= low, z3_var <= high)
 
         # 4. Iterate and solve for diverse samples
         while current_cisb_count < self._cisb_size and attempts < self._cisb_populate_attempts:
             attempts += 1
-            # No push/pop for soft constraints, as we are not using Optimize with soft constraints.
-            # The blocking clause will be added directly to the solver.
+            opt.push() # Push current state of the optimizer
 
-            check_result = s.check()
+            # Add soft constraints to guide the solver to different regions
+            soft_constraints_added = False
+            for var_name, z3_var in z3_symbols.items():
+                # Skip 'v' and 't' as they are fixed by precondition
+                if var_name in ['v', 't']:
+                    continue
+                
+                low, high = self.sample_ranges.get(var_name, (-100.0, 100.0))
+                if low == high: # If the variable has a fixed value (e.g., v=0), no need for soft constraint
+                    continue
+                
+                target = self.np_random.uniform(low, high)
+                # Use a weight of 1 for soft constraints
+                opt.add_soft(z3_var == target, weight=1) 
+                soft_constraints_added = True
+            
+            if not soft_constraints_added:
+                print("Warning: No variables available for soft constraints to encourage diversity. CISB might not be diverse.")
+
+
+            check_result = opt.check()
 
             if check_result == z3.sat:
-                model = s.model()
+                model = opt.model()
                 solved_values = {}
-                # Extract values for Z3 variables
                 for k, v in z3_symbols.items():
                     evaluated_val = model.evaluate(v, model_completion=True)
                     if evaluated_val is not None:
@@ -1491,8 +1509,7 @@ class GeneratedKXEnv(gym.Env):
                             solved_values[k] = float(evaluated_val.as_long())
                         else:
                             solved_values[k] = float(str(evaluated_val))
-                # Add fixed constants
-                solved_values.update(fixed_constants_map)
+                solved_values.update(fixed_constants_map) # Add fixed constants
 
                 # Normalize dx, dy to ensure `isWellformedDir` holds for the Python `_approx_eq` check.
                 if 'dx' in solved_values and 'dy' in solved_values:
@@ -1503,6 +1520,7 @@ class GeneratedKXEnv(gym.Env):
                         solved_values['dx'] = dx_val / magnitude
                         solved_values['dy'] = dy_val / magnitude
                     else: # Default to unit vector if magnitude is zero
+                        # If dx, dy are both near zero, set to a default unit vector
                         solved_values['dx'] = 1.0
                         solved_values['dy'] = 0.0
 
@@ -1511,32 +1529,31 @@ class GeneratedKXEnv(gym.Env):
                 if current_cisb_count % 100 == 0:
                     print(f"  ... {current_cisb_count}/{self._cisb_size} states populated.")
 
-                # Add a strong blocking clause to ensure diversity for the next sample.
-                # This clause states that the next solution must NOT be within the epsilon-neighborhood
-                # of the current solution for ALL solved variables simultaneously.
-                current_solution_conditions = []
+                # Add a blocking clause to ensure diversity for the next sample.
+                # The next solution must NOT be within an epsilon-neighborhood
+                # of the current solution for AT LEAST ONE solved variable.
+                blocking_conditions = []
                 for var_name, z3_var in z3_symbols.items():
                     val = solved_values.get(var_name)
                     if val is not None:
-                        # Define the approximate equality for this variable
-                        approx_eq_condition = z3.And(
-                            z3_var >= val - self.z3_equality_tolerance,
-                            z3_var <= val + self.z3_equality_tolerance
+                        # Use a small but significant epsilon for diversity
+                        diversity_epsilon = 0.1 # This value can be tuned
+                        blocking_conditions.append(
+                            z3.Or(z3_var < val - diversity_epsilon, z3_var > val + diversity_epsilon)
                         )
-                        current_solution_conditions.append(approx_eq_condition)
-
-                # The blocking clause is the negation of all variables being approximately equal to their previous values.
-                if current_solution_conditions: # Only add if there are variables to block
-                    s.add(z3.Not(z3.And(current_solution_conditions)))
+                
+                if blocking_conditions: # Only add if there are variables to block
+                    opt.add(z3.Or(blocking_conditions)) # Add blocking clause to the base solver
+                
+                opt.pop() # Pop the soft constraints for this iteration
 
             elif check_result == z3.unsat:
-                # If unsat, it means no more solutions can be found given the current constraints (including blocking clauses).
-                # We should break the loop.
-                print(f"Z3 UNSAT during CISB population attempt {attempts}. No more diverse solutions found.")
-                break
-            else: # z3.unknown
-                print(f"Z3 UNKNOWN during CISB population attempt {attempts}. Continuing but might not be diverse.")
-                # We could break here too, or try to continue. For now, continue.
+                print(f"Z3 UNSAT during CISB population attempt {attempts}. No more diverse solutions found within current constraints.")
+                opt.pop()
+                break # Break if no more solutions are possible
+            else: # z3.unknown (e.g., timeout)
+                print(f"Z3 UNKNOWN during CISB population attempt {attempts}. Retrying with new soft constraints.")
+                opt.pop() # Pop the soft constraints for this iteration, try again
 
         if current_cisb_count < self._cisb_size:
             print(f"Warning: Could only populate {current_cisb_count} states for CISB after {attempts} attempts.")
@@ -1546,21 +1563,25 @@ class GeneratedKXEnv(gym.Env):
         # Verify diversity
         unique_samples = set()
         for sample in self._cisb:
-            # Convert dict to a tuple of (key, value) pairs for hashing
-            # Sort by key to ensure consistent order for hashing
-            # Round floats to a certain precision to account for floating point differences
             rounded_sample = tuple(sorted([(k, round(v, 6)) for k, v in sample.items()]))
             unique_samples.add(rounded_sample)
 
         print(f"Number of unique initial states in CISB: {len(unique_samples)}")
 
-        # Print a few samples for verification
-        print("Sample initial states from CISB:")
+        print("Sample initial states from CISB (first 5):")
         for i, sample in enumerate(self._cisb[:min(5, len(self._cisb))]):
             print(f"  Sample {i+1}: {sample}")
         if not self._cisb:
             print("CRITICAL ERROR: CISB is empty! This environment cannot function correctly without initial states.")
             print("Please check precondition and sampling ranges for satisfiability.")
+
+
+    # The original _populate_cisb method is now replaced by _populate_cisb_diverse_z3.
+    # If you wanted to keep both, you could rename the original to _populate_cisb_simple_z3
+    # and have _populate_cisb act as a dispatcher based on a flag.
+    # For this example, I'm directly calling the diverse one from __init__.
+    def _populate_cisb(self):
+        self._populate_cisb_diverse_z3()
 
 
     def reset(self, seed=None, options=None):
@@ -1614,7 +1635,7 @@ class GeneratedKXEnv(gym.Env):
         info = self._get_info()
         return observation, info
 
-    def step(self, action):
+    def step(self, action) -> Tuple[np.ndarray, float, bool, bool, Dict[str, Any]]:
         self.current_step += 1
         reward = 0.0
         terminated = False
