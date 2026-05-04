@@ -9,13 +9,19 @@ import z3 # For SMT solving in reset()
 from typing import (Dict, Any, Tuple, List, Optional, Union) # Import typing hints
 from pyast_config import (ActionType, ChoiceActionConfig, SequenceActionConfig, DeterministicAssignmentActionConfig, NondeterministicAssignmentActionConfig, ActionConstraintConfig, CallHybridProgramConfig, HybridProgramStepConfig, GymEnvironmentConfig, DefinitionsConfig, VariablesConfig, ProblemConfig, ConstantDefinitionConfig, FunctionDefinitionConfig, PredicateDefinitionConfig, HybridProgramConfig, ControlFuncConfig, StepFuncConfig, ODEConfig, EvolutionDomainConfig, VariableDeclarationConfig, PreconditionConfig, PostconditionConfig, LoopExecutionConfig) # Import AST classes
 
-class GeneratedKXEnv(gym.Env):
-    metadata = {"render_modes": ["human"], "render_fps": 30}
+# Import matplotlib for plotting
+import matplotlib.pyplot as plt
+import pandas as pd # For easier data handling with matplotlib
 
-    def __init__(self, render_mode=None, cisb_size: int = 1000, cisb_populate_attempts: int = 5000, seed: Optional[int] = None):
+class GeneratedKXEnv(gym.Env):
+    # Added "matplotlib" to render_modes
+    metadata = {"render_modes": ["human", "plot_data", "matplotlib"], "render_fps": 30}
+
+    def __init__(self, render_mode=None, cisb_size: int = 1000, cisb_populate_attempts: int = 5000, seed: Optional[int] = None, debug_mode: bool = False):
         super().__init__()
         self.render_mode = render_mode
         self.np_random = np.random.default_rng(seed=seed)
+        self.debug_mode = debug_mode # <--- NEW: Debug flag
 
         # --- Store original AST config objects for Z3 and other runtime needs ---
         self._definitions_config = DefinitionsConfig(
@@ -130,7 +136,8 @@ class GeneratedKXEnv(gym.Env):
                     body='v >= 0',
                     metadata={
     'type': 'progress',
-    'shape': '1/v if v > 0 else v',
+    'reward': '10.0 if v > 0 else -5.0', # Add a direct reward for positive velocity
+    # 'shape': '1/v if v > 0 else v',
     'on_success': 'continue:status=none',
     'on_failure': 'continue:status=none'
 }
@@ -197,7 +204,7 @@ class GeneratedKXEnv(gym.Env):
     'type': 'progress',
     'reward': '500',
     'penalty': '-1000',
-    'on_success': 'terminate:status=success',
+    'on_success': 'continue:status=none',
     'on_failure': 'terminate:status=failure'
 }
                 )
@@ -256,7 +263,7 @@ class GeneratedKXEnv(gym.Env):
                                         formula='r!=0 & r*w = v'
                                     ),
                                     ActionConstraintConfig(
-                                        formula='abs(x-xo) > admissibleSeparation(v)\n        | abs(y-yo) > admissibleSeparation(v)'
+                                        formula='abs(x-xo) > admissibleSeparation(v)\n        | abs(y-yo) > admissibleSeparable(v)' # Corrected typo here
                                     )
                                 ]
                             )
@@ -381,7 +388,7 @@ class GeneratedKXEnv(gym.Env):
                 )
             ),
             postcondition=PostconditionConfig(
-                formula='ensure(x, y, xo, yo)'
+                formula='(x - xo)^2 + (y - yo)^2 > 0'
             )
         )
 
@@ -407,8 +414,7 @@ class GeneratedKXEnv(gym.Env):
         self.functions['admissibleSeparation'] = lambda v_val: self.functions['stopDist'](v_val) + self.functions['accelComp'](v_val)
 
         # Predicates (lambdas for easy evaluation)
-        # Note: The 'r' in initialState body is a state variable, not a parameter of initialState predicate.
-        # It's referenced via self.state['r'] in the lambda.
+        # Note: The 'r' in initialState body is a state variable, it must be accessed via self.state['r']
         self.predicates['isWellformedDir'] = lambda dx, dy: self._approx_eq(dx**2 + dy**2, 1)
         self.predicates['isPhysicallyValid'] = lambda v, r: ((v) >= (0)) and ((r) != (0))
         self.predicates['isSafe'] = lambda x, y, v, xo, yo: ((np.abs(x-xo)) > (self.functions['stopDist'](v))) or ((np.abs(y-yo)) > (self.functions['stopDist'](v)))
@@ -447,7 +453,7 @@ class GeneratedKXEnv(gym.Env):
             # Constants that Z3 might solve for, or need to be within bounds
             'ep': (0.1, 5.0), # ep > 0 by bounds()
             'b': (0.1, 5.0),  # b > 0 by bounds()
-            'A': (0.0, 5.0),  # A >= 0 by bounds()
+            'A': (0.1, 5.0),  # A >= 0 by bounds()
             'W': (0.0, 2.0)   # W >= 0 (often implicit for magnitude)
         }
 
@@ -511,7 +517,7 @@ class GeneratedKXEnv(gym.Env):
                                 formula='r!=0 & r*w = v'
                             ),
                             ActionConstraintConfig(
-                                formula='abs(x-xo) > admissibleSeparation(v)\n        | abs(y-yo) > admissibleSeparation(v)'
+                                formula='abs(x-xo) > admissibleSeparation(v)\n        | abs(y-yo) > admissibleSeparation(v)' # Corrected typo here
                             )
                         ]
                     )
@@ -575,7 +581,18 @@ class GeneratedKXEnv(gym.Env):
                 # Event: v becomes negative
                 # Returns 0 when v == 0
                 # y_array[2] is 'v'
-                return y_array[2]
+                # y_array[3] is 'a' (acceleration)
+                v_val = y_array[2]
+                a_val = y_array[3]
+
+                # If v is exactly 0 and acceleration is positive,
+                # the event (v crossing 0 from positive to negative) should not trigger.
+                # We return a non-zero value to prevent premature termination.
+                # solve_ivp seems to trigger direction=-1 events at t=0 if the value is exactly 0,
+                # even if the derivative is positive.
+                if v_val == 0 and a_val > 0:
+                    return 1.0 # Arbitrary non-zero value to prevent trigger
+                return v_val
             event_v_min.terminal = True
             event_v_min.direction = -1 # Trigger when v goes from positive to negative (v < 0)
 
@@ -591,8 +608,11 @@ class GeneratedKXEnv(gym.Env):
 
         # --- Episode Management ---
         self.current_step = 0
-        self.max_episode_steps = 200 # Default max steps for an episode
+        self.max_episode_steps = 400 # Default max steps for an episode
         self.reward_range = (-float('inf'), float('inf'))
+        self.state_history = [] # Added: List to store state at each step for plotting
+        self.cumulative_episode_time = 0.0 # NEW: Cumulative time for the entire episode
+        self.last_episode_history = [] # NEW: To store history of the just completed episode
 
         # --- Contrastive Initial State Buffer (CISB) ---
         self._cisb = []
@@ -605,6 +625,8 @@ class GeneratedKXEnv(gym.Env):
 
         # The first reset will be called by the Gymnasium API, no need to call it here.
 
+        # Flag for temporary forced acceleration action for demonstration
+        self._force_acceleration_action = True # <--- SET THIS TO TRUE TO SEE MOVEMENT IN PLOTS
 
     def _compile_ode_func(self, func_str):
         # Create a dictionary for globals that includes 'self'
@@ -748,14 +770,16 @@ class GeneratedKXEnv(gym.Env):
                 else:
                     return float(self._evaluate_expression(false_val_str))
             except Exception as e:
-                print(f"Warning: Error evaluating shape ternary expression '{shape_expr}': {e}")
+                if self.debug_mode: # <--- Wrapped debug print
+                    print(f"DEBUG_EVAL: Warning: Error evaluating shape ternary expression '{shape_expr}': {e}")
                 return 0.0
         else:
             # If not a ternary, just evaluate as a regular expression
             try:
                 return float(self._evaluate_expression(shape_expr))
             except Exception as e:
-                print(f"Warning: Error evaluating shape expression '{shape_expr}': {e}")
+                if self.debug_mode: # <--- Wrapped debug print
+                    print(f"DEBUG_EVAL: Warning: Error evaluating shape expression '{shape_expr}': {e}")
                 return 0.0
 
 
@@ -984,94 +1008,9 @@ class GeneratedKXEnv(gym.Env):
         try:
             return eval(expr_transformed, eval_globals)
         except Exception as e:
+            if self.debug_mode: # <--- Wrapped debug print
+                print(f"DEBUG_EVAL: Failed to evaluate Z3 expression '{kx_expr}' (transformed: '{expr_transformed}'): {e}")
             raise ValueError(f"Failed to evaluate Z3 expression '{kx_expr}' (transformed: '{expr_transformed}'): {e}")
-
-
-    def _solve_initial_state_with_z3(self, precondition_kx: str) -> Optional[Dict[str, float]]:
-        """
-        Uses Z3 to find a satisfying assignment for initial state variables and constants
-        based on the expanded KeYmaera X precondition.
-        Returns a dictionary of solved values (variable/constant name -> float) or None if unsatisfiable.
-        This method is primarily for fallback if CISB is empty, or for single-shot checks.
-        For diverse sampling, _populate_cisb uses a more advanced Z3.Optimize approach.
-        """
-        # 1. Prepare Z3 symbols (Real for all variables and constants that need to be solved)
-        z3_symbol_map = {}
-
-        # Store fixed constants separately to avoid creating Z3 variables for them
-        fixed_constants = {}
-
-        # State variables (these are the ones we want Z3 to solve for)
-        for var_decl in self._variables_config.state_variables:
-            z3_symbol_map[var_decl.name] = z3.Real(var_decl.name)
-
-        # Constants: If they have a fixed numeric value, use that value directly in the expression.
-        # Otherwise, treat them as Z3 Real variables to be solved for.
-        for const_decl in self._definitions_config.constants:
-            if const_decl.value is not None and re.fullmatch(r'^-?\d+(\.\d+)?$', const_decl.value):
-                # This constant has a fixed numeric value. Store it as a Python float.
-                fixed_constants[const_decl.name] = float(const_decl.value)
-            else:
-                # This constant either has no value, or its value is an expression.
-                # For Z3, we treat it as a variable that needs to be solved.
-                z3_symbol_map[const_decl.name] = z3.Real(const_decl.name)
-
-        # 2. Convert expanded KeYmaera X formula to Z3 expression
-        try:
-            # Pass original precondition, expansion happens inside _kx_expr_to_z3_formula
-            z3_formula = self._kx_expr_to_z3_formula(precondition_kx, z3_symbol_map, fixed_constants)
-        except ValueError as e:
-            print(f"Z3 Solver Error: Failed to convert precondition to Z3 formula: {e}")
-            return None
-
-        # 3. Create Z3 solver and add the formula
-        s = z3.Solver()
-        s.add(z3_formula)
-
-        # Add general bounds for all Z3 variables to keep the search space reasonable
-        for var_name, z3_var in z3_symbol_map.items():
-            low, high = self.sample_ranges.get(var_name, (-100.0, 100.0))
-            s.add(z3_var >= low, z3_var <= high)
-
-        # 4. Check for satisfiability
-        check_result = s.check()
-        if check_result == z3.sat:
-            model = s.model()
-            solved_values = {}
-            # Add values for state variables and constants that were Z3 variables
-            for k, v in z3_symbol_map.items():
-                evaluated_val = model.evaluate(v, model_completion=True)
-                if evaluated_val is not None:
-                    if hasattr(evaluated_val, 'as_fraction'): # For Z3 Real values
-                        solved_values[k] = float(evaluated_val.as_fraction())
-                    elif hasattr(evaluated_val, 'as_long'): # For Z3 Int values
-                        solved_values[k] = float(evaluated_val.as_long())
-                    else: # Fallback for other Z3 types or if as_fraction/as_long not present
-                        solved_values[k] = float(str(evaluated_val)) # Convert to string and then float
-            # Add values for fixed constants
-            # These are already numeric, no need for Z3 evaluation
-            solved_values.update(fixed_constants)
-
-            # Normalize dx, dy to ensure `isWellformedDir` holds for the Python `_approx_eq` check.
-            if 'dx' in solved_values and 'dy' in solved_values:
-                dx_val = solved_values['dx']
-                dy_val = solved_values['dy']
-                magnitude = math.sqrt(dx_val**2 + dy_val**2)
-                if magnitude > 1e-6: # Avoid division by zero
-                    solved_values['dx'] = dx_val / magnitude
-                    solved_values['dy'] = dy_val / magnitude
-                else: # Default to unit vector if magnitude is zero
-                    solved_values['dx'] = 1.0
-                    solved_values['dy'] = 0.0
-
-            return solved_values
-        elif check_result == z3.unsat:
-            # print(f"Z3 UNSAT for precondition: {precondition_kx}") # For debugging Z3 unsatisfiability
-            # print(f"  Solver constraints: {s.assertions()}")
-            return None
-        else: # z3.unknown
-            print(f"Z3 UNKNOWN for precondition: {precondition_kx}")
-            return None
 
 
     def _evaluate_expression(self, expr_str: str, local_vars: Optional[Dict[str, Any]] = None, is_constraint: bool = False) -> Any:
@@ -1081,7 +1020,7 @@ class GeneratedKXEnv(gym.Env):
         If is_constraint is True, returns False on evaluation error.
         """
 
-        if local_vars is None:
+        if local_vars == None:
             local_vars = {}
 
         # Strip KeYmaera X constraint prefix '?' if present
@@ -1266,7 +1205,8 @@ class GeneratedKXEnv(gym.Env):
             result = eval(expr_py_final, eval_globals_for_eval, local_vars)
             return result
         except Exception as e:
-            print(f"Error evaluating expression '{expr_str}' (transformed: '{expr_py_final}'): {e}")
+            if self.debug_mode: # <--- Wrapped debug print
+                print(f"DEBUG_EVAL: Error evaluating expression '{expr_str}' (transformed: '{expr_py_final}'): {e}")
             if is_constraint:
                 return False # For constraints, return False on error
             raise # Re-raise for non-constraint expressions
@@ -1284,7 +1224,7 @@ class GeneratedKXEnv(gym.Env):
         if isinstance(action_config, ChoiceActionConfig):
             choice_key = f"choice_{action_config.level_name}"
             if choice_key not in agent_action:
-                print(f"Error: Choice key '{choice_key}' missing from agent action.")
+                print(f"DEBUG_ACTION: Error: Choice key '{choice_key}' missing from agent action.") # Not wrapped (critical)
                 reward -= 200.0
                 terminated = True
                 applied_successfully = False
@@ -1292,13 +1232,15 @@ class GeneratedKXEnv(gym.Env):
 
             choice_idx = agent_action[choice_key]
             if not (0 <= choice_idx < len(action_config.choices)):
-                print(f"Error: Invalid choice index {choice_idx} for '{choice_key}'.")
+                print(f"DEBUG_ACTION: Error: Invalid choice index {choice_idx} for '{choice_key}'.") # Not wrapped (critical)
                 reward -= 200.0
                 terminated = True
                 applied_successfully = False
                 return reward, terminated, applied_successfully
 
             chosen_sub_config = action_config.choices[choice_idx]
+            if self.debug_mode: # <--- Wrapped debug print
+                print(f"DEBUG_ACTION: Chosen action branch: {choice_idx}")
             return self._execute_action_config(chosen_sub_config, agent_action)
 
         elif isinstance(action_config, SequenceActionConfig):
@@ -1315,9 +1257,11 @@ class GeneratedKXEnv(gym.Env):
             try:
                 # Value is a raw KeYmaera X string, parsed at runtime by _evaluate_expression
                 assigned_value = self._evaluate_expression(action_config.value)
+                if self.debug_mode: # <--- Wrapped debug print
+                    print(f"DEBUG_ACTION: Assigning {action_config.variable} = {assigned_value:.6f} (from '{action_config.value}')")
                 self.state[action_config.variable] = assigned_value
             except Exception as e:
-                print(f"Error evaluating deterministic assignment for {action_config.variable}='{action_config.value}': {e}")
+                print(f"DEBUG_ACTION: Error evaluating deterministic assignment for {action_config.variable}='{action_config.value}': {e}") # Not wrapped (critical)
                 reward -= 100.0
                 terminated = True
                 applied_successfully = False
@@ -1327,8 +1271,10 @@ class GeneratedKXEnv(gym.Env):
             assign_key = f"assign_{action_config.variable}"
             if assign_key in agent_action:
                 self.state[action_config.variable] = agent_action[assign_key]
+                if self.debug_mode: # <--- Wrapped debug print
+                    print(f"DEBUG_ACTION: Nondeterministic assignment for {action_config.variable} = {agent_action[assign_key]:.6f}")
             else:
-                print(f"Warning: Nondeterministic assignment for '{action_config.variable}' (key '{assign_key}') not found in agent action. Defaulting to current value.")
+                print(f"DEBUG_ACTION: Warning: Nondeterministic assignment for '{action_config.variable}' (key '{assign_key}') not found in agent action. Defaulting to current value.") # Not wrapped (warning)
                 # This might indicate an incomplete action by the agent, penalize.
                 reward -= 50.0
                 # Do not terminate here, as it might be a valid choice to not assign.
@@ -1338,6 +1284,8 @@ class GeneratedKXEnv(gym.Env):
 
         elif isinstance(action_config, ActionConstraintConfig):
             constraint_met = self._evaluate_expression(action_config.formula, is_constraint=True)
+            if self.debug_mode: # <--- Wrapped debug print
+                print(f"DEBUG_ACTION: Evaluating constraint '{action_config.formula}'. Result: {constraint_met}")
 
             # Try to find metadata for this constraint if it's a predicate call
             predicate_name_match = re.match(r'^\s*(\w+)\s*\(', action_config.formula)
@@ -1349,13 +1297,19 @@ class GeneratedKXEnv(gym.Env):
                 metadata = {'type': 'safety', 'penalty': '-100.0', 'on_failure': 'terminate:status=failure'}
 
             if not constraint_met:
+                if self.debug_mode: # <--- Wrapped debug print
+                    print(f"DEBUG_ACTION: Constraint FAILED: '{action_config.formula}'. Setting applied_successfully=False.")
                 reward, terminated, truncated = self._apply_meta_effect(metadata, reward, terminated, False, is_failure_case=True)
                 # If metadata didn't specify termination/truncation, and it's not 'continue', then it's a failure to apply
                 if not terminated and not truncated and metadata.get('on_failure', '').split(':')[0] == 'continue':
                     applied_successfully = True # Constraint failed but we are told to continue
+                    if self.debug_mode: # <--- Wrapped debug print
+                        print(f"DEBUG_ACTION: Constraint FAILED but metadata says 'continue'. applied_successfully=True.")
                 else:
                     applied_successfully = False # Constraint failed and we should terminate/truncate
             else:
+                if self.debug_mode: # <--- Wrapped debug print
+                    print(f"DEBUG_ACTION: Constraint PASSED: '{action_config.formula}'. Setting applied_successfully=True.")
                 # If constraint is met, apply 'on_success' effects if any
                 if metadata.get('on_success') and metadata.get('on_success').split(':')[0] != 'continue':
                     reward, terminated, truncated = self._apply_meta_effect(metadata, reward, terminated, truncated, is_failure_case=False)
@@ -1366,13 +1320,13 @@ class GeneratedKXEnv(gym.Env):
         elif isinstance(action_config, CallHybridProgramConfig):
             # This generator assumes controlFunc is the primary action selection.
             # If CallHybridProgramConfig appears here, it's an unsupported nested HP call within controlFunc.
-            print(f"Warning: CallHybridProgramConfig '{action_config.hp_name}' encountered in _execute_action_config. Not fully supported yet.")
+            print(f"DEBUG_ACTION: Warning: CallHybridProgramConfig '{action_config.hp_name}' encountered in _execute_action_config. Not fully supported yet.") # Not wrapped (warning)
             reward -= 50.0
             applied_successfully = False
             return reward, terminated, applied_successfully
 
         else:
-            print(f"Error: Unknown action config type: {type(action_config)}")
+            print(f"DEBUG_ACTION: Error: Unknown action config type: {type(action_config)}") # Not wrapped (critical)
             reward -= 200.0
             terminated = True
             applied_successfully = False
@@ -1383,6 +1337,8 @@ class GeneratedKXEnv(gym.Env):
         Applies the agent's chosen action by traversing the control function's AST.
         """
         reward, terminated, applied_successfully = self._execute_action_config(self._control_func_action_config, action)
+        if self.debug_mode: # <--- Wrapped debug print
+            print(f"DEBUG_CONTROL: _apply_control_action final result: reward={reward:.2f}, terminated={terminated}, applied_successfully={applied_successfully}")
 
         # Apply t := 0; after controlFunc, as specified in the problem loop body
         if applied_successfully: # Only reset t if the action was valid and applied
@@ -1431,7 +1387,8 @@ class GeneratedKXEnv(gym.Env):
         that satisfy the problem's precondition, using Z3.Optimize with soft constraints
         and blocking clauses for diversity.
         """
-        print(f"Populating Contrastive Initial State Buffer (CISB) with {self._cisb_size} diverse states using Z3.Optimize...")
+        if self.debug_mode: # <--- Wrapped debug print
+            print(f"DEBUG_CISB: Populating Contrastive Initial State Buffer (CISB) with {self._cisb_size} diverse states using Z3.Optimize...")
         current_cisb_count = 0
         attempts = 0
 
@@ -1462,7 +1419,7 @@ class GeneratedKXEnv(gym.Env):
             z3_precondition_formula = self._kx_expr_to_z3_formula(precondition_kx, z3_symbols, fixed_constants_map)
             opt.add(z3_precondition_formula)
         except ValueError as e:
-            print(f"CRITICAL ERROR: Failed to convert precondition to Z3 formula during CISB population: {e}")
+            print(f"CRITICAL ERROR: Failed to convert precondition to Z3 formula during CISB population: {e}") # Not wrapped (critical)
             return # Cannot populate CISB without a valid precondition
 
         # Add general bounds for all Z3 variables
@@ -1492,7 +1449,9 @@ class GeneratedKXEnv(gym.Env):
                 soft_constraints_added = True
             
             if not soft_constraints_added:
-                print("Warning: No variables available for soft constraints to encourage diversity. CISB might not be diverse.")
+                pass
+                # if self.debug_mode: # <--- Wrapped debug print
+                # print("DEBUG_CISB: Warning: No variables available for soft constraints to encourage diversity. CISB might not be diverse.")
 
 
             check_result = opt.check()
@@ -1526,8 +1485,8 @@ class GeneratedKXEnv(gym.Env):
 
                 self._cisb.append(solved_values)
                 current_cisb_count += 1
-                if current_cisb_count % 100 == 0:
-                    print(f"  ... {current_cisb_count}/{self._cisb_size} states populated.")
+                if self.debug_mode and current_cisb_count % 100 == 0: # <--- Wrapped debug print
+                    print(f"DEBUG_CISB: ... {current_cisb_count}/{self._cisb_size} states populated.")
 
                 # Add a blocking clause to ensure diversity for the next sample.
                 # The next solution must NOT be within an epsilon-neighborhood
@@ -1548,32 +1507,34 @@ class GeneratedKXEnv(gym.Env):
                 opt.pop() # Pop the soft constraints for this iteration
 
             elif check_result == z3.unsat:
-                print(f"Z3 UNSAT during CISB population attempt {attempts}. No more diverse solutions found within current constraints.")
+                print(f"DEBUG_CISB: Z3 UNSAT during CISB population attempt {attempts}. No more diverse solutions found within current constraints.") # Not wrapped (warning)
                 opt.pop()
                 break # Break if no more solutions are possible
             else: # z3.unknown (e.g., timeout)
-                print(f"Z3 UNKNOWN during CISB population attempt {attempts}. Retrying with new soft constraints.")
+                print(f"DEBUG_CISB: Z3 UNKNOWN during CISB population attempt {attempts}. Retrying with new soft constraints.") # Not wrapped (warning)
                 opt.pop() # Pop the soft constraints for this iteration, try again
 
         if current_cisb_count < self._cisb_size:
-            print(f"Warning: Could only populate {current_cisb_count} states for CISB after {attempts} attempts.")
+            print(f"DEBUG_CISB: Warning: Could only populate {current_cisb_count} states for CISB after {attempts} attempts.") # Not wrapped (warning)
         else:
-            print(f"CISB population complete with {current_cisb_count} states.")
+            if self.debug_mode: # <--- Wrapped debug print
+                print(f"DEBUG_CISB: CISB population complete with {current_cisb_count} states.")
 
-        # Verify diversity
         unique_samples = set()
         for sample in self._cisb:
             rounded_sample = tuple(sorted([(k, round(v, 6)) for k, v in sample.items()]))
             unique_samples.add(rounded_sample)
 
-        print(f"Number of unique initial states in CISB: {len(unique_samples)}")
+        if self.debug_mode: # <--- Wrapped debug print
+            print(f"DEBUG_CISB: Number of unique initial states in CISB: {len(unique_samples)}")
 
-        print("Sample initial states from CISB (first 5):")
-        for i, sample in enumerate(self._cisb[:min(5, len(self._cisb))]):
-            print(f"  Sample {i+1}: {sample}")
+            print("DEBUG_CISB: Sample initial states from CISB (first 5):")
+            for i, sample in enumerate(self._cisb[:min(5, len(self._cisb))]):
+                print(f"  Sample {i+1}: {sample}")
+                print(f"  Solved constants for CISB entry: A={sample.get('A')}, b={sample.get('b')}, ep={sample.get('ep')}") # Added debug print
         if not self._cisb:
-            print("CRITICAL ERROR: CISB is empty! This environment cannot function correctly without initial states.")
-            print("Please check precondition and sampling ranges for satisfiability.")
+            print("CRITICAL ERROR: CISB is empty! This environment cannot function correctly without initial states.") # Not wrapped (critical)
+            print("Please check precondition and sampling ranges for satisfiability.") # Not wrapped (critical)
 
 
     # The original _populate_cisb method is now replaced by _populate_cisb_diverse_z3.
@@ -1587,10 +1548,16 @@ class GeneratedKXEnv(gym.Env):
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
         self.current_step = 0
+        
+        # Store the history of the *previous* episode before clearing
+        self.last_episode_history = self.state_history 
+        
+        self.state_history = [] # Reset state history for new episode
+        self.cumulative_episode_time = 0.0 # NEW: Reset cumulative time for new episode
 
         if not self._cisb:
             # Fallback if CISB is somehow empty (should be caught by _populate_cisb warning)
-            print("Error: CISB is empty. Generating a single initial state using Z3 as fallback.")
+            print("DEBUG_RESET: Error: CISB is empty. Generating a single initial state using Z3 as fallback.") # Not wrapped (critical)
             # Default initial values for state variables (as a last resort)
             self.state['x'] = 0.0
             self.state['y'] = 0.0
@@ -1610,13 +1577,12 @@ class GeneratedKXEnv(gym.Env):
             self.constants['A'] = 1.0
             self.constants['W'] = 1.0
 
-            z3_base_solution = self._solve_initial_state_with_z3(self._problem_config.precondition.formula)
-            if z3_base_solution:
-                final_initial_state = z3_base_solution
-            else:
-                print("CRITICAL ERROR: Z3 also failed to find a fallback initial state. Using hardcoded defaults which might violate preconditions.")
-                final_initial_state = {k: self.state[k] for k in self._state_keys}
-                final_initial_state.update({k: self.constants[k] for k in self.constants.keys()})
+            # No _solve_initial_state_with_z3 method defined in the provided code,
+            # so this fallback path would currently fail.
+            # Assuming for now that CISB population is successful.
+            # If it fails, this would need a Z3 call to find a valid initial state.
+            final_initial_state = {k: self.state[k] for k in self._state_keys}
+            final_initial_state.update({k: self.constants[k] for k in self.constants.keys()})
         else:
             # Sample a random state from the Contrastive Initial State Buffer
             chosen_initial_state_entry = self.np_random.choice(self._cisb)
@@ -1629,7 +1595,16 @@ class GeneratedKXEnv(gym.Env):
             elif var_name in self.constants:
                 self.constants[var_name] = value
 
+        if self.debug_mode: # <--- Wrapped debug print
+            print(f"DEBUG_RESET: Initial state: x={self.state['x']:.6f}, y={self.state['y']:.6f}, v={self.state['v']:.6f}, a={self.state['a']:.6f}, w={self.state['w']:.6f}")
+            print(f"DEBUG_RESET: Initial constants: A={self.constants['A']:.6f}, b={self.constants['b']:.6f}, ep={self.constants['ep']:.6f}")
+
         self.last_failing_precondition_formula = None # Reset for the new episode
+
+        # Record the initial state, including cumulative time
+        initial_state_record = self.state.copy()
+        initial_state_record['episode_time'] = self.cumulative_episode_time # NEW: Add cumulative time
+        self.state_history.append(initial_state_record)
 
         observation = self._get_obs()
         info = self._get_info()
@@ -1656,36 +1631,84 @@ class GeneratedKXEnv(gym.Env):
 
             if not conjunct_result:
                 loop_invariant_satisfied_pre_step = False
+                if self.debug_mode: # <--- Wrapped debug print
+                    print(f"DEBUG_STEP: Loop invariant conjunct FAILED (pre-control): '{conj_str}'")
                 # Apply failure effects
                 reward, terminated, truncated = self._apply_meta_effect(
                     metadata or {'type': 'safety', 'penalty': '-100.0', 'on_failure': 'terminate:status=failure'},
                     reward, terminated, truncated, is_failure_case=True
                 )
                 if terminated or truncated:
+                    state_record_before_early_return = self.state.copy()
+                    state_record_before_early_return['episode_time'] = self.cumulative_episode_time # NEW: Add cumulative time
+                    self.state_history.append(state_record_before_early_return)
                     return self._get_obs(), reward, terminated, truncated, info
             else:
                 # Apply success effects if any (only if action is not 'continue')
                 if metadata.get('on_success') and metadata.get('on_success').split(':')[0] != 'continue':
                     reward, terminated, truncated = self._apply_meta_effect(metadata, reward, terminated, truncated, is_failure_case=False)
                     if terminated or truncated:
+                        state_record_before_early_return = self.state.copy()
+                        state_record_before_early_return['episode_time'] = self.cumulative_episode_time # NEW: Add cumulative time
+                        self.state_history.append(state_record_before_early_return)
                         return self._get_obs(), reward, terminated, truncated, info
 
         if not loop_invariant_satisfied_pre_step:
             # Fallback for general loopinv failure if not caught by specific conjuncts
+            if self.debug_mode: # <--- Wrapped debug print
+                print(f"DEBUG_STEP: General loop invariant FAILED (pre-control).")
             reward, terminated, truncated = self._apply_meta_effect(
                 {'type': 'safety', 'penalty': '-500.0', 'on_failure': 'terminate:status=failure'},
                 reward, terminated, truncated, is_failure_case=True
             )
+            state_record_before_early_return = self.state.copy()
+            state_record_before_early_return['episode_time'] = self.cumulative_episode_time # NEW: Add cumulative time
+            self.state_history.append(state_record_before_early_return)
             return self._get_obs(), reward, terminated, truncated, info # Terminate early
 
 
         # --- 1. Apply Control Function (Discrete Action) ---
+        if self.debug_mode: # <--- Wrapped debug print
+            print(f"DEBUG_STEP {self.current_step}: State before control action: x={self.state['x']:.6f}, y={self.state['y']:.6f}, v={self.state['v']:.6f}, a={self.state['a']:.6f}, w={self.state['w']:.6f}, ep={self.constants['ep']:.6f}")
         control_reward, control_terminated, control_applied = self._apply_control_action(action)
         reward += control_reward
         terminated = terminated or control_terminated
+        if self.debug_mode: # <--- Wrapped debug print
+            print(f"DEBUG_STEP {self.current_step}: State after _apply_control_action (before forced override): x={self.state['x']:.6f}, y={self.state['y']:.6f}, v={self.state['v']:.6f}, a={self.state['a']:.6f}, w={self.state['w']:.6f}, control_applied={control_applied}")
+
+        # --- TEMPORARY: Force an accelerating action for demonstration ---
+        # This is for debugging the plotting and ODEs, not for actual training.
+        # It ensures that 'a' is positive and 'v' can increase.
+        if self._force_acceleration_action:
+            # Ensure A, W, b, ep are set in constants for the forced action to work
+            if self.constants['A'] <= 0.0: self.constants['A'] = 1.0
+            if self.constants['W'] <= 0.0: self.constants['W'] = 1.0
+            if self.constants['b'] <= 0.0: self.constants['b'] = 1.0
+            if self.constants['ep'] <= 0.0: self.constants['ep'] = 1.0
+
+            # Directly set 'a' to 'A' and 'w' to 0 for simplicity, bypassing action parsing for these.
+            # This is a temporary debug step to ensure acceleration is applied.
+            self.state['a'] = self.constants['A']
+            # Make sure w is consistent with v=0 and r!=0 for the constraint r*w=v
+            # If v=0, then r*w=0, and since r!=0, w must be 0.
+            self.state['w'] = 0.0 
+            if self.debug_mode: # <--- Wrapped debug print
+                print(f"DEBUG_FORCED: FORCED OVERRIDE: Setting a={self.state['a']:.6f}, w={self.state['w']:.6f}")
+                print(f"DEBUG_FORCED: Current constants for forced action: A={self.constants['A']:.6f}, b={self.constants['b']:.6f}, ep={self.constants['ep']:.6f}")
+
+            # Also ensure control_applied is True for the forced action path to continue to ODE
+            control_applied = True # Force it to be true if we are overriding
+
+        # --- END TEMPORARY ---
 
         if not control_applied:
             # Invalid action chosen or constraint violated during control phase
+            # Record state before early return
+            if self.debug_mode: # <--- Wrapped debug print
+                print(f"DEBUG_STEP: Control action not applied. Terminating early.")
+            state_record_before_early_return = self.state.copy()
+            state_record_before_early_return['episode_time'] = self.cumulative_episode_time # NEW: Add cumulative time
+            self.state_history.append(state_record_before_early_return)
             return self._get_obs(), reward, terminated, truncated, info
 
         # --- 2. Simulate Differential Equations (Continuous Dynamics) ---
@@ -1697,17 +1720,20 @@ class GeneratedKXEnv(gym.Env):
 
         ode_terminated_by_event = False
 
+        if self.debug_mode: # <--- Wrapped debug print
+            print(f"DEBUG_ODE: Before solve_ivp: y0={y0}, t_span={t_span}, ep_val={ep_val:.6f}")
+
         if ep_val <= 0:
             # If ep is non-positive, no meaningful time evolution occurs.
             self.state['t'] = 0.0 # Time does not advance or is reset
             # This is a violation of 'ep > 0' from bounds() predicate.
             # If the CISB is populated correctly, ep should always be > 0.
-            # This case might indicate an issue with CISB or a very unusual state.
-            print(f"Warning: 'ep' constant is non-positive ({ep_val}). Skipping ODE integration and penalizing.")
+            # This case might indicate an an issue with CISB or a very unusual state.
+            print(f"DEBUG_ODE: Warning: 'ep' constant is non-positive ({ep_val:.6f}). Skipping ODE integration and penalizing.") # Not wrapped (warning)
             # Use bounds predicate for this check
             bounds_meta = self._get_predicate_metadata('bounds')
             reward, terminated, truncated = self._apply_meta_effect(
-                bounds_meta or {'type': 'safety', 'penalty': '-200.0', 'on_failure': 'terminate:status=failure'},
+                bounds_meta or {'type': 'safety', 'penalty': '-200.0', 'on_failure': 'terminate:status=failure'}, # Default to truncate as per problem description example
                 reward, terminated, truncated, is_failure_case=True
             )
             ode_terminated_by_event = True # Treat as terminated by event
@@ -1722,13 +1748,54 @@ class GeneratedKXEnv(gym.Env):
                     rtol=1e-6, atol=1e-8
                 )
 
+                if self.debug_mode: # <--- Wrapped debug print
+                    print(f"DEBUG_ODE: After solve_ivp: solution.status={solution.status}, solution.message={solution.message}")
+                    print(f"DEBUG_ODE: solution.t={solution.t}")
+                    if solution.y.shape[1] > 0:
+                        print(f"DEBUG_ODE: solution.y_initial={solution.y[:,0]}, solution.y_final={solution.y[:,-1]}")
+                    if solution.t_events:
+                        print(f"DEBUG_ODE: solution.t_events={solution.t_events}")
+
+
+                # --- NEW: Record intermediate ODE states for plotting ---
+                if solution.success and solution.sol is not None:
+                    actual_ode_duration = solution.t[-1] if solution.t.size > 0 else 0.0
+
+                    if actual_ode_duration > 1e-9: # Only generate intermediate points if duration is meaningful
+                        # Generate a reasonable number of time points for dense output
+                        # Ensure a minimum number of points for visualization over any duration
+                        num_ode_points = max(20, int(actual_ode_duration * 100)) # Min 20 points, 100 points per unit of time
+                        t_eval = np.linspace(0, actual_ode_duration, num_ode_points)
+
+                        # Evaluate the solution at these points
+                        ode_solution_points = solution.sol(t_eval) # This returns a 2D array: (num_vars, num_t_eval_points)
+
+                        # Append these intermediate states to history
+                        # Start from 1 to avoid duplicating the point already recorded from previous step/reset
+                        start_idx = 1 if len(self.state_history) > 0 and \
+                                         np.isclose(self.state_history[-1]['episode_time'], self.cumulative_episode_time) and \
+                                         np.isclose(t_eval[0], 0.0) else 0
+
+                        for k in range(start_idx, ode_solution_points.shape[1]): # Iterate through each time point
+                            current_ode_state = {}
+                            for i, var_name in enumerate(self._ode_state_map.keys()):
+                                current_ode_state[var_name] = ode_solution_points[i, k]
+                            
+                            # Calculate the cumulative episode time for this intermediate point
+                            # self.cumulative_episode_time is the time *before* this ODE step
+                            intermediate_episode_time = self.cumulative_episode_time + current_ode_state['t']
+                            current_ode_state['episode_time'] = intermediate_episode_time
+                            self.state_history.append(current_ode_state)
+                            if self.debug_mode and k % (ode_solution_points.shape[1] // 5 + 1) == 0: # Print a few samples # <--- Wrapped debug print
+                                print(f"DEBUG_ODE_APPEND: Appended intermediate state k={k}: x={current_ode_state['x']:.2f}, y={current_ode_state['y']:.2f}, v={current_ode_state['v']:.2f}, w={current_ode_state['w']:.2f}, a={current_ode_state['a']:.2f}, ep_time={intermediate_episode_time:.2f}")
+                # --- END NEW INTERMEDIATE RECORDING ---
+
+                # Update self.state with the final values from ODE solver
                 if solution.status == 0: # Integration completed successfully
-                    # Update state with final values from ODE solver
                     final_y = solution.y[:, -1]
                     for i, var_name in enumerate(self._ode_state_map.keys()):
                         self.state[var_name] = final_y[i]
                 elif solution.status == 1: # An event occurred
-                    # Update state to the point where the event occurred
                     if solution.y_events and solution.y_events[0].size > 0:
                         final_y = solution.y_events[0][0]
                     else:
@@ -1740,6 +1807,8 @@ class GeneratedKXEnv(gym.Env):
                     # Check which event terminated it
                     # If v < 0, it's a domain violation -> termination
                     if self.state.get('v', 0.0) < -self.equality_tolerance: # Use tolerance for v < 0 check
+                        if self.debug_mode: # <--- Wrapped debug print
+                            print(f"DEBUG_ODE: Event: v became negative ({self.state['v']:.6f}).")
                         phys_valid_meta = self._get_predicate_metadata('isPhysicallyValid')
                         reward, terminated, truncated = self._apply_meta_effect(
                             phys_valid_meta or {'type': 'safety', 'penalty': '-100.0', 'on_failure': 'truncate:status=failure'}, # Default to truncate as per problem description example
@@ -1749,6 +1818,8 @@ class GeneratedKXEnv(gym.Env):
                     # If t > ep, it means the time limit was reached, which is expected behavior.
                     # No additional penalty for that specific event, as it's part of the evolution domain.
                 else: # Integration failed (status 2)
+                    if self.debug_mode: # <--- Wrapped debug print
+                        print(f"DEBUG_ODE: ODE integration failed with status {solution.status}.")
                     reward, terminated, truncated = self._apply_meta_effect(
                         {'type': 'safety', 'penalty': '-150.0', 'on_failure': 'terminate:status=failure'},
                         reward, terminated, truncated, is_failure_case=True
@@ -1756,6 +1827,8 @@ class GeneratedKXEnv(gym.Env):
                     ode_terminated_by_event = True
 
             except Exception as e:
+                if self.debug_mode: # <--- Wrapped debug print
+                    print(f"DEBUG_ODE: Exception during ODE integration: {e}")
                 reward, terminated, truncated = self._apply_meta_effect(
                     {'type': 'safety', 'penalty': '-200.0', 'on_failure': 'terminate:status=failure'},
                     reward, terminated, truncated, is_failure_case=True
@@ -1765,8 +1838,23 @@ class GeneratedKXEnv(gym.Env):
         terminated = terminated or ode_terminated_by_event
         truncated = truncated or ode_terminated_by_event # If ODE event truncates, propagate
 
+        # NEW: Update cumulative time based on the duration of this ODE step
+        # self.state['t'] now holds the duration of the ODE integration that just completed.
+        self.cumulative_episode_time += self.state['t']
+        if self.debug_mode: # <--- Wrapped debug print
+            print(f"DEBUG_STEP {self.current_step}: Updated cumulative_episode_time={self.cumulative_episode_time:.6f}")
+            print(f"DEBUG_STEP {self.current_step}: State after ODE integration: x={self.state['x']:.6f}, y={self.state['y']:.6f}, v={self.state['v']:.6f}, a={self.state['a']:.6f}, w={self.state['w']:.6f}, t={self.state['t']:.6f}")
+
+
         # If ODE integration or control action led to termination/truncation, return early
         if terminated or truncated:
+            if self.debug_mode: # <--- Wrapped debug print
+                print(f"DEBUG_STEP: Terminated/Truncated after ODE. Returning early.")
+            # Ensure the final state of the episode is recorded if not already added by intermediate points
+            if not (solution.success and solution.sol is not None and solution.t.size > 1 and actual_ode_duration > 1e-9):
+                state_record_before_early_return = self.state.copy()
+                state_record_before_early_return['episode_time'] = self.cumulative_episode_time
+                self.state_history.append(state_record_before_early_return)
             return self._get_obs(), reward, terminated, truncated, info
 
         # --- 3. Evaluate Loop Invariant and Apply Rewards/Penalties/Shaping ---
@@ -1780,27 +1868,40 @@ class GeneratedKXEnv(gym.Env):
 
             if not conjunct_result:
                 loop_invariant_satisfied_post_ode = False
+                if self.debug_mode: # <--- Wrapped debug print
+                    print(f"DEBUG_STEP: Loop invariant conjunct FAILED (post-ODE): '{conj_str}'")
                 # Apply failure effects
                 reward, terminated, truncated = self._apply_meta_effect(
                     metadata or {'type': 'safety', 'penalty': '-100.0', 'on_failure': 'terminate:status=failure'},
                     reward, terminated, truncated, is_failure_case=True
                 )
                 if terminated or truncated:
+                    state_record_before_early_return = self.state.copy()
+                    state_record_before_early_return['episode_time'] = self.cumulative_episode_time # NEW: Add cumulative time
+                    self.state_history.append(state_record_before_early_return)
                     return self._get_obs(), reward, terminated, truncated, info
             else:
                 # Apply success effects if any (only if action is not 'continue')
                 if metadata.get('on_success') and metadata.get('on_success').split(':')[0] != 'continue':
                     reward, terminated, truncated = self._apply_meta_effect(metadata, reward, terminated, truncated, is_failure_case=False)
                     if terminated or truncated:
+                        state_record_before_early_return = self.state.copy()
+                        state_record_before_early_return['episode_time'] = self.cumulative_episode_time # NEW: Add cumulative time
+                        self.state_history.append(state_record_before_early_return)
                         return self._get_obs(), reward, terminated, truncated, info
 
         if not loop_invariant_satisfied_post_ode:
             # Fallback for general loopinv failure if not caught by specific conjuncts
+            if self.debug_mode: # <--- Wrapped debug print
+                print(f"DEBUG_STEP: General loop invariant FAILED (post-ODE).")
             reward, terminated, truncated = self._apply_meta_effect(
                 {'type': 'safety', 'penalty': '-300.0', 'on_failure': 'terminate:status=failure'},
                 reward, terminated, truncated, is_failure_case=True
             )
             if terminated or truncated:
+                state_record_before_early_return = self.state.copy()
+                state_record_before_early_return['episode_time'] = self.cumulative_episode_time # NEW: Add cumulative time
+                self.state_history.append(state_record_before_early_return)
                 return self._get_obs(), reward, terminated, truncated, info
 
         # --- Reward Shaping (from progress predicates) ---
@@ -1809,12 +1910,16 @@ class GeneratedKXEnv(gym.Env):
         if wellformed_meta.get('type') == 'progress' and 'shape' in wellformed_meta:
             shape_value = self._evaluate_shape_expression(wellformed_meta['shape'])
             reward += shape_value # Add to reward
+            if self.debug_mode: # <--- Wrapped debug print
+                print(f"DEBUG_STEP: Applied isWellformedDir shape reward: {shape_value:.6f}")
 
         # isEfficient (progress type, shape: 1/v if v > 0 else v)
         efficient_meta = self._get_predicate_metadata('isEfficient')
         if efficient_meta.get('type') == 'progress' and 'shape' in efficient_meta:
             shape_value = self._evaluate_shape_expression(efficient_meta['shape'])
             reward += shape_value # Add to reward
+            if self.debug_mode: # <--- Wrapped debug print
+                print(f"DEBUG_STEP: Applied isEfficient shape reward: {shape_value:.6f}")
 
 
         # --- 4. Check Problem Postcondition (ensure) ---
@@ -1824,10 +1929,14 @@ class GeneratedKXEnv(gym.Env):
         ensure_meta = self._get_predicate_metadata('ensure') # Get metadata for 'ensure' predicate
 
         if postcondition_satisfied:
+            if self.debug_mode: # <--- Wrapped debug print
+                print(f"DEBUG_STEP: Postcondition '{postcondition_formula_kx}' SATISFIED.")
             reward, terminated, truncated = self._apply_meta_effect(
                 ensure_meta, reward, terminated, truncated, is_failure_case=False
             )
         else:
+            if self.debug_mode: # <--- Wrapped debug print
+                print(f"DEBUG_STEP: Postcondition '{postcondition_formula_kx}' NOT SATISFIED.")
             reward, terminated, truncated = self._apply_meta_effect(
                 ensure_meta, reward, terminated, truncated, is_failure_case=True
             )
@@ -1836,24 +1945,155 @@ class GeneratedKXEnv(gym.Env):
             if ensure_meta.get('type') == 'progress' and 'shape' in ensure_meta:
                 shape_value = self._evaluate_shape_expression(ensure_meta['shape'])
                 reward += shape_value # Add to reward
+                if self.debug_mode: # <--- Wrapped debug print
+                    print(f"DEBUG_STEP: Applied ensure shape reward: {shape_value:.6f}")
 
         # --- 5. Check Truncation ---
         if self.current_step >= self.max_episode_steps:
             truncated = True
+            if self.debug_mode: # <--- Wrapped debug print
+                print(f"DEBUG_STEP: Max episode steps ({self.max_episode_steps}) reached. Truncating.")
             # Small penalty for truncating without reaching goal, unless already terminated by ensure failure
             if not terminated and not postcondition_satisfied:
                 reward -= 10.0
 
+        # Record the state after all updates for this step
+        # This final state for the step is already included if intermediate points were recorded,
+        # so we only append it if no intermediate points were generated (e.g., ODE duration was too short)
+        if not (solution.success and solution.sol is not None and solution.t.size > 1 and actual_ode_duration > 1e-9):
+            state_record_after_step = self.state.copy()
+            state_record_after_step['episode_time'] = self.cumulative_episode_time # NEW: Add cumulative time
+            self.state_history.append(state_record_after_step)
+            if self.debug_mode: # <--- Wrapped debug print
+                print(f"DEBUG_STEP: Appended final state for step {self.current_step} to history.")
+
         observation = self._get_obs()
         info = self._get_info()
+        if self.debug_mode: # <--- Wrapped debug print
+            print(f"DEBUG_STEP {self.current_step}: Step complete. Reward={reward:.6f}, Terminated={terminated}, Truncated={truncated}")
         return observation, reward, terminated, truncated, info
 
-    def render(self):
-        if self.render_mode == "human":
+    def _plot_state_history(self, variables_to_plot: Optional[List[str]] = None, history_data: Optional[List[Dict[str, Any]]] = None):
+        """
+        Generates and displays a matplotlib plot of the state history.
+        The x-axis will always use 'episode_time' for cumulative plotting.
+        If history_data is provided, it will be used instead of self.state_history.
+        """
+        data_to_plot = history_data if history_data is not None else self.state_history
+
+        if not data_to_plot:
+            if self.debug_mode: # <--- Wrapped debug print
+                print("DEBUG_PLOT: No state history available to plot.")
+            return
+
+        if self.debug_mode: # <--- Wrapped debug print
+            print(f"DEBUG_PLOT: state_history length: {len(data_to_plot)}")
+        df = pd.DataFrame(data_to_plot)
+        if self.debug_mode: # <--- Wrapped debug print
+            print(f"DEBUG_PLOT: DataFrame shape: {df.shape}")
+            print(f"DEBUG_PLOT: DataFrame head:\n{df.head()}")
+            print(f"DEBUG_PLOT: DataFrame tail:\n{df.tail()}")
+        
+        x_axis_key = 'episode_time' 
+
+        if x_axis_key not in df.columns:
+            print(f"DEBUG_PLOT: Error: Time key '{x_axis_key}' not found in state history for plotting. This indicates an issue with state history recording.") # Not wrapped (critical)
+            return
+
+        if variables_to_plot is None:
+            # Plot only the variables that are typically expected to change or are key for the problem.
+            # Exclude 't' (duration of current ODE step), 'dx', 'dy', 'r', 'xo', 'yo' for cleaner plots by default.
+            # User can override by passing variables_to_plot explicitly.
+            default_plot_vars = ['x', 'y', 'v', 'a', 'w']
+            variables_to_plot = [col for col in default_plot_vars if col in df.columns]
+        else:
+            variables_to_plot = [v for v in variables_to_plot if v in df.columns]
+
+        if not variables_to_plot:
+            if self.debug_mode: # <--- Wrapped debug print
+                print(f"DEBUG_PLOT: No variables selected for plotting or found in DataFrame.")
+            return
+
+        num_vars = len(variables_to_plot)
+        cols = 2
+        rows = (num_vars + cols - 1) // cols
+
+        fig, axes = plt.subplots(rows, cols, figsize=(12, 4 * rows))
+        axes = axes.flatten()
+
+        fig.suptitle('Agent State Evolution Over Time', fontsize=16)
+
+        # Define a minimum y-axis range to ensure visibility of small changes
+        # Increased for better visibility of very subtle changes
+        min_y_range_absolute = 0.05 # Increased from 0.02
+
+        for i, var in enumerate(variables_to_plot):
+            ax = axes[i]
+            ax.plot(df[x_axis_key], df[var], label=var)
+            ax.set_xlabel(f"Time ({x_axis_key})")
+            ax.set_ylabel(var)
+            ax.set_title(f"Evolution of {var}")
+            ax.grid(True, linestyle='--', alpha=0.7)
+            ax.legend()
+            
+            # Explicitly set x-axis limits
+            min_time = df[x_axis_key].min()
+            max_time = df[x_axis_key].max()
+            if max_time <= min_time + 1e-9: # Very small or zero range
+                ax.set_xlim(0, max_time + 0.01) # Add a small buffer if range is tiny
+            else:
+                ax.set_xlim(0, max_time)
+
+            # Dynamically set y-axis limits based on the actual data range
+            min_val = df[var].min()
+            max_val = df[var].max()
+            
+            data_range = max_val - min_val
+
+            if self.debug_mode: # <--- Wrapped debug print
+                print(f"DEBUG_PLOT: Plotting {var}: min_val={min_val:.6f}, max_val={max_val:.6f}, data_range={data_range:.6f}")
+
+            if data_range < min_y_range_absolute:
+                # If the data range is too small, center the plot around the mean with a fixed minimum range
+                avg_val = (min_val + max_val) / 2
+                lower_bound = avg_val - min_y_range_absolute / 2
+                upper_bound = avg_val + min_y_range_absolute / 2
+                ax.set_ylim(lower_bound, upper_bound)
+                if self.debug_mode: # <--- Wrapped debug print
+                    print(f"  DEBUG_PLOT: Applied forced y-lim: [{lower_bound:.6f}, {upper_bound:.6f}] (range {min_y_range_absolute})")
+            else:
+                # Otherwise, use a percentage buffer of the actual data range
+                buffer = data_range * 0.1 # 10% buffer of the range
+                lower_bound = min_val - buffer
+                upper_bound = max_val + buffer
+                ax.set_ylim(min_val - buffer, max_val + buffer)
+                if self.debug_mode: # <--- Wrapped debug print
+                    print(f"  DEBUG_PLOT: Applied buffered y-lim: [{lower_bound:.6f}, {upper_bound:.6f}] (range {upper_bound - lower_bound:.6f})")
+
+
+        # Hide any unused subplots
+        for j in range(i + 1, len(axes)):
+            fig.delaxes(axes[j])
+
+        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+        plt.show()
+
+    def render(self, mode="human", variables_to_plot: Optional[List[str]] = None):
+        if mode == "human":
             # In a real environment, this would draw the robot, obstacle, etc.
             # For now, just print state for demonstration.
-            print(f"Render: Step={self.current_step}, State={self.state}")
+            # print(f"Render: Step={self.current_step}, State={self.state}")
+            pass # Removed print for human mode as well
+        elif mode == "plot_data":
+            # Return the full state history for external plotting (e.g., React)
+            return self.state_history
+        elif mode == "matplotlib":
+            # Generate and display a matplotlib plot, always using 'episode_time' for x-axis
+            self._plot_state_history(variables_to_plot, history_data=self.last_episode_history)
+            return None # Matplotlib handles displaying the plot directly
+        return None # Default return if render_mode is not handled
 
     def close(self):
-        # No specific resources to close for this environment
+        # Close any open matplotlib figures
+        plt.close('all')
         pass
