@@ -1,3 +1,6 @@
+# gym_logic_sub_generators.py
+# This module contains helper functions that generate specific pieces of logic for the Gym environment based on the AST configuration. 
+# These functions are called by the main gym generator to construct the full environment class. 
 import textwrap
 import re
 from typing import List, Dict, Any, Tuple, Optional
@@ -191,7 +194,12 @@ def generate_reset_logic(variables: List[VariableDeclarationConfig], preconditio
 
     # --- Z3 Solver Integration ---
     # Attempt to find a satisfying initial state using Z3 solver
-    reset_code_lines.append(f"    z3_base_solution = self._solve_initial_state_with_z3(self._problem_config.precondition.formula)")
+    reset_code_lines.append(f"    z3_base_solution = self._solve_initial_state_with_z3(")
+    reset_code_lines.append(f"        self._variables_config.state_variables, ")
+    reset_code_lines.append(f"        self._problem_config.precondition.formula")
+    reset_code_lines.append(f"    )")
+    
+    
     reset_code_lines.append(f"    final_initial_state = None")
 
     reset_code_lines.append(f"    if z3_base_solution:")
@@ -252,6 +260,13 @@ def generate_reset_logic(variables: List[VariableDeclarationConfig], preconditio
 
     # 2. Parse the expanded precondition for explicit assignments (fallback if Z3 fails)
     expanded_precondition_kx = expand_formula(precondition.formula, definitions)
+    print(f"Expanded precondition for parsing explicit assignments: '{expanded_precondition_kx}'") # Debug print to verify the expanded precondition string
+    # Expanded precondition for parsing explicit assignments: '((A >= 0
+    # & b > 0
+    # & ep > 0) & (v = 0
+    # & (x-xo)^2 + (y-yo)^2 > 0
+    # & (dx^2 + dy^2 = 1)
+    # & r != 0))'
     # The regex below looks for 'var = value' patterns.
     assignment_matches = re.findall(r'(\b\w+\b)\s*=\s*([a-zA-Z0-9_.]+)', expanded_precondition_kx)
     
@@ -296,12 +311,16 @@ def generate_reset_logic(variables: List[VariableDeclarationConfig], preconditio
     # The _evaluate_expression method expects KeYmaera X syntax (with '=' for equality).
     # It will internally convert '=' to self._approx_eq.
     final_precondition_for_eval = expand_formula(precondition.formula, definitions)
+    print(f"Final expanded precondition for evaluation: '{final_precondition_for_eval}'") # Debug print to verify the final precondition string used for evaluation
     # Remove extra spaces for cleaner embedding
     normalized_string = " ".join(final_precondition_for_eval.split())
     
     # Escape strings for embedding into the generated Python code's f-string
     original_precondition_formula_escaped = precondition.formula.replace("'", "\\'").replace('\\', '\\\\').replace('\n', ' ')
     final_precondition_for_eval_escaped = normalized_string.replace("'", "\\'").replace('\\', '\\\\')
+    
+    print(f"Original precondition formula (escaped for embedding): '{original_precondition_formula_escaped}'") # Debug print
+    print(f"Final precondition for evaluation (escaped for embedding): '{final_precondition_for_eval_escaped}'") # Debug print
     
     reset_code_lines.append(f"    # Verify the full precondition after setting initial states")
     reset_code_lines.append(f"    # Evaluate each conjunct of the precondition to identify specific failures")

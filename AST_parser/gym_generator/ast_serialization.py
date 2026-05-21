@@ -1,8 +1,13 @@
+# ast_serialization.py
+# This module defines the serialize_ast_node function, which recursively converts AST configuration objects into their Python constructor call strings. 
+# This allows the full AST configuration to be embedded as a literal in the generated environment's __init__ method, 
+# enabling runtime access to the original configuration for purposes like Z3 helper functions.
 import textwrap
-from typing import Any, List, Dict
+from typing import Any, List, Dict, Tuple
 
 # Assuming pyast_config.py is in the same directory or importable
 from pyast_config import (
+    ASTConfigNode, # Import the base class
     GymEnvironmentConfig, DefinitionsConfig, VariablesConfig, ProblemConfig,
     ConstantDefinitionConfig, FunctionDefinitionConfig, PredicateDefinitionConfig,
     HybridProgramConfig,
@@ -23,12 +28,28 @@ def serialize_ast_node(node: Any, indent_level: int = 0) -> str:
     indent_str = "    " * indent_level
     next_indent_str = "    " * (indent_level + 1)
 
-    if isinstance(node, (str, int, float, bool)):
-        return repr(node) # Use repr for primitives (handles strings, numbers, bools)
-
+    # Handle primitive types and collections
+    if isinstance(node, bool):
+        return str(node) # True/False
+    if isinstance(node, (int, float)):
+        return repr(node) # Use repr for numbers
     if node is None:
         return "None"
-    
+
+    if isinstance(node, str):
+        # If the string contains newlines, serialize it using triple double quotes.
+        # This prevents "unterminated string literal" errors when the generated
+        # string is itself embedded as a literal in Python code (e.g., in a '''...''' block).
+        if '\n' in node:
+            # Escape any triple double quotes within the string to avoid premature termination
+            # and ensure the literal is correctly parsed.
+            escaped_node = node.replace('"""', '\\"\\"\\"')
+            return f'"""{escaped_node}"""'
+        else:
+            # For single-line strings, repr() is generally sufficient and handles
+            # single quotes, double quotes, and other special characters by escaping them.
+            return repr(node)
+
     if isinstance(node, list):
         if not node:
             return "[]"
@@ -36,8 +57,10 @@ def serialize_ast_node(node: Any, indent_level: int = 0) -> str:
         return f"[\n{items_str}\n{indent_str}]"
 
     if isinstance(node, tuple):
-        items_str = ", ".join([repr(item) for item in node])
-        return f"({items_str})"
+        # For tuples, we need to ensure elements are serialized, then joined with ", "
+        # and if it's a single element tuple, it needs a trailing comma.
+        items_str = ", ".join([serialize_ast_node(item, 0) for item in node]) # Use 0 indent for tuple items for compactness
+        return f"({items_str}{',' if len(node) == 1 else ''})"
 
     if isinstance(node, dict):
         if not node:
@@ -48,94 +71,26 @@ def serialize_ast_node(node: Any, indent_level: int = 0) -> str:
         ])
         return f"{{\n{items_str}\n{indent_str}}}"
 
+    # Handle ASTConfigNode instances dynamically
+    if isinstance(node, ASTConfigNode):
+        class_name = node.__class__.__name__
 
-    class_name = node.__class__.__name__
-    attributes = []
-    
-    # Manually map attributes for each config type to control formatting and recursion
-    if isinstance(node, GymEnvironmentConfig):
-        attributes.append(f"env_name={serialize_ast_node(node.env_name)}")
-        attributes.append(f"definitions={serialize_ast_node(node.definitions, indent_level + 1)}")
-        attributes.append(f"variables={serialize_ast_node(node.variables, indent_level + 1)}")
-        attributes.append(f"problem={serialize_ast_node(node.problem, indent_level + 1)}")
-    elif isinstance(node, DefinitionsConfig):
-        attributes.append(f"constants={serialize_ast_node(node.constants, indent_level + 1)}")
-        attributes.append(f"functions={serialize_ast_node(node.functions, indent_level + 1)}")
-        attributes.append(f"predicates={serialize_ast_node(node.predicates, indent_level + 1)}")
-        attributes.append(f"hybrid_programs={serialize_ast_node(node.hybrid_programs, indent_level + 1)}")
-    elif isinstance(node, VariablesConfig):
-        attributes.append(f"state_variables={serialize_ast_node(node.state_variables, indent_level + 1)}")
-    elif isinstance(node, ProblemConfig):
-        attributes.append(f"precondition={serialize_ast_node(node.precondition, indent_level + 1)}")
-        attributes.append(f"loop_execution={serialize_ast_node(node.loop_execution, indent_level + 1)}")
-        attributes.append(f"postcondition={serialize_ast_node(node.postcondition, indent_level + 1)}")
-    elif isinstance(node, ConstantDefinitionConfig):
-        value_str = repr(node.value) if node.value is not None else "None"
-        attributes.append(f"name={serialize_ast_node(node.name)}")
-        attributes.append(f"type={serialize_ast_node(node.type)}")
-        attributes.append(f"value={value_str}")
-        attributes.append(f"metadata={serialize_ast_node(node.metadata)}")
-    elif isinstance(node, FunctionDefinitionConfig):
-        attributes.append(f"name={serialize_ast_node(node.name)}")
-        attributes.append(f"return_type={serialize_ast_node(node.return_type)}")
-        attributes.append(f"parameters={serialize_ast_node(node.parameters)}")
-        attributes.append(f"body={repr(node.body)}")
-        attributes.append(f"metadata={serialize_ast_node(node.metadata)}")
-    elif isinstance(node, PredicateDefinitionConfig):
-        attributes.append(f"name={serialize_ast_node(node.name)}")
-        attributes.append(f"parameters={serialize_ast_node(node.parameters)}")
-        attributes.append(f"body={repr(node.body)}")
-        attributes.append(f"metadata={serialize_ast_node(node.metadata)}")
-    elif isinstance(node, ControlFuncConfig):
-        attributes.append(f"name={serialize_ast_node(node.name)}")
-        attributes.append(f"action_space_config={serialize_ast_node(node.action_space_config, indent_level + 1)}")
-        attributes.append(f"metadata={serialize_ast_node(node.metadata)}")
-    elif isinstance(node, StepFuncConfig):
-        attributes.append(f"name={serialize_ast_node(node.name)}")
-        attributes.append(f"odes={serialize_ast_node(node.odes, indent_level + 1)}")
-        attributes.append(f"evolution_domain={serialize_ast_node(node.evolution_domain, indent_level + 1)}")
-        attributes.append(f"duration={serialize_ast_node(node.duration)}")
-        attributes.append(f"raw_body_snippet={serialize_ast_node(node.raw_body_snippet)}")
-        attributes.append(f"metadata={serialize_ast_node(node.metadata)}")
-    elif isinstance(node, ODEConfig):
-        attributes.append(f"variable={serialize_ast_node(node.variable)}")
-        attributes.append(f"equation={repr(node.equation)}")
-    elif isinstance(node, EvolutionDomainConfig):
-        constraints_str = ", ".join([repr(c) for c in node.constraints])
-        attributes.append(f"constraints=[{constraints_str}]")
-    elif isinstance(node, VariableDeclarationConfig):
-        attributes.append(f"name={serialize_ast_node(node.name)}")
-        attributes.append(f"type={serialize_ast_node(node.type)}")
-    elif isinstance(node, PreconditionConfig):
-        attributes.append(f"formula={repr(node.formula)}")
-    elif isinstance(node, PostconditionConfig):
-        attributes.append(f"formula={repr(node.formula)}")
-    elif isinstance(node, LoopExecutionConfig):
-        attributes.append(f"iterations={serialize_ast_node(node.iterations)}")
-        attributes.append(f"loop_invariant_formula={repr(node.loop_invariant_formula)}")
-        attributes.append(f"loop_body={serialize_ast_node(node.loop_body, indent_level + 1)}")
-    elif isinstance(node, HybridProgramStepConfig):
-        attributes.append(f"hp_name={serialize_ast_node(node.hp_name)}")
-        attributes.append(f"invariant_formula={repr(node.invariant_formula)}")
-    elif isinstance(node, ChoiceActionConfig):
-        attributes.append(f"level_name={serialize_ast_node(node.level_name)}")
-        attributes.append(f"choices={serialize_ast_node(node.choices, indent_level + 1)}")
-    elif isinstance(node, SequenceActionConfig):
-        attributes.append(f"actions={serialize_ast_node(node.actions, indent_level + 1)}")
-    elif isinstance(node, DeterministicAssignmentActionConfig):
-        attributes.append(f"variable={serialize_ast_node(node.variable)}")
-        attributes.append(f"value={repr(node.value)}")
-    elif isinstance(node, NondeterministicAssignmentActionConfig):
-        attributes.append(f"variable={serialize_ast_node(node.variable)}")
-    elif isinstance(node, ActionConstraintConfig):
-        attributes.append(f"formula={repr(node.formula)}")
-    elif isinstance(node, CallHybridProgramConfig):
-        attributes.append(f"hp_name={serialize_ast_node(node.hp_name)}")
+        # Use the _get_serialization_params method to get constructor arguments
+        params = node._get_serialization_params()
+
+        attributes = []
+        for param_name, param_value in params.items():
+            # Recursively serialize each parameter's value
+            serialized_value = serialize_ast_node(param_value, indent_level + 1)
+            attributes.append(f"{param_name}={serialized_value}")
+
+        if not attributes:
+            return f"{class_name}()"
+
+        attributes_str = ",\n".join([f"{next_indent_str}{attr}" for attr in attributes])
+        return f"{class_name}(\n{attributes_str}\n{indent_str})"
     else:
-        raise TypeError(f"Cannot serialize unknown AST node type: {type(node)}")
-
-    if not attributes:
-        return f"{class_name}()"
-
-    attributes_str = ",\n".join([f"{next_indent_str}{attr}" for attr in attributes])
-    return f"{class_name}(\n{attributes_str}\n{indent_str})"
+        # Fallback for unexpected types, or types not inheriting from ASTConfigNode
+        # For example, if you have a custom object that isn't an ASTConfigNode but needs serialization
+        # you might add a specific handler here, or raise an error.
+        raise TypeError(f"Cannot serialize unknown or unhandled type: {type(node)}")
