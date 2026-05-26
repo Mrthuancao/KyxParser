@@ -4,6 +4,8 @@ import math
 import textwrap
 import re
 import z3
+import matplotlib.pyplot as plt
+import pandas as pd
 from typing import List, Dict, Any, Optional, Tuple, Union
 
 # Import your helper logic
@@ -292,3 +294,123 @@ class _KeYmaeraXEnvBase(gym.Env):
 
     def _get_info(self):
         return self.state.copy()
+    
+    def render(self, mode="human", variables_to_plot: Optional[List[str]] = None):
+        if mode == "human":
+            # In a real environment, this would draw the robot, obstacle, etc.
+            # For now, just print state for demonstration.
+            # print(f"Render: Step={self.current_step}, State={self.state}")
+            pass # Removed print for human mode as well
+        elif mode == "plot_data":
+            # Return the full state history for external plotting (e.g., React)
+            return self.state_history
+        elif mode == "matplotlib":
+            # Generate and display a matplotlib plot, always using 'episode_time' for x-axis
+            self._plot_state_history(variables_to_plot, history_data=self.last_episode_history)
+            return None # Matplotlib handles displaying the plot directly
+        return None # Default return if render_mode is not handled
+    
+    def _plot_state_history(self, variables_to_plot: Optional[List[str]] = None, history_data: Optional[List[Dict[str, Any]]] = None):
+        """
+        Generates and displays a matplotlib plot of the state history.
+        The x-axis will always use 'episode_time' for cumulative plotting.
+        If history_data is provided, it will be used instead of self.state_history.
+        """
+        data_to_plot = history_data if history_data is not None else self.state_history
+
+        if not data_to_plot:
+            if self.debug_mode: # <--- Wrapped debug print
+                print("DEBUG_PLOT: No state history available to plot.")
+            return
+
+        if self.debug_mode: # <--- Wrapped debug print
+            print(f"DEBUG_PLOT: state_history length: {len(data_to_plot)}")
+        df = pd.DataFrame(data_to_plot)
+        if self.debug_mode: # <--- Wrapped debug print
+            print(f"DEBUG_PLOT: DataFrame shape: {df.shape}")
+            print(f"DEBUG_PLOT: DataFrame head:\n{df.head()}")
+            print(f"DEBUG_PLOT: DataFrame tail:\n{df.tail()}")
+        
+        x_axis_key = 'episode_time' 
+
+        if x_axis_key not in df.columns:
+            print(f"DEBUG_PLOT: Error: Time key '{x_axis_key}' not found in state history for plotting. This indicates an issue with state history recording.") # Not wrapped (critical)
+            return
+
+        if variables_to_plot is None:
+            # Plot only the variables that are typically expected to change or are key for the problem.
+            # Exclude 't' (duration of current ODE step), 'dx', 'dy', 'r', 'xo', 'yo' for cleaner plots by default.
+            # User can override by passing variables_to_plot explicitly.
+            default_plot_vars = ['x', 'y', 'v', 'a', 'w']
+            variables_to_plot = [col for col in default_plot_vars if col in df.columns]
+        else:
+            variables_to_plot = [v for v in variables_to_plot if v in df.columns]
+
+        if not variables_to_plot:
+            if self.debug_mode: # <--- Wrapped debug print
+                print(f"DEBUG_PLOT: No variables selected for plotting or found in DataFrame.")
+            return
+
+        num_vars = len(variables_to_plot)
+        cols = 2
+        rows = (num_vars + cols - 1) // cols
+
+        fig, axes = plt.subplots(rows, cols, figsize=(12, 4 * rows))
+        axes = axes.flatten()
+
+        fig.suptitle('Agent State Evolution Over Time', fontsize=16)
+
+        # Define a minimum y-axis range to ensure visibility of small changes
+        # Increased for better visibility of very subtle changes
+        min_y_range_absolute = 0.05 # Increased from 0.02
+
+        for i, var in enumerate(variables_to_plot):
+            ax = axes[i]
+            ax.plot(df[x_axis_key], df[var], label=var)
+            ax.set_xlabel(f"Time ({x_axis_key})")
+            ax.set_ylabel(var)
+            ax.set_title(f"Evolution of {var}")
+            ax.grid(True, linestyle='--', alpha=0.7)
+            ax.legend()
+            
+            # Explicitly set x-axis limits
+            min_time = df[x_axis_key].min()
+            max_time = df[x_axis_key].max()
+            if max_time <= min_time + 1e-9: # Very small or zero range
+                ax.set_xlim(0, max_time + 0.01) # Add a small buffer if range is tiny
+            else:
+                ax.set_xlim(0, max_time)
+
+            # Dynamically set y-axis limits based on the actual data range
+            min_val = df[var].min()
+            max_val = df[var].max()
+            
+            data_range = max_val - min_val
+
+            if self.debug_mode: # <--- Wrapped debug print
+                print(f"DEBUG_PLOT: Plotting {var}: min_val={min_val:.6f}, max_val={max_val:.6f}, data_range={data_range:.6f}")
+
+            if data_range < min_y_range_absolute:
+                # If the data range is too small, center the plot around the mean with a fixed minimum range
+                avg_val = (min_val + max_val) / 2
+                lower_bound = avg_val - min_y_range_absolute / 2
+                upper_bound = avg_val + min_y_range_absolute / 2
+                ax.set_ylim(lower_bound, upper_bound)
+                if self.debug_mode: # <--- Wrapped debug print
+                    print(f"  DEBUG_PLOT: Applied forced y-lim: [{lower_bound:.6f}, {upper_bound:.6f}] (range {min_y_range_absolute})")
+            else:
+                # Otherwise, use a percentage buffer of the actual data range
+                buffer = data_range * 0.1 # 10% buffer of the range
+                lower_bound = min_val - buffer
+                upper_bound = max_val + buffer
+                ax.set_ylim(min_val - buffer, max_val + buffer)
+                if self.debug_mode: # <--- Wrapped debug print
+                    print(f"  DEBUG_PLOT: Applied buffered y-lim: [{lower_bound:.6f}, {upper_bound:.6f}] (range {upper_bound - lower_bound:.6f})")
+
+
+        # Hide any unused subplots
+        for j in range(i + 1, len(axes)):
+            fig.delaxes(axes[j])
+
+        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+        plt.show()

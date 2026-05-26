@@ -1,3 +1,5 @@
+# embedded_methods.py
+# This module contains the embedded method templates that will be injected into the generated Gymnasium environment class
 import textwrap
 
 # --- Embedded Method Templates ---

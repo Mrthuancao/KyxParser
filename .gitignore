@@ -28,3 +28,17 @@ generated_*.pyc    # Ignore compiled generated Python files
 
 # Operating System specific files
 .DS_Store          # macOS specific file for custom folder attributes
+
+# Python compiled files
+__pycache__/
+*.pyc
+
+# Model weights
+AST_parser/models/
+*.pth
+
+# PPO model generated files
+AST_parser/ppo_kx_model/
+
+# Jupyter Notebook specific ignored files (optional, depends on preference)
+.ipynb_checkpoints/
