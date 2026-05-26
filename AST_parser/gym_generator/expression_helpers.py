@@ -1,224 +1,239 @@
+# expression_helpers.py
 import re
 from typing import List, Optional, Tuple, Union, Dict, Any
+import pyparsing as pp
 
-# Assuming pyast_config.py is in the same directory or importable
-from pyast_config import DefinitionsConfig, PredicateDefinitionConfig
+# Import the AST nodes
+from .expression_ast_nodes import (
+    ExpressionASTNode,
+    ExpressionNumber,
+    ExpressionBoolean,
+    ExpressionIdentifier,
+    ExpressionFunctionCall,
+    ExpressionUnaryOp,
+    ExpressionBinaryOp,
+)
 
-def format_kx_expr_for_python_lambda_body_generator(expr_str: str, lambda_param_names: Optional[List[str]] = None, all_constants: List[str] = None, all_state_vars: List[str] = None, all_functions: List[str] = None, all_predicates: List[str] = None) -> str:
+# Enable Packrat parsing for performance
+pp.ParserElement.enablePackrat()
+
+# Forward declaration for recursive grammar definition
+_kx_expr_forward = pp.Forward()
+
+# --- Helper functions ---
+
+def _node_to_kx(node: Any) -> str:
     """
-    Converts a KeYmaera X expression string into a Python expression string
-    suitable for direct use in a lambda body (e.g., for self.functions or self.predicates).
-    This function is used by the GENERATOR to produce code.
-    It handles identifier prefixing (e.g., 'x' -> 'self.state['x']') and basic arithmetic.
-    For relational/logical operators, it uses the same robust parsing logic as the runtime
-    _evaluate_expression, but applies it at generation time with prefixed identifiers.
+    Converts an AST node back into a KeYmaera X compatible string.
+    This is crucial for predicate expansion substitution.
     """
-    if lambda_param_names is None: lambda_param_names = []
-    if all_constants is None: all_constants = []
-    if all_state_vars is None: all_state_vars = []
-    if all_functions is None: all_functions = []
-    if all_predicates is None: all_predicates = []
+    if isinstance(node, ExpressionNumber):
+        return str(node.value)
+    if isinstance(node, ExpressionBoolean):
+        return str(node.value).lower()
+    if isinstance(node, ExpressionIdentifier):
+        return node.name
+    if isinstance(node, ExpressionFunctionCall):
+        # Handle cases where node.name might be an Identifier node or a string
+        name = node.name.name if isinstance(node.name, ExpressionIdentifier) else str(node.name)
+        args = ", ".join(_node_to_kx(arg) for arg in node.args)
+        return f"{name}({args})"
+    if isinstance(node, ExpressionUnaryOp):
+        return f"{node.op}({_node_to_kx(node.operand)})"
+    if isinstance(node, ExpressionBinaryOp):
+        return f"({_node_to_kx(node.left)} {node.op} {_node_to_kx(node.right)})"
+    return str(node)
 
-    expr_py = expr_str.strip()
+def _ensure_ast_node(item: Any) -> ExpressionASTNode:
+    if isinstance(item, ExpressionASTNode):
+        return item
+    if isinstance(item, (pp.ParseResults, list)):
+        if len(item) == 1:
+            return _ensure_ast_node(item[0])
+        elif len(item) == 0:
+            raise ValueError("Encountered empty structure where an AST node was expected.")
+    if item is None:
+        raise ValueError("Encountered None where an AST node was expected.")
+    raise TypeError(f"Unexpected type during AST conversion: {type(item)}. Value: {item}")
 
-    # 1. Basic syntax replacements (power, abs)
-    expr_py = expr_py.replace('^', '**').replace('abs(', 'np.abs(')
+# --- Grammar Definition ---
 
-    # 2. Identify and replace identifiers with their correct scope prefix
-    # Build a list of all known identifiers (excluding lambda params, and global modules like 'np', 'math')
-    all_env_identifiers_for_prefixing = sorted(
-        list(set(all_constants + all_state_vars + all_functions + all_predicates)), # Removed 'np' and 'math'
-        key=len, reverse=True
-    )
-
-    identifiers_to_replace_for_prefixing = [
-        ident for ident in all_env_identifiers_for_prefixing if ident not in lambda_param_names
-    ]
-    
-    if identifiers_to_replace_for_prefixing:
-        pattern_str = r'\b(' + '|'.join(re.escape(ident) for ident in identifiers_to_replace_for_prefixing) + r')\b'
-        pattern = re.compile(pattern_str)
-
-        def replacer(match):
-            ident = match.group(1)
-            if ident in all_constants:
-                return f"self.constants['{ident}']"
-            elif ident in all_state_vars:
-                return f"self.state['{ident}']"
-            elif ident in all_functions:
-                return f"self.functions['{ident}']"
-            elif ident in all_predicates:
-                return f"self.predicates['{ident}']"
-            # No 'np' or 'math' case here, they are assumed to be directly accessible or prefixed in the original string (e.g., np.abs)
-            return ident # Should not be reached for identifiers in the list
-
-        expr_py = pattern.sub(replacer, expr_py)
-
-    # 3. Recursive parsing for operator precedence (relational then logical)
-    # This logic is similar to the runtime _evaluate_expression, but applies it at generation time.
-    def _parse_expression_recursive_generator(sub_expr: str) -> str:
-        sub_expr = sub_expr.strip()
-        if not sub_expr:
-            return ""
-
-        # Handle outermost balanced parentheses
-        if sub_expr.startswith('(') and sub_expr.endswith(')'):
-            balance = 0
-            is_fully_enclosed = True
-            for i in range(len(sub_expr) - 1): # Check up to second to last char
-                char = sub_expr[i]
-                if char == '(': balance += 1
-                elif char == ')': balance -= 1
-                if balance == 0:
-                    is_fully_enclosed = False
-                    break
-            if is_fully_enclosed:
-                return _parse_expression_recursive_generator(sub_expr[1:-1]) # Recursively parse inner part
-
-        # Find lowest precedence operator at top level
-        
-        # Implication (lowest logical precedence) - right-associative
-        balance = 0
-        implication_idx = -1
-        for i in range(len(sub_expr) - 2, -1, -1): # Scan right-to-left
-            char_pair = sub_expr[i:i+2]
-            if char_pair == '->' and balance == 0:
-                implication_idx = i
-                break
-            if sub_expr[i] == ')': balance += 1
-            elif sub_expr[i] == '(': balance -= 1
-        
-        if implication_idx != -1:
-            left = _parse_expression_recursive_generator(sub_expr[:implication_idx].strip())
-            right = _parse_expression_recursive_generator(sub_expr[implication_idx+2:].strip())
-            return f"((not ({left})) or ({right}))"
-
-        # Disjunction (next lowest logical) - left-associative
-        balance = 0
-        disjunction_idx = -1
-        for i in range(len(sub_expr)): # Scan left-to-right
-            if sub_expr[i] == '|' and balance == 0:
-                disjunction_idx = i
-                break
-            if sub_expr[i] == '(': balance += 1
-            elif sub_expr[i] == ')': balance -= 1
-        
-        if disjunction_idx != -1:
-            left = _parse_expression_recursive_generator(sub_expr[:disjunction_idx].strip())
-            right = _parse_expression_recursive_generator(sub_expr[disjunction_idx+1:].strip())
-            return f"({left}) or ({right})"
-
-        # Conjunction (next lowest logical) - left-associative
-        balance = 0
-        conjunction_idx = -1
-        for i in range(len(sub_expr)): # Scan left-to-right
-            if sub_expr[i] == '&' and balance == 0:
-                conjunction_idx = i
-                break
-            if sub_expr[i] == '(': balance += 1
-            elif sub_expr[i] == ')': balance -= 1
-        
-        if conjunction_idx != -1:
-            left = _parse_expression_recursive_generator(sub_expr[:conjunction_idx].strip())
-            right = _parse_expression_recursive_generator(sub_expr[conjunction_idx+1:].strip())
-            return f"({left}) and ({right})"
-
-        # Negation (highest logical precedence) - prefix operator
-        if sub_expr.startswith('!'):
-            operand = _parse_expression_recursive_generator(sub_expr[1:].strip())
-            return f"(not ({operand}))"
-
-        # Relational operators (including '=')
-        relational_ops = [('!=', '!='), ('<=', '<='), ('>=', '>='), ('<', '<'), ('>', '>'), ('=', 'self._approx_eq')]
-        
-        balance = 0
-        rel_op_found_kx = None
-        rel_op_found_py = None
-        rel_op_idx = -1
-        
-        # Scan left-to-right for relational operators
-        for i in range(len(sub_expr)):
-            char = sub_expr[i]
-            if char == '(': balance += 1
-            elif char == ')': balance -= 1
-            elif balance == 0:
-                # Check for multi-character operators first
-                for kx_op, py_op_format in relational_ops:
-                    if len(kx_op) > 1 and sub_expr[i:i+len(kx_op)] == kx_op:
-                        rel_op_found_kx = kx_op
-                        rel_op_found_py = py_op_format
-                        rel_op_idx = i
-                        break
-                if rel_op_found_kx: break 
-
-                # Check for single-character operators if no multi-char op found yet
-                for kx_op, py_op_format in relational_ops:
-                    if len(kx_op) == 1 and sub_expr[i] == kx_op:
-                        # Special check for '=', ensure it's not part of '==', '!=', '<=', '>='
-                        if kx_op == '=' and ( (i > 0 and sub_expr[i-1] in '<>=!') or \
-                                        (i < len(sub_expr) - 1 and sub_expr[i+1] == '=') ):
-                            continue 
-                        rel_op_found_kx = kx_op
-                        rel_op_found_py = py_op_format
-                        rel_op_idx = i
-                        break
-                if rel_op_found_kx: break 
-
-        if rel_op_found_kx:
-            left = _parse_expression_recursive_generator(sub_expr[:rel_op_idx].strip())
-            right = _parse_expression_recursive_generator(sub_expr[rel_op_idx+len(rel_op_found_kx):].strip())
-            if rel_op_found_kx == '=':
-                return f"{rel_op_found_py}({left}, {right})"
-            else:
-                return f"({left}) {rel_op_found_py} ({right})"
-        
-        # If no logical or relational operators, it's an arithmetic expression, literal, or function/predicate call
-        return sub_expr
-
-    expr_py = _parse_expression_recursive_generator(expr_py)
-    return expr_py
-
-def expand_formula(formula_str: str, definitions: DefinitionsConfig) -> str:
-    """
-    Recursively expands predicate calls within a formula string.
-    This returns the formula in KeYmaera X syntax, suitable for further parsing.
-    It handles simple argument substitution.
-    """
-    expanded_formula = formula_str
-    
-    predicate_map = {p.name: (p.body, [param[1] for param in p.parameters]) for p in definitions.predicates}
-    
+def make_binary_op_node(tokens):
+    flat_list = tokens[0] 
+    it = iter(flat_list)
+    try:
+        current_node = _ensure_ast_node(next(it))
+    except StopIteration:
+        return None
     while True:
-        num_substitutions_in_pass = 0
-        # Sort by length descending to handle cases where one predicate name is a substring of another
-        sorted_pred_names = sorted(predicate_map.keys(), key=len, reverse=True)
-        
-        for pred_name in sorted_pred_names:
-            pred_body, pred_params = predicate_map[pred_name]
-            # Regex to find calls to this specific predicate, capturing arguments
-            pattern = r'\b' + re.escape(pred_name) + r'\s*\(([^)]*)\)'
-            
-            def replace_match(match):
-                nonlocal num_substitutions_in_pass
-                num_substitutions_in_pass += 1
-                call_args_str = match.group(1)
-                call_args = [arg.strip() for arg in call_args_str.split(',') if arg.strip()]
-                
-                if len(call_args) != len(pred_params):
-                    print(f"Warning: Mismatch in number of arguments for predicate '{pred_name}'. Expected {len(pred_params)}, got {len(call_args)} in call '{match.group(0)}'.")
-                    return match.group(0)
-                
-                substituted_body = pred_body
-                for i, param_name in enumerate(pred_params):
-                    # Replace `param_name` with `call_args[i]` in the body
-                    # Use word boundaries to avoid partial replacements (e.g., replacing 'x' in 'dx')
-                    substituted_body = re.sub(r'\b' + re.escape(param_name) + r'\b', call_args[i], substituted_body)
-                
-                return f"({substituted_body})" # Enclose in parens to maintain logical grouping
-
-            expanded_formula = re.sub(pattern, replace_match, expanded_formula)
-        
-        if num_substitutions_in_pass == 0:
+        try:
+            op = next(it)
+            right_operand = _ensure_ast_node(next(it))
+            current_node = ExpressionBinaryOp(current_node, op, right_operand)
+        except StopIteration:
             break
+    return current_node
+
+def make_unary_op_node(tokens):
+    actual_tokens = tokens[0]
+    op = actual_tokens[0]
+    operand = _ensure_ast_node(actual_tokens[1])
+    return ExpressionUnaryOp(op, operand)
+
+_number = pp.pyparsing_common.number().setParseAction(lambda t: ExpressionNumber(t[0]))
+_boolean = (
+    pp.Literal('true').setParseAction(lambda t: ExpressionBoolean('true'))
+    | pp.Literal('false').setParseAction(lambda t: ExpressionBoolean('false'))
+)
+_identifier = pp.Word(pp.alphas + '_', pp.alphanums + '_').setParseAction(lambda t: ExpressionIdentifier(t[0]))
+
+func_call_element = (
+    _identifier + pp.Suppress('(') + pp.Optional(pp.delimitedList(_kx_expr_forward)) + pp.Suppress(')')
+).setParseAction(lambda tokens: ExpressionFunctionCall(
+    tokens[0], # Already an ExpressionIdentifier due to _identifier parse action
+    [_ensure_ast_node(arg) for arg in tokens[1:]]
+))
+
+_atomic_expr = (
+    func_call_element
+    | _number
+    | _boolean
+    | _identifier
+    | (pp.Suppress('(') + _kx_expr_forward + pp.Suppress(')'))
+)
+
+_infix_grammar = pp.infixNotation(_atomic_expr,
+    [
+        (pp.oneOf('! + -'), 1, pp.opAssoc.RIGHT, make_unary_op_node),
+        (pp.Literal('^'), 2, pp.opAssoc.RIGHT, make_binary_op_node),
+        (pp.oneOf("* /"), 2, pp.opAssoc.LEFT, make_binary_op_node),
+        (pp.oneOf("+ -"), 2, pp.opAssoc.LEFT, make_binary_op_node),
+        (pp.oneOf("= != <= >= < >"), 2, pp.opAssoc.LEFT, make_binary_op_node),
+        (pp.oneOf('& ∧'), 2, pp.opAssoc.LEFT, make_binary_op_node),
+        (pp.oneOf('| ∨'), 2, pp.opAssoc.LEFT, make_binary_op_node),
+        (pp.oneOf('-> →'), 2, pp.opAssoc.RIGHT, make_binary_op_node),
+    ]
+)
+
+kx_expr = (_kx_expr_forward << _infix_grammar)
+
+# --- Expansion Logic ---
+
+def expand_formula(node_or_str: Union[ExpressionASTNode, str], definitions: Any = None) -> Union[ExpressionASTNode, str]:
+    """
+    Recursively expands a formula.
+    """
+    is_input_string = isinstance(node_or_str, str)
+    
+    # 1. Initial Parse: Always work with a Node internally
+    if is_input_string:
+        try:
+            # Clean string of newlines/excess whitespace which trips up parseAll=True
+            clean_str = " ".join(node_or_str.split())
+            parsed = kx_expr.parseString(clean_str, parseAll=True)
+            current_node = _ensure_ast_node(parsed)
+        except Exception as e:
+            # If it's not a valid expression, return as is
+            return node_or_str
+    else:
+        current_node = node_or_str
+
+    # 2. Expansion Logic
+    result_node = current_node
+
+    if definitions and isinstance(current_node, ExpressionFunctionCall):
+        pred_name = current_node.name.name if isinstance(current_node.name, ExpressionIdentifier) else str(current_node.name)
+        
+        for pred_def in getattr(definitions, 'predicates', []):
+            if pred_def.name == pred_name:
+                body_str = pred_def.body
+                args = current_node.args
+                
+                # Replace parameters in the body string
+                for i, param_obj in enumerate(pred_def.parameters):
+                    if i < len(args):
+                        param_name = param_obj[0] if isinstance(param_obj, (tuple, list)) else str(param_obj)
+                        # Convert argument node to KX string for regex replacement
+                        arg_kx_str = _node_to_kx(args[i])
+                        pattern = rf'\b{re.escape(param_name)}\b'
+                        body_str = re.sub(pattern, arg_kx_str, body_str)
+                
+                # Recursively expand the newly built body string
+                expanded_body = expand_formula(body_str, definitions)
+                # Ensure the result is a node for the rest of this function
+                if isinstance(expanded_body, str):
+                    parsed_body = kx_expr.parseString(expanded_body, parseAll=True)
+                    result_node = _ensure_ast_node(parsed_body)
+                else:
+                    result_node = expanded_body
+                break
+
+    elif isinstance(current_node, ExpressionBinaryOp):
+        left_expanded = expand_formula(current_node.left, definitions)
+        if isinstance(left_expanded, str):
+            left_expanded = _ensure_ast_node(kx_expr.parseString(left_expanded, parseAll=True))
             
-    return expanded_formula
+        right_expanded = expand_formula(current_node.right, definitions)
+        if isinstance(right_expanded, str):
+            right_expanded = _ensure_ast_node(kx_expr.parseString(right_expanded, parseAll=True))
+
+        if current_node.op in ['->', '→']:
+            negated_left = ExpressionUnaryOp('!', left_expanded)
+            result_node = ExpressionBinaryOp(negated_left, '|', right_expanded)
+        else:
+            result_node = ExpressionBinaryOp(left_expanded, current_node.op, right_expanded)
+    
+    elif isinstance(current_node, ExpressionUnaryOp):
+        operand_expanded = expand_formula(current_node.operand, definitions)
+        if isinstance(operand_expanded, str):
+            operand_expanded = _ensure_ast_node(kx_expr.parseString(operand_expanded, parseAll=True))
+
+        if current_node.op == '!':
+            # Double Negation: !!A -> A
+            if isinstance(operand_expanded, ExpressionUnaryOp) and operand_expanded.op == '!':
+                result_node = operand_expanded.operand
+            # De Morgan's: !(A & B) -> !A | !B
+            elif isinstance(operand_expanded, ExpressionBinaryOp):
+                if operand_expanded.op in ['&', '∧']:
+                    result_node = ExpressionBinaryOp(ExpressionUnaryOp('!', operand_expanded.left), '|', ExpressionUnaryOp('!', operand_expanded.right))
+                elif operand_expanded.op in ['|', '∨']:
+                    result_node = ExpressionBinaryOp(ExpressionUnaryOp('!', operand_expanded.left), '&', ExpressionUnaryOp('!', operand_expanded.right))
+                else:
+                    result_node = ExpressionUnaryOp(current_node.op, operand_expanded)
+            else:
+                result_node = ExpressionUnaryOp(current_node.op, operand_expanded)
+        else:
+            result_node = ExpressionUnaryOp(current_node.op, operand_expanded)
+
+    # 3. Final Output: Match the input type
+    if is_input_string:
+        return _node_to_kx(result_node)
+    return result_node
+
+
+def format_kx_expr_for_python_lambda_body_generator(
+    expr_str: str,
+    lambda_param_names: List[str],
+    all_constants: List[str],
+    all_state_vars: List[str],
+    all_functions: List[str],
+    all_predicates: List[str],
+) -> str:
+    expr_cleaned = " ".join(expr_str.strip().split())
+    if not expr_cleaned:
+        raise ValueError("Cannot format an empty KeYmaera X expression.")
+
+    context = {
+        'lambda_param_names': lambda_param_names,
+        'all_constants': all_constants,
+        'all_state_vars': all_state_vars,
+        'all_functions': all_functions,
+        'all_predicates': all_predicates,
+    }
+
+    try:
+        parsed_result = kx_expr.parseString(expr_cleaned, parseAll=True)
+        ast_node = _ensure_ast_node(parsed_result)
+        return ast_node.to_python(context)
+    except Exception as e:
+        raise ValueError(f"Error formatting expression '{expr_str}': {e}")
