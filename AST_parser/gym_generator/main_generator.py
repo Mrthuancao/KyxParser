@@ -187,16 +187,34 @@ class {env_name_for_class}(_KeYmaeraXEnvBase):
         self._ode_func_compiled = self._compile_ode_func(_ode_func_str_local)
         self._ode_events_compiled = self._compile_ode_events(_ode_events_str_local)
 
-        self.reset()
+        # Call the derived class's reset method to set the initial state and populate history.
+        self.reset() 
 
     def reset(self, seed=None, options=None):
-        super().reset(seed=seed)
-        self.current_step = 0
+        # Call the base class's reset method first. This handles:
+        # 1. Storing the previous episode's history into self.last_episode_history.
+        # 2. Clearing self.state_history for the new episode.
+        # 3. Resetting self.cumulative_episode_time to 0.0.
+        # 4. Resetting self.current_step to 0.
+        # 5. Setting self.state to default values (e.g., all 0.0).
+        # 6. Adding this default state to self.state_history.
+        observation, info = super().reset(seed=seed, options=options) 
+        
+        # Now, apply the specific initial state logic from the generator.
+        # This will overwrite the default state set by the base class.
 {indented_reset_block}
+
+        # After applying the specific initial state (Z3/heuristics),
+        # self.state is now correctly initialized.
+        # The base class's reset already added a default initial state to self.state_history.
+        # We need to update that entry with the actual initial state.
+        # self.state_history should never be empty after super().reset()
+        self.state_history[-1] = self._get_state_for_history() # Update the last entry with the actual initial state
+
         return self._get_obs(), self._get_info()
 
     def step(self, action):
-        self.current_step += 1
+        self.current_step += 1 
         reward, terminated, truncated = 0.0, False, False
         info = self._get_info()
 
@@ -207,12 +225,20 @@ class {env_name_for_class}(_KeYmaeraXEnvBase):
                 m = re.match(r'^\\s*(\\w+)', conj)
                 meta = self._get_predicate_metadata(m.group(1)) if m else {{}}
                 reward, terminated, truncated = self._apply_meta_effect(meta or {{'penalty': -100}}, reward, terminated, truncated, True)
-                if terminated or truncated: return self._get_obs(), reward, terminated, truncated, info
+                if terminated or truncated:
+                    # If termination/truncation happens here, it's based on the state *before* this step's dynamics.
+                    # The history should already contain the state from the end of the previous step.
+                    # No new history entry needed unless state was modified here (which it shouldn't be for invariant check).
+                    return self._get_obs(), reward, terminated, truncated, info
 
         # --- 1. Control ---
         c_reward, c_terminated, c_applied = self._apply_control_action(action)
         reward += c_reward
-        if c_terminated: return self._get_obs(), reward, True, False, info
+        if c_terminated:
+            # If terminated here, the state *might* have changed due to _apply_control_action.
+            # We should record this state. Control actions are typically instantaneous.
+            self._add_state_to_history() # Record state after control action, before ODE (if it led to termination)
+            return self._get_obs(), reward, True, False, info
 
         # --- 2. Dynamics ---
         y0 = np.array([self.state[k] for k in self._ode_state_map.keys()])
@@ -221,13 +247,25 @@ class {env_name_for_class}(_KeYmaeraXEnvBase):
         final_y = sol.y[:, -1]
         for i, name in self._ode_state_idx_map.items(): self.state[name] = final_y[i]
 
+        # Update self.state['t'] with the actual time elapsed during this ODE step.
+        # This is crucial for `cumulative_episode_time`.
+        # The `sol.t[-1]` is the actual time reached by the solver, which might be less than 'ep' if an event occurred.
+        self.state['t'] = sol.t[-1] 
+
+        # --- History Management for step ---
+        # Accumulate time *after* self.state['t'] has been updated by the ODE dynamics.
+        self.cumulative_episode_time += self.state.get('t', 0.0) 
+        self._add_state_to_history() # Record state after ODE dynamics (this is the primary history point for a step)
+
         if sol.status == 1: # Event triggered (e.g. v < 0)
             reward, terminated, truncated = self._apply_meta_effect({{'penalty': -100}}, reward, False, True, True)
+            # History already added above, just after ODE dynamics.
             return self._get_obs(), reward, False, True, info
 
         # --- 3. Post-Dynamics Invariant & Shaping ---
         for conj in self._split_top_level_and_local(expanded_loop_inv):
             if not self._evaluate_expression(conj, is_constraint=True):
+                # History already added above, after ODE dynamics.
                 return self._get_obs(), reward - 100, True, False, info
 
         # Reward Shaping
@@ -241,6 +279,8 @@ class {env_name_for_class}(_KeYmaeraXEnvBase):
             reward, terminated, truncated = self._apply_meta_effect(meta, reward, terminated, truncated, False)
 
         if self.current_step >= self.max_episode_steps: truncated = True
+
+        # No further state changes for history after this point, so the history added after ODE is sufficient.
 
         return self._get_obs(), reward, terminated, truncated, info
 """)

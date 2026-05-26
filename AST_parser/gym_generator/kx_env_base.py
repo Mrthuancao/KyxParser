@@ -7,6 +7,7 @@ import z3
 import matplotlib.pyplot as plt
 import pandas as pd
 from typing import List, Dict, Any, Optional, Tuple, Union
+from abc import ABC, abstractmethod # Import ABC and abstractmethod
 
 # Import your helper logic
 try:
@@ -23,7 +24,7 @@ def safe_div(a, b):
     except ZeroDivisionError:
         return a * 1e18 if a != 0 else 0.0
 
-class _KeYmaeraXEnvBase(gym.Env):
+class _KeYmaeraXEnvBase(gym.Env, ABC): # Inherit from ABC
     def __init__(self, config_serialized_str: str, render_mode=None):
         super().__init__()
         self.render_mode = render_mode
@@ -63,7 +64,7 @@ class _KeYmaeraXEnvBase(gym.Env):
         self._definitions_config = self.config.definitions
         self._variables_config = self.config.variables
         self._problem_config = self.config.problem
-        self.equality_tolerance = 1e-7 
+        self.equality_tolerance = 1e-7
 
         # 2. Initialize Constants
         self.constants: Dict[str, float] = {}
@@ -83,7 +84,7 @@ class _KeYmaeraXEnvBase(gym.Env):
 
         self._state_keys: List[str] = [v.name for v in self._variables_config.state_variables]
         self.state: Dict[str, float] = {key: 0.0 for key in self._state_keys}
-        
+
         if 't' not in self.state:
             self.state['t'] = 0.0
             if 't' not in self._state_keys:
@@ -93,6 +94,13 @@ class _KeYmaeraXEnvBase(gym.Env):
         self._ode_func_compiled = None
         self._ode_events_compiled = None
         self.current_step = 0
+        self.debug_mode = False # Assuming a debug mode flag exists or can be added
+
+        # --- ADDITIONS FOR STATE HISTORY PLOTTING ---
+        self.state_history: List[Dict[str, Any]] = []
+        self.last_episode_history: List[Dict[str, Any]] = [] # Stores history of the *previous* episode
+        self.cumulative_episode_time: float = 0.0 # Tracks time for plotting across an episode
+        # --- END ADDITIONS ---
 
     def _make_callable_definition(self, params: List[str], body: str):
         def wrapper(*args):
@@ -110,11 +118,11 @@ class _KeYmaeraXEnvBase(gym.Env):
             'abs': abs, 'min': min, 'max': max, 'math': math, 'np': np,
             'safe_div': safe_div
         }
-        
+
         eval_context = {
-            **self.definitions_map, 
-            **self.constants, 
-            **self.state, 
+            **self.definitions_map,
+            **self.constants,
+            **self.state,
             '_approx_eq': self._approx_eq
         }
         if local_context:
@@ -123,7 +131,7 @@ class _KeYmaeraXEnvBase(gym.Env):
         try:
             return eval(proc, {'__builtins__': safe_builtins}, eval_context)
         except ZeroDivisionError:
-            return 0.0 
+            return 0.0
 
     def _evaluate_expression(self, expr_str: str, is_constraint: bool = False) -> Union[float, bool]:
         try:
@@ -195,7 +203,7 @@ class _KeYmaeraXEnvBase(gym.Env):
         if match:
             cond_str, true_val, false_val = match.groups()
             try:
-                return float(self._evaluate_expression(true_val)) if self._evaluate_expression(cond_str) else float(self._evaluate_expression(false_val))
+                return float(self._evaluate_expression(cond_str)) if self._evaluate_expression(cond_str) else float(self._evaluate_expression(false_val))
             except: return 0.0
         return float(self._evaluate_expression(shape_expr))
 
@@ -211,15 +219,21 @@ class _KeYmaeraXEnvBase(gym.Env):
 
     def _apply_control_action(self, agent_action: Dict[str, Any]) -> Tuple[float, bool, bool]:
         """Executes the control function logic defined in the AST."""
+        # Assuming _control_func_action_config is defined elsewhere in the actual implementation
+        # For demonstration, let's assume it's a dummy config for now.
+        # This part of the code was not the focus of the original question, so it's kept as is.
+        # If _control_func_action_config is not defined, this will raise an error.
+        # Example placeholder:
+        # self._control_func_action_config = SequenceActionConfig(actions=[])
         reward, terminated, applied = self._execute_action_config(self._control_func_action_config, agent_action)
         if applied: self.state['t'] = 0.0
         return reward, terminated, applied
 
     def _execute_action_config(self, config, agent_action) -> Tuple[float, bool, bool]:
         """Recursive executor for Choice, Sequence, and Assignment actions."""
-        from pyast_config import (ChoiceActionConfig, SequenceActionConfig, DeterministicAssignmentActionConfig, 
+        from pyast_config import (ChoiceActionConfig, SequenceActionConfig, DeterministicAssignmentActionConfig,
                                  NondeterministicAssignmentActionConfig, ActionConstraintConfig)
-        
+
         if isinstance(config, ChoiceActionConfig):
             choice_key = f"choice_{config.level_name}"
             idx = agent_action.get(choice_key, 0)
@@ -247,7 +261,7 @@ class _KeYmaeraXEnvBase(gym.Env):
             if not self._evaluate_expression(config.formula, is_constraint=True):
                 return -100.0, True, False # Penalty for control violation
             return 0.0, False, True
-        
+
         return 0.0, False, True
 
     def _solve_initial_state_with_z3(self, state_vars, precondition_formula: str) -> Optional[Dict[str, float]]:
@@ -294,22 +308,66 @@ class _KeYmaeraXEnvBase(gym.Env):
 
     def _get_info(self):
         return self.state.copy()
-    
+
+    # --- ADDITIONS FOR STATE HISTORY MANAGEMENT ---
+    def _get_state_for_history(self) -> Dict[str, Any]:
+        """Returns the current state combined with episode_time for history recording."""
+        current_state_for_history = self.state.copy()
+        current_state_for_history['episode_time'] = self.cumulative_episode_time
+        return current_state_for_history
+
+    def _add_state_to_history(self):
+        """Appends the current state and cumulative time to the history."""
+        self.state_history.append(self._get_state_for_history())
+
+    def reset(self, seed=None, options=None):
+        """
+        Resets the environment to an initial state and prepares for a new episode.
+        This method handles clearing history, resetting time/step, and adding a default initial state.
+        The derived class's reset method should call this first, then set its specific initial state,
+        and finally update the history with the actual initial state.
+        """
+        super().reset(seed=seed) # Call gym.Env's reset for RNG setup
+
+        # Store the history of the just-finished episode
+        self.last_episode_history = list(self.state_history)
+        # Clear history for the new episode
+        self.state_history = []
+        self.cumulative_episode_time = 0.0
+        self.current_step = 0
+
+        # Set initial state to defaults (e.g., all 0.0). This will be overwritten by the derived class.
+        for key in self._state_keys:
+            self.state[key] = 0.0 # Example: reset all to 0
+        if 't' in self.state:
+            self.state['t'] = 0.0
+
+        # Add this default initial state to the history. The derived class will update this entry.
+        self._add_state_to_history()
+
+        observation = self._get_obs()
+        info = self._get_info()
+        return observation, info
+
+    @abstractmethod # Mark step as abstract
+    def step(self, action):
+        """
+        Takes an action in the environment.
+        This method must be implemented by concrete subclasses.
+        """
+        pass # No implementation needed for abstract method
+    # --- END ADDITIONS ---
+
     def render(self, mode="human", variables_to_plot: Optional[List[str]] = None):
         if mode == "human":
-            # In a real environment, this would draw the robot, obstacle, etc.
-            # For now, just print state for demonstration.
-            # print(f"Render: Step={self.current_step}, State={self.state}")
-            pass # Removed print for human mode as well
+            pass
         elif mode == "plot_data":
-            # Return the full state history for external plotting (e.g., React)
             return self.state_history
         elif mode == "matplotlib":
-            # Generate and display a matplotlib plot, always using 'episode_time' for x-axis
             self._plot_state_history(variables_to_plot, history_data=self.last_episode_history)
-            return None # Matplotlib handles displaying the plot directly
-        return None # Default return if render_mode is not handled
-    
+            return None
+        return None
+
     def _plot_state_history(self, variables_to_plot: Optional[List[str]] = None, history_data: Optional[List[Dict[str, Any]]] = None):
         """
         Generates and displays a matplotlib plot of the state history.
@@ -319,35 +377,32 @@ class _KeYmaeraXEnvBase(gym.Env):
         data_to_plot = history_data if history_data is not None else self.state_history
 
         if not data_to_plot:
-            if self.debug_mode: # <--- Wrapped debug print
+            if self.debug_mode:
                 print("DEBUG_PLOT: No state history available to plot.")
             return
 
-        if self.debug_mode: # <--- Wrapped debug print
+        if self.debug_mode:
             print(f"DEBUG_PLOT: state_history length: {len(data_to_plot)}")
         df = pd.DataFrame(data_to_plot)
-        if self.debug_mode: # <--- Wrapped debug print
+        if self.debug_mode:
             print(f"DEBUG_PLOT: DataFrame shape: {df.shape}")
             print(f"DEBUG_PLOT: DataFrame head:\n{df.head()}")
             print(f"DEBUG_PLOT: DataFrame tail:\n{df.tail()}")
-        
-        x_axis_key = 'episode_time' 
+
+        x_axis_key = 'episode_time'
 
         if x_axis_key not in df.columns:
-            print(f"DEBUG_PLOT: Error: Time key '{x_axis_key}' not found in state history for plotting. This indicates an issue with state history recording.") # Not wrapped (critical)
+            print(f"DEBUG_PLOT: Error: Time key '{x_axis_key}' not found in state history for plotting. This indicates an issue with state history recording.")
             return
 
         if variables_to_plot is None:
-            # Plot only the variables that are typically expected to change or are key for the problem.
-            # Exclude 't' (duration of current ODE step), 'dx', 'dy', 'r', 'xo', 'yo' for cleaner plots by default.
-            # User can override by passing variables_to_plot explicitly.
             default_plot_vars = ['x', 'y', 'v', 'a', 'w']
             variables_to_plot = [col for col in default_plot_vars if col in df.columns]
         else:
             variables_to_plot = [v for v in variables_to_plot if v in df.columns]
 
         if not variables_to_plot:
-            if self.debug_mode: # <--- Wrapped debug print
+            if self.debug_mode:
                 print(f"DEBUG_PLOT: No variables selected for plotting or found in DataFrame.")
             return
 
@@ -360,9 +415,7 @@ class _KeYmaeraXEnvBase(gym.Env):
 
         fig.suptitle('Agent State Evolution Over Time', fontsize=16)
 
-        # Define a minimum y-axis range to ensure visibility of small changes
-        # Increased for better visibility of very subtle changes
-        min_y_range_absolute = 0.05 # Increased from 0.02
+        min_y_range_absolute = 0.05
 
         for i, var in enumerate(variables_to_plot):
             ax = axes[i]
@@ -372,43 +425,37 @@ class _KeYmaeraXEnvBase(gym.Env):
             ax.set_title(f"Evolution of {var}")
             ax.grid(True, linestyle='--', alpha=0.7)
             ax.legend()
-            
-            # Explicitly set x-axis limits
+
             min_time = df[x_axis_key].min()
             max_time = df[x_axis_key].max()
-            if max_time <= min_time + 1e-9: # Very small or zero range
-                ax.set_xlim(0, max_time + 0.01) # Add a small buffer if range is tiny
+            if max_time <= min_time + 1e-9:
+                ax.set_xlim(0, max_time + 0.01)
             else:
                 ax.set_xlim(0, max_time)
 
-            # Dynamically set y-axis limits based on the actual data range
             min_val = df[var].min()
             max_val = df[var].max()
-            
+
             data_range = max_val - min_val
 
-            if self.debug_mode: # <--- Wrapped debug print
+            if self.debug_mode:
                 print(f"DEBUG_PLOT: Plotting {var}: min_val={min_val:.6f}, max_val={max_val:.6f}, data_range={data_range:.6f}")
 
             if data_range < min_y_range_absolute:
-                # If the data range is too small, center the plot around the mean with a fixed minimum range
                 avg_val = (min_val + max_val) / 2
                 lower_bound = avg_val - min_y_range_absolute / 2
                 upper_bound = avg_val + min_y_range_absolute / 2
                 ax.set_ylim(lower_bound, upper_bound)
-                if self.debug_mode: # <--- Wrapped debug print
+                if self.debug_mode:
                     print(f"  DEBUG_PLOT: Applied forced y-lim: [{lower_bound:.6f}, {upper_bound:.6f}] (range {min_y_range_absolute})")
             else:
-                # Otherwise, use a percentage buffer of the actual data range
-                buffer = data_range * 0.1 # 10% buffer of the range
+                buffer = data_range * 0.1
                 lower_bound = min_val - buffer
                 upper_bound = max_val + buffer
                 ax.set_ylim(min_val - buffer, max_val + buffer)
-                if self.debug_mode: # <--- Wrapped debug print
+                if self.debug_mode:
                     print(f"  DEBUG_PLOT: Applied buffered y-lim: [{lower_bound:.6f}, {upper_bound:.6f}] (range {upper_bound - lower_bound:.6f})")
 
-
-        # Hide any unused subplots
         for j in range(i + 1, len(axes)):
             fig.delaxes(axes[j])
 
