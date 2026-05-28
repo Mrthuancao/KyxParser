@@ -2,6 +2,7 @@
 import re
 from typing import List, Optional, Tuple, Union, Dict, Any
 import pyparsing as pp
+import z3 # NEW: Import z3
 
 # Import the AST nodes
 from .expression_ast_nodes import (
@@ -59,12 +60,15 @@ def _ensure_ast_node(item: Any) -> ExpressionASTNode:
 # --- Grammar Definition ---
 
 def make_binary_op_node(tokens):
-    flat_list = tokens[0] 
+    # pyparsing returns tokens as a list, often with the actual elements nested
+    # We expect a flattened list like [operand, op, operand, op, operand, ...]
+    flat_list = tokens[0] # Access the inner list containing the actual parsed elements
     it = iter(flat_list)
     try:
         current_node = _ensure_ast_node(next(it))
     except StopIteration:
-        return None
+        return None # Should not happen for valid expressions
+
     while True:
         try:
             op = next(it)
@@ -75,10 +79,12 @@ def make_binary_op_node(tokens):
     return current_node
 
 def make_unary_op_node(tokens):
-    actual_tokens = tokens[0]
+    # pyparsing for unary ops often returns [op, operand] or [[op, operand]]
+    actual_tokens = tokens[0] # Access the inner list
     op = actual_tokens[0]
     operand = _ensure_ast_node(actual_tokens[1])
     return ExpressionUnaryOp(op, operand)
+
 
 _number = pp.pyparsing_common.number().setParseAction(lambda t: ExpressionNumber(t[0]))
 _boolean = (
@@ -90,8 +96,8 @@ _identifier = pp.Word(pp.alphas + '_', pp.alphanums + '_').setParseAction(lambda
 func_call_element = (
     _identifier + pp.Suppress('(') + pp.Optional(pp.delimitedList(_kx_expr_forward)) + pp.Suppress(')')
 ).setParseAction(lambda tokens: ExpressionFunctionCall(
-    tokens[0], # Already an ExpressionIdentifier due to _identifier parse action
-    [_ensure_ast_node(arg) for arg in tokens[1:]]
+    tokens[0], # The identifier is the first token
+    [_ensure_ast_node(arg) for arg in tokens[1:]] # Arguments follow
 ))
 
 _atomic_expr = (
@@ -124,7 +130,7 @@ def expand_formula(node_or_str: Union[ExpressionASTNode, str], definitions: Any 
     Recursively expands a formula.
     """
     is_input_string = isinstance(node_or_str, str)
-    
+
     # 1. Initial Parse: Always work with a Node internally
     if is_input_string:
         try:
@@ -142,13 +148,15 @@ def expand_formula(node_or_str: Union[ExpressionASTNode, str], definitions: Any 
     result_node = current_node
 
     if definitions and isinstance(current_node, ExpressionFunctionCall):
+        # The name could be an ExpressionIdentifier or a string if init was passed a string
         pred_name = current_node.name.name if isinstance(current_node.name, ExpressionIdentifier) else str(current_node.name)
-        
+
+        # Check predicates first
         for pred_def in getattr(definitions, 'predicates', []):
             if pred_def.name == pred_name:
                 body_str = pred_def.body
                 args = current_node.args
-                
+
                 # Replace parameters in the body string
                 for i, param_obj in enumerate(pred_def.parameters):
                     if i < len(args):
@@ -157,7 +165,7 @@ def expand_formula(node_or_str: Union[ExpressionASTNode, str], definitions: Any 
                         arg_kx_str = _node_to_kx(args[i])
                         pattern = rf'\b{re.escape(param_name)}\b'
                         body_str = re.sub(pattern, arg_kx_str, body_str)
-                
+
                 # Recursively expand the newly built body string
                 expanded_body = expand_formula(body_str, definitions)
                 # Ensure the result is a node for the rest of this function
@@ -167,12 +175,15 @@ def expand_formula(node_or_str: Union[ExpressionASTNode, str], definitions: Any 
                 else:
                     result_node = expanded_body
                 break
+        # If not a predicate, check functions (functions are not expanded for Z3 in current design)
+        # This part of expansion is primarily for predicates.
 
     elif isinstance(current_node, ExpressionBinaryOp):
         left_expanded = expand_formula(current_node.left, definitions)
+        # Ensure the result is an AST node for subsequent operations
         if isinstance(left_expanded, str):
             left_expanded = _ensure_ast_node(kx_expr.parseString(left_expanded, parseAll=True))
-            
+
         right_expanded = expand_formula(current_node.right, definitions)
         if isinstance(right_expanded, str):
             right_expanded = _ensure_ast_node(kx_expr.parseString(right_expanded, parseAll=True))
@@ -182,7 +193,7 @@ def expand_formula(node_or_str: Union[ExpressionASTNode, str], definitions: Any 
             result_node = ExpressionBinaryOp(negated_left, '|', right_expanded)
         else:
             result_node = ExpressionBinaryOp(left_expanded, current_node.op, right_expanded)
-    
+
     elif isinstance(current_node, ExpressionUnaryOp):
         operand_expanded = expand_formula(current_node.operand, definitions)
         if isinstance(operand_expanded, str):
@@ -237,3 +248,47 @@ def format_kx_expr_for_python_lambda_body_generator(
         return ast_node.to_python(context)
     except Exception as e:
         raise ValueError(f"Error formatting expression '{expr_str}': {e}")
+
+
+def format_kx_expr_for_z3_formula_generator(
+    expr_str: str,
+    definitions: Any, # Expects DefinitionsConfig for expansion
+    z3_symbol_map: Dict[str, Any],
+    fixed_constants: Dict[str, Union[int, float]],
+    z3_equality_tolerance: float,
+    debug_mode: bool = False
+) -> Any:
+    """
+    Converts a KeYmaera X expression string into a Z3 formula using the AST.
+    This function first expands KeYmaera X predicates, then parses the resulting
+    string into an AST, and finally converts the AST to a Z3 expression.
+    """
+    expr_cleaned = " ".join(expr_str.strip().split())
+    if not expr_cleaned:
+        raise ValueError("Cannot format an empty KeYmaera X expression for Z3.")
+
+    # 1. Expand KeYmaera X predicates (and potentially functions if desired) at the string level.
+    # This is important because Z3 does not automatically understand KeYmaera X's predicate definitions.
+    # The `expand_formula` function is already equipped to do this.
+    expanded_kx_expr = expand_formula(expr_cleaned, definitions)
+
+    # Ensure expanded_kx_expr is a string, then parse it into an AST
+    if not isinstance(expanded_kx_expr, str):
+        # If expand_formula returned an AST node, convert it back to string for consistent parsing
+        expanded_kx_expr = _node_to_kx(expanded_kx_expr)
+
+    try:
+        # 2. Parse the expanded KeYmaera X expression into an AST
+        parsed_result = kx_expr.parseString(expanded_kx_expr, parseAll=True)
+        ast_node = _ensure_ast_node(parsed_result)
+
+        # 3. Convert the AST to a Z3 expression
+        z3_context = {
+            'z3_symbol_map': z3_symbol_map,
+            'fixed_constants': fixed_constants,
+            'z3_equality_tolerance': z3_equality_tolerance,
+            'debug_mode': debug_mode
+        }
+        return ast_node.to_z3(z3_context)
+    except Exception as e:
+        raise ValueError(f"Error converting KeYmaera X expression '{expr_str}' (expanded: '{expanded_kx_expr}') to Z3 formula: {e}")
