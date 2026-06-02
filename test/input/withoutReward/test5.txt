@@ -1,0 +1,129 @@
+Theorem "IJRR17/Theorem 15: Cross intersection with deadline"
+
+/*
+ *	Robot must safely cross an intersection.
+ *
+ *  Robot
+ * 	- must cross intersection safely
+ *  - can only drive straight and forward
+ *  - ensures progress towards intersection
+ *
+ *  Obstacle
+ *  - Drives forward with minimum speed (does not block intersection)
+ *
+ *  Intersection
+ *  - At position 0 (on both the robot's and the obstacle's path)
+ *
+ *  Liveness property:
+ *  - Robot can cross intersection
+ *
+ *  Safety property:
+ *  - Robot always crosses intersection before deadline
+ *  - Robot and obstacle are not at the intersection at the same time
+ *
+ */
+
+Definitions
+  Real ep;      /* time limit for control decisions */
+  Real b;       /* minimum braking capability of the robot */
+  Real A;       /* maximum acceleration -b <= a <= A */
+  Real Vmin;    /* obstacle minimum speed */
+  Real ixr = 0; /* position of intersection on path of robot */
+  Real ixo = 0; /* position of intersection on path of obstacle */
+  Real D;       /* Deadline */
+
+  Real minV = A*ep;
+
+  Real stopDist(Real v) = v^2/(2*b);
+  Real accComp(Real v)  = ( (A/b + 1)*(A/2*ep^2 + ep*v) );
+
+  Bool OAfterX(Real xo) <-> xo>ixo;
+  Bool RAfterX(Real xr) <-> xr>ixr;
+
+  Bool bounds() <-> (                                                                  /* Bounds for global constants */
+      A > 0                                                                                         /* Working engine */
+    & b > 0                                                                                         /* Working brakes */
+    & ep > 0                                                                              /* Controller reaction time */
+    & Vmin > 0
+    & D >= ep
+  );
+
+  /* Somewhere before intersection initially */
+  Bool initialState(Real xr, Real vr, Real ixr, Real xo, Real vo, Real ixo, Real T) <-> (
+    vr = 0
+    & vo>=Vmin
+    & xr < ixr
+    & ixr-xr < A/2*(D-ep)^2
+    & T = min(0, (xo-ixo)/Vmin) - ep
+    & RAfterX(xr + A/2*(D - ep)^2)
+  );
+
+  /* Under these assumptions we guarantee safety */
+  Bool assumptions(Real xr, Real vr, Real ixr, Real xo, Real vo, Real ixo, Real T) <->
+    bounds() & initialState(xr, vr, ixr, xo, vo, ixo, T);
+
+  Bool safetyloopinv(Real xr, Real vr, Real ixr, Real xo, Real vo, Real ixo) <-> (
+    0 <= vr & Vmin<=vo & (RAfterX(xr) | OAfterX(xo) | xr + stopDist(vr) < ixr |
+      (vr>0 & ( xo+vo*(ixr-xr)/vr+A/2*((ixr-xr)/vr)^2 < ixo
+              | ixo < xo + Vmin*(ixr-xr)/vr))
+    )
+  );
+
+  Bool deadlineloopinv(Real xr, Real vr, Real ixr, Real xo, Real vo, Real ixo, Real T) <-> (
+    0 <= vr & Vmin<=vo
+    & T <= (xo-ixo)/Vmin
+    & ( T <= 0 & RAfterX(xr + A/2*(D - ep)^2)
+      | T > 0 & RAfterX(xr + vr*(max(0,D-T)) + A/2*(max(0,D-T))^2) )
+  );
+
+  HP obstacle ::= { ao := *; ?-b<=ao&ao<=A; };
+
+  HP robot ::= {
+    if (OAfterX(xo)) {
+      ar := A;
+    } else { if (RAfterX(xr)) {
+      ar := *; ?-b<=ar&ar<=A;
+    } else { if (/*PassFaster*/ vr>0 & ( xo+vo*(ixr-xr)/vr+A/2*((ixr-xr)/vr)^2 < ixo
+                                       | ixo < xo + Vmin*(ixr-xr)/(vr+A*ep) ) ) {
+      ar := *; ?0<=ar&ar<=A;
+    } else { if (/*PassCoast*/ vr>0 & ixo < xo + Vmin*(ixr-xr)/vr) {
+      ar := 0;
+    } else {         /* 1D Model 3 */
+        ar := -b;
+     ++ ?vr = 0; ar := 0;
+     ++ ?xr + stopDist(vr) + accComp(vr) < ixr; ar := A;
+    }}}}
+  };
+
+  HP dyn ::= { {xr' = vr, vr' = ar, xo'=vo, vo'=ao, t' = 1, T'=1 & t <= ep & vr >= 0 & vo>=Vmin } };
+
+  HP dwcxd ::= {
+    {
+      obstacle;
+      { robot; t := 0; }
+      dyn;
+    }*
+  };
+
+End.
+
+ProgramVariables
+  Real xr;   /* robot position: x */
+  Real vr;   /* robot translational velocity */
+  Real ar;   /* robot translational acceleration */
+  Real xo;   /* obstacle position */
+  Real vo;   /* obstacle velocity */
+  Real ao;   /* obstacle acceleration */
+  Real t;	   /* control cycle time */
+  Real T;    /* remaining time until robot must start driving (i.e., until obstacle has passed the intersection) */
+End.
+
+Problem
+  assumptions(xr, vr, ixr, xo, vo, ixo, T)
+    ->
+    /* safety */
+    [ dwcxd; ]( (xr=ixr -> xo!=ixo) & (T>=D -> RAfterX(xr)) )
+    &
+    /* liveness */
+    < dwcxd; >( RAfterX(xr) )
+End.

@@ -33,25 +33,41 @@ class GeneratedKXEnv(_KeYmaeraXEnvBase):
                         name='ep',
                         type='Real',
                         value='',
-                        metadata={}
+                        metadata={
+                            'type': 'const',
+                            'bound': '[0.1:0.5]',
+                            'def': '"time limit for control decisions"'
+                        }
                     ),
                     ConstantDefinitionConfig(
                         name='b',
                         type='Real',
                         value='',
-                        metadata={}
+                        metadata={
+                            'type': 'const',
+                            'bound': '[0.5:5.0]',
+                            'def': '"minimum braking capability of the robot"'
+                        }
                     ),
                     ConstantDefinitionConfig(
                         name='A',
                         type='Real',
                         value='',
-                        metadata={}
+                        metadata={
+                            'type': 'const',
+                            'bound': '[1.0:10.0]',
+                            'def': '"maximum acceleration"'
+                        }
                     ),
                     ConstantDefinitionConfig(
                         name='W',
                         type='Real',
                         value='',
-                        metadata={}
+                        metadata={
+                            'type': 'const',
+                            'bound': '[0.1:1.0]',
+                            'def': '"maximum steering (rotational velocity)"'
+                        }
                     )
                 ],
                 functions=[
