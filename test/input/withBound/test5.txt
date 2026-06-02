@@ -1,0 +1,155 @@
+Theorem "IJRR17/Theorem 15: Cross intersection with deadline"
+
+/*
+ *	Robot must safely cross an intersection.
+ *
+ *  Robot
+ * 	- must cross intersection safely
+ *  - can only drive straight and forward
+ *  - ensures progress towards intersection
+ *
+ *  Obstacle
+ *  - Drives forward with minimum speed (does not block intersection)
+ *
+ *  Intersection
+ *  - At position 0 (on both the robot's and the obstacle's path)
+ *
+ *  Liveness property:
+ *  - Robot can cross intersection
+ *
+ *  Safety property:
+ *  - Robot always crosses intersection before deadline
+ *  - Robot and obstacle are not at the intersection at the same time
+ *
+ */
+
+Definitions
+  // @const: bound=[0.01:0.1]; def="time limit for control decisions"
+  Real ep;      /* time limit for control decisions */
+  // @const: bound=[0.5:5.0]; def="minimum braking capability of the robot"
+  Real b;       /* minimum braking capability of the robot */
+  // @const: bound=[1.0:10.0]; def="maximum acceleration"
+  Real A;       /* maximum acceleration -b <= a <= A */
+  // @const: bound=[0.1:2.0]; def="obstacle minimum speed"
+  Real Vmin;    /* obstacle minimum speed */
+  Real ixr = 0; /* position of intersection on path of robot */
+  Real ixo = 0; /* position of intersection on path of obstacle */
+  // @const: bound=[1.0:10.0]; def="deadline for robot to cross intersection"
+  Real D;       /* Deadline */
+
+  Real minV = A*ep;
+
+  Real stopDist(Real v) = v^2/(2*b);
+  Real accComp(Real v)  = ( (A/b + 1)*(A/2*ep^2 + ep*v) );
+
+  Bool OAfterX(Real xo) <-> xo>ixo;
+  Bool RAfterX(Real xr) <-> xr>ixr;
+
+  // Global Bounds
+  Bool bounds() <-> (                                                                  /* Bounds for global constants */
+      A > 0                                                                                         /* Working engine */
+    & b > 0                                                                                         /* Working brakes */
+    & ep > 0                                                                              /* Controller reaction time */
+    & Vmin > 0
+    & D >= ep
+  );
+
+  // Initial Conditions
+  /* Somewhere before intersection initially */
+  Bool initialState(Real xr, Real vr, Real ixr, Real xo, Real vo, Real ixo, Real T) <-> (
+    vr = 0
+    & vo>=Vmin
+    & xr < ixr
+    & ixr-xr < A/2*(D-ep)^2
+    & T = min(0, (xo-ixo)/Vmin) - ep
+    & RAfterX(xr + A/2*(D - ep)^2)
+  );
+
+  Bool assumptions(Real xr, Real vr, Real ixr, Real xo, Real vo, Real ixo, Real T) <->              /* Under these assumptions we guarantee safety */
+    bounds() & initialState(xr, vr, ixr, xo, vo, ixo, T);
+
+  // Safety Invariant: Robot and obstacle are not at the intersection at the same time, or robot can stop.
+  // @safety: penalty=-1000, on_failure=truncate:status=failure, on_success=continue:status=none
+  Bool safetyloopinv(Real xr, Real vr, Real ixr, Real xo, Real vo, Real ixo) <-> (
+    0 <= vr & Vmin<=vo & (RAfterX(xr) | OAfterX(xo) | xr + stopDist(vr) < ixr |
+      (vr>0 & ( xo+vo*(ixr-xr)/vr+A/2*((ixr-xr)/vr)^2 < ixo
+              | ixo < xo + Vmin*(ixr-xr)/vr))
+    )
+  );
+
+  // Deadline Invariant: Robot can cross intersection before deadline.
+  // @progress: reward=10, on_success=continue:status=none, on_failure=continue:status=none, shape={-T}
+  Bool deadlineloopinv(Real xr, Real vr, Real ixr, Real xo, Real vo, Real ixo, Real T) <-> (
+    0 <= vr & Vmin<=vo
+    & T <= (xo-ixo)/Vmin
+    & ( T <= 0 & RAfterX(xr + A/2*(D - ep)^2)
+      | T > 0 & RAfterX(xr + vr*(max(0,D-T)) + A/2*(max(0,D-T))^2) )
+  );
+
+  HP obstacle ::= { ao := *; ?-b<=ao&ao<=A; };
+
+  HP robot ::= {
+    if (OAfterX(xo)) {
+      ar := A;
+    } else { if (RAfterX(xr)) {
+      ar := *; ?-b<=ar&ar<=A;
+    } else { if (/*PassFaster*/ vr>0 & ( xo+vo*(ixr-xr)/vr+A/2*((ixr-xr)/vr)^2 < ixo
+                                       | ixo < xo + Vmin*(ixr-xr)/(vr+A*ep) ) ) {
+      ar := *; ?0<=ar&ar<=A;
+    } else { if (/*PassCoast*/ vr>0 & ixo < xo + Vmin*(ixr-xr)/vr) {
+      ar := 0;
+    } else {         /* 1D Model 3 */
+        ar := -b;
+     ++ ?vr = 0; ar := 0;
+     ++ ?xr + stopDist(vr) + accComp(vr) < ixr; ar := A;
+    }}}}
+  };
+
+  HP dyn ::= { {xr' = vr, vr' = ar, xo'=vo, vo'=ao, t' = 1, T'=1 & t <= ep & vr >= 0 & vo>=Vmin } };
+
+  HP dwcxd ::= {
+    {
+      obstacle;
+      { robot; t := 0; }
+      dyn;
+    }*@invariant(safetyloopinv(xr, vr, ixr, xo, vo, ixo) & deadlineloopinv(xr, vr, ixr, xo, vo, ixo, T))
+  };
+
+  // Final Safety Condition for the problem
+  // @safety: penalty=-1000, on_failure=terminate:status=failure, on_success=terminate:status=success
+  Bool finalSafety(Real xr, Real xo, Real T) <-> ( (xr=ixr -> xo!=ixo) & (T>=D -> RAfterX(xr)) );
+
+  // Final Liveness Condition for the problem
+  // @progress: reward=500, on_success=terminate:status=success, on_failure=terminate:status=failure
+  Bool finalLiveness(Real xr) <-> RAfterX(xr);
+
+End.
+
+ProgramVariables
+  // @var: bound=[0:100]; def="robot position: x"
+  Real xr;   /* robot position: x */
+  // @var: bound=[0:20]; def="robot translational velocity"
+  Real vr;   /* robot translational velocity */
+  // @var: bound=[-10:10]; def="robot translational acceleration"
+  Real ar;   /* robot translational acceleration */
+  // @var: bound=[0:100]; def="obstacle position: x"
+  Real xo;   /* obstacle position */
+  // @var: bound=[0:20]; def="obstacle velocity"
+  Real vo;   /* obstacle velocity */
+  // @var: bound=[-10:10]; def="obstacle acceleration"
+  Real ao;   /* obstacle acceleration */
+  // @var: bound=[0:1]; def="time elapsed in current control step"
+  Real t;	   /* control cycle time */
+  // @var: bound=[-100:100]; def="remaining time until robot must start driving (i.e., until obstacle has passed the intersection)"
+  Real T;    /* remaining time until robot must start driving (i.e., until obstacle has passed the intersection) */
+End.
+
+Problem
+  assumptions(xr, vr, ixr, xo, vo, ixo, T)
+    ->
+    /* safety */
+    [ dwcxd; ]finalSafety(xr, xo, T)
+    &
+    /* liveness */
+    < dwcxd; >finalLiveness(xr)
+End.

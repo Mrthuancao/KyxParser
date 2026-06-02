@@ -525,14 +525,39 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
         z3_symbols = {}
         fixed_constants_map = {}
 
+        # Initialize sample_ranges for state variables (if not already set)
         for var_decl in self._variables_config.state_variables:
             z3_symbols[var_decl.name] = z3.Real(var_decl.name)
+            # Default bounds for state variables if not specified elsewhere
+            if var_decl.name not in self.sample_ranges:
+                self.sample_ranges[var_decl.name] = (-100.0, 100.0)
 
+        # Process constants, applying bounds from metadata
         for const_decl in self._definitions_config.constants:
             if const_decl.value is not None and re.fullmatch(r'^-?\d+(\.\d+)?$', const_decl.value):
+                # If constant has a fixed numerical value, treat it as such
                 fixed_constants_map[const_decl.name] = float(const_decl.value)
             else:
+                # Otherwise, treat it as a variable for Z3 and apply bounds from metadata if available
                 z3_symbols[const_decl.name] = z3.Real(const_decl.name)
+                if 'bound' in const_decl.metadata:
+                    bound_str = const_decl.metadata['bound']
+                    match = re.match(r'\[(-?\d+(\.\d+)?):(-?\d+(\.\d+)?)\]', bound_str)
+                    if match:
+                        low = float(match.group(1))
+                        high = float(match.group(3))
+                        self.sample_ranges[const_decl.name] = (low, high)
+                        if self.debug_mode:
+                            print(f"DEBUG_CISB: Applied bound for constant '{const_decl.name}': [{low}, {high}]")
+                    else:
+                        if self.debug_mode:
+                            print(f"DEBUG_CISB: Warning: Could not parse bound string '{bound_str}' for constant '{const_decl.name}'. Using default range.")
+                        if const_decl.name not in self.sample_ranges:
+                            self.sample_ranges[const_decl.name] = (-100.0, 100.0)
+                else:
+                    if const_decl.name not in self.sample_ranges:
+                        self.sample_ranges[const_decl.name] = (-100.0, 100.0)
+
 
         opt = z3.Optimize()
         opt.set(timeout=10000)
@@ -546,6 +571,7 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
             return
 
         for var_name, z3_var in z3_symbols.items():
+            # Use the bounds from self.sample_ranges, which now includes constant bounds
             low, high = self.sample_ranges.get(var_name, (-100.0, 100.0))
             opt.add(z3_var >= low, z3_var <= high)
 
@@ -555,11 +581,11 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
 
             soft_constraints_added = False
             for var_name, z3_var in z3_symbols.items():
-                if var_name in ['v', 't']:
+                if var_name in ['v', 't']: # 'v' is often 0 in initial state, 't' is always 0.
                     continue
 
                 low, high = self.sample_ranges.get(var_name, (-100.0, 100.0))
-                if low == high:
+                if low == high: # Skip if the range is a single point
                     continue
 
                 target = self.np_random.uniform(low, high)
@@ -567,6 +593,8 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
                 soft_constraints_added = True
 
             if not soft_constraints_added:
+                # If no soft constraints were added (e.g., all variables have fixed values or single-point ranges),
+                # we still need to try and find a solution.
                 pass
 
             check_result = opt.check()
@@ -585,14 +613,16 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
                             solved_values[k] = float(str(evaluated_val))
                 solved_values.update(fixed_constants_map)
 
+                # Normalize dx, dy if they represent a direction vector
                 if 'dx' in solved_values and 'dy' in solved_values:
                     dx_val = solved_values['dx']
                     dy_val = solved_values['dy']
                     magnitude = math.sqrt(dx_val**2 + dy_val**2)
-                    if magnitude > 1e-6:
+                    if magnitude > 1e-6: # Avoid division by zero for very small magnitudes
                         solved_values['dx'] = dx_val / magnitude
                         solved_values['dy'] = dy_val / magnitude
                     else:
+                        # Default to a valid direction if magnitude is too small
                         solved_values['dx'] = 1.0
                         solved_values['dy'] = 0.0
 
@@ -605,7 +635,7 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
                 for var_name, z3_var in z3_symbols.items():
                     val = solved_values.get(var_name)
                     if val is not None:
-                        diversity_epsilon = 0.1
+                        diversity_epsilon = 0.1 # Small epsilon to ensure diversity
                         blocking_conditions.append(
                             z3.Or(z3_var < val - diversity_epsilon, z3_var > val + diversity_epsilon)
                         )
@@ -613,13 +643,13 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
                 if blocking_conditions:
                     opt.add(z3.Or(blocking_conditions))
 
-                opt.pop()
+                opt.pop() # Pop the soft constraints and blocking clause for the next attempt
 
             elif check_result == z3.unsat:
                 print(f"DEBUG_CISB: Z3 UNSAT during CISB population attempt {attempts}. No more diverse solutions found within current constraints.")
                 opt.pop()
                 break
-            else:
+            else: # z3.unknown
                 print(f"DEBUG_CISB: Z3 UNKNOWN during CISB population attempt {attempts}. Retrying with new soft constraints.")
                 opt.pop()
 
