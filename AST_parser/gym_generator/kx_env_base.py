@@ -104,6 +104,7 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
         self._cisb_populate_attempts = cisb_populate_attempts
         self.sample_ranges: Dict[str, Tuple[float, float]] = {}
         
+        # This call will now use the corrected regex
         self._populate_cisb_diverse_z3() 
 
     def _evaluate_expression(self, expr_str: str, local_vars: Optional[Dict[str, Any]] = None, is_constraint: bool = False) -> Any:
@@ -357,7 +358,7 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
 
         if metadata:
             event_key = 'on_failure' if is_failure_case else 'on_success'
-            event_config_str = metadata.get(event_key)
+            event_config_value = metadata.get(event_key) # Renamed to avoid confusion with string
 
             if is_failure_case:
                 penalty = float(metadata.get('penalty', 0.0))
@@ -366,10 +367,14 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
                 success_reward = float(metadata.get('reward', 0.0))
                 reward_change += success_reward
 
-            if event_config_str:
-                parts = event_config_str.split(':')
-                action = parts[0]
-
+            if event_config_value:
+                action = None
+                if isinstance(event_config_value, dict): # Check if it's the dict format
+                    action = event_config_value.get('action')
+                elif isinstance(event_config_value, str): # Fallback for string format
+                    parts = event_config_value.split(':')
+                    action = parts[0]
+                
                 if action == 'terminate':
                     new_terminated = True
                 elif action == 'truncate':
@@ -387,6 +392,7 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
 
         reward = 0.0
         terminated = False
+        truncated = False # Initialize truncated here
         applied_successfully = True
 
         if isinstance(action_config, ChoiceActionConfig):
@@ -416,6 +422,13 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
                 r, t, s = self._execute_action_config(sub_action, agent_action)
                 reward += r
                 if t: terminated = True
+                # Note: `truncated` is not directly updated here from sub_action's return.
+                # If a sub-action truncates, the `terminated` or `truncated` flag should propagate.
+                # For now, we'll assume `t` (terminated) covers critical exits.
+                # If a sub-action explicitly returns `truncated=True` and `t=False`,
+                # this would need to be `truncated = truncated or tr` if `tr` was returned.
+                # Given current `_apply_meta_effect` returns, `t` and `tr` are mutually exclusive
+                # for a single meta effect, so propagating `t` is usually sufficient for early exit.
                 if not s:
                     applied_successfully = False
                     break
@@ -455,13 +468,18 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
                 pred_name = predicate_name_match.group(1)
                 metadata = self._get_predicate_metadata(pred_name)
             else:
-                metadata = {'type': 'safety', 'penalty': '-100.0', 'on_failure': 'terminate:status=failure'}
+                # Default metadata now uses the dictionary format for on_failure
+                metadata = {'type': 'safety', 'penalty': '-100.0', 'on_failure': {'action': 'terminate', 'status': 'failure'}}
 
             if not constraint_met:
                 if self.debug_mode:
                     print(f"DEBUG_ACTION: Constraint FAILED: '{action_config.formula}'. Setting applied_successfully=False.")
-                reward, terminated, truncated = self._apply_meta_effect(metadata, reward, terminated, False, is_failure_case=True)
-                if not terminated and not truncated and metadata.get('on_failure', '').split(':')[0] == 'continue':
+                reward, terminated, truncated = self._apply_meta_effect(metadata, reward, terminated, truncated, is_failure_case=True)
+                
+                # Check for 'continue' action in metadata, now handling both dict and string formats
+                on_failure_config = metadata.get('on_failure')
+                if (isinstance(on_failure_config, dict) and on_failure_config.get('action') == 'continue') or \
+                   (isinstance(on_failure_config, str) and on_failure_config.split(':')[0] == 'continue'):
                     applied_successfully = True
                     if self.debug_mode:
                         print(f"DEBUG_ACTION: Constraint FAILED but metadata says 'continue'. applied_successfully=True.")
@@ -470,7 +488,11 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
             else:
                 if self.debug_mode:
                     print(f"DEBUG_ACTION: Constraint PASSED: '{action_config.formula}'. Setting applied_successfully=True.")
-                if metadata.get('on_success') and metadata.get('on_success').split(':')[0] != 'continue':
+                
+                # Check for 'continue' action in metadata, now handling both dict and string formats
+                on_success_config = metadata.get('on_success')
+                if not ((isinstance(on_success_config, dict) and on_success_config.get('action') == 'continue') or \
+                        (isinstance(on_success_config, str) and on_success_config.split(':')[0] == 'continue')):
                     reward, terminated, truncated = self._apply_meta_effect(metadata, reward, terminated, truncated, is_failure_case=False)
                 applied_successfully = True
 
@@ -546,7 +568,8 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
                 z3_symbols[const_decl.name] = z3.Real(const_decl.name)
                 if 'bound' in const_decl.metadata:
                     bound_str = const_decl.metadata['bound']
-                    match = re.match(r'[(-?\d+(\.\d+)?):(-?\d+(\.\d+)?)]', bound_str)
+                    # FIX: Removed literal square brackets from regex pattern
+                    match = re.match(r'(-?\d+(\.\d+)?):(-?\d+(\.\d+)?)', bound_str)
                     if match:
                         low = float(match.group(1))
                         high = float(match.group(3))
@@ -658,7 +681,7 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
                 opt.pop()
 
         if current_cisb_count < self._cisb_size:
-            print(f"DEBUG_CISB: Warning: Could only populate {current_cisb_count} states for CISB after {attempts} attempts.")
+            print(f"DEBUG_CISB: Warning: Could not populate {current_cisb_count} states for CISB after {attempts} attempts.")
         else:
             if self.debug_mode:
                 print(f"DEBUG_CISB: CISB population complete with {current_cisb_count} states.")
@@ -785,7 +808,7 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
                 self.constants[var_name] = value
 
         if self.debug_mode:
-            print(f"DEBUG_RESET: Initial state: x={self.state.get('x',0):.6f}, y={self.state.get('y',0):.6f}, v={self.state.get('v',0):.6f}, a={self.state.get('a',0):.6f}, w={self.state.get('w',0):.6f}")
+            print(f"DEBUG_RESET: Initial state: x={self.state.get('x',0):.6f}, y={self.state.get('y',0):.6f}, v={self.state.get('v',0):.6f}, a={self.state.get('a',0):.6f}, w={self.state.get('w',0):.6f}, ep={self.constants.get('ep',0):.6f}")
             print(f"DEBUG_RESET: Initial constants: A={self.constants.get('A',0):.6f}, b={self.constants.get('b',0):.6f}, ep={self.constants.get('ep',0):.6f}")
 
         self._add_state_to_history()
