@@ -24,7 +24,7 @@ from pyast_config import (
 class GeneratedKXEnv(_KeYmaeraXEnvBase):
     metadata = {"render_modes": ["human", "plot_data", "matplotlib"], "render_fps": 30}
 
-    def __init__(self, render_mode=None, cisb_size: int = 1000, cisb_populate_attempts: int = 5000, seed: Optional[int] = None, debug_mode: bool = False):
+    def __init__(self, render_mode=None, cisb_size: int = 1000, cisb_populate_attempts: int = 1000, seed: Optional[int] = None, debug_mode: bool = False):
         super().__init__(config_serialized_str='''GymEnvironmentConfig(
             env_name='IJRR17_Theorem_1__Static_safety',
             definitions=DefinitionsConfig(
@@ -32,41 +32,41 @@ class GeneratedKXEnv(_KeYmaeraXEnvBase):
                     ConstantDefinitionConfig(
                         name='ep',
                         type='Real',
-                        value='',
+                        value=None,
                         metadata={
                             'type': 'const',
-                            'bound': '[0.1:0.5]',
-                            'def': '"time limit for control decisions"'
+                            'bound': '0.1:0.5',
+                            'def': 'time limit for control decisions'
                         }
                     ),
                     ConstantDefinitionConfig(
                         name='b',
                         type='Real',
-                        value='',
+                        value=None,
                         metadata={
                             'type': 'const',
-                            'bound': '[0.5:5.0]',
-                            'def': '"minimum braking capability of the robot"'
+                            'bound': '0.5:5.0',
+                            'def': 'minimum braking capability of the robot'
                         }
                     ),
                     ConstantDefinitionConfig(
                         name='A',
                         type='Real',
-                        value='',
+                        value=None,
                         metadata={
                             'type': 'const',
-                            'bound': '[1.0:10.0]',
-                            'def': '"maximum acceleration"'
+                            'bound': '1.0:10.0',
+                            'def': 'maximum acceleration'
                         }
                     ),
                     ConstantDefinitionConfig(
                         name='W',
                         type='Real',
-                        value='',
+                        value=None,
                         metadata={
                             'type': 'const',
-                            'bound': '[0.1:1.0]',
-                            'def': '"maximum steering (rotational velocity)"'
+                            'bound': '0.1:1.0',
+                            'def': 'maximum steering (rotational velocity)'
                         }
                     )
                 ],
@@ -111,8 +111,14 @@ class GeneratedKXEnv(_KeYmaeraXEnvBase):
                             'type': 'progress',
                             'reward': '10',
                             'shape': '-((dx**2 + dy**2) - 1)**2',
-                            'on_success': 'continue:status=none',
-                            'on_failure': 'continue:status=none'
+                            'on_success': {
+                                'action': 'continue',
+                                'status': 'none'
+                            },
+                            'on_failure': {
+                                'action': 'continue',
+                                'status': 'none'
+                            }
                         }
                     ),
                     PredicateDefinitionConfig(
@@ -125,8 +131,14 @@ class GeneratedKXEnv(_KeYmaeraXEnvBase):
                         metadata={
                             'type': 'safety',
                             'penalty': '-500',
-                            'on_failure': 'truncate:status=failure',
-                            'on_success': 'continue:status=none'
+                            'on_failure': {
+                                'action': 'truncate',
+                                'status': 'failure'
+                            },
+                            'on_success': {
+                                'action': 'continue',
+                                'status': 'none'
+                            }
                         }
                     ),
                     PredicateDefinitionConfig(
@@ -143,8 +155,14 @@ class GeneratedKXEnv(_KeYmaeraXEnvBase):
                             'type': 'safety',
                             'penalty': '-1000',
                             'shape': '(abs(x-xo) - stopDist(v)) + (abs(y-yo) - stopDist(v))',
-                            'on_failure': 'truncate:status=failure',
-                            'on_success': 'continue:status=none'
+                            'on_failure': {
+                                'action': 'truncate',
+                                'status': 'failure'
+                            },
+                            'on_success': {
+                                'action': 'continue',
+                                'status': 'none'
+                            }
                         }
                     ),
                     PredicateDefinitionConfig(
@@ -156,8 +174,14 @@ class GeneratedKXEnv(_KeYmaeraXEnvBase):
                         metadata={
                             'type': 'progress',
                             'shape': '1/v if v > 0 else v',
-                            'on_success': 'continue:status=none',
-                            'on_failure': 'continue:status=none'
+                            'on_success': {
+                                'action': 'continue',
+                                'status': 'none'
+                            },
+                            'on_failure': {
+                                'action': 'continue',
+                                'status': 'none'
+                            }
                         }
                     ),
                     PredicateDefinitionConfig(
@@ -230,8 +254,14 @@ class GeneratedKXEnv(_KeYmaeraXEnvBase):
                             'type': 'progress',
                             'reward': '500',
                             'penalty': '-1000',
-                            'on_success': 'terminate:status=success',
-                            'on_failure': 'terminate:status=failure'
+                            'on_success': {
+                                'action': 'terminate',
+                                'status': 'success'
+                            },
+                            'on_failure': {
+                                'action': 'terminate',
+                                'status': 'failure'
+                            }
                         }
                     )
                 ],
@@ -351,68 +381,68 @@ class GeneratedKXEnv(_KeYmaeraXEnvBase):
                     VariableDeclarationConfig(
                         name='x',
                         type='Real',
-                        lower_bound=None,
-                        upper_bound=None
+                        lower_bound='0',
+                        upper_bound='100'
                     ),
                     VariableDeclarationConfig(
                         name='y',
                         type='Real',
-                        lower_bound=None,
-                        upper_bound=None
+                        lower_bound='0',
+                        upper_bound='100'
                     ),
                     VariableDeclarationConfig(
                         name='v',
                         type='Real',
-                        lower_bound=None,
-                        upper_bound=None
+                        lower_bound='0',
+                        upper_bound='20'
                     ),
                     VariableDeclarationConfig(
                         name='a',
                         type='Real',
-                        lower_bound=None,
-                        upper_bound=None
+                        lower_bound='-10',
+                        upper_bound='10'
                     ),
                     VariableDeclarationConfig(
                         name='dx',
                         type='Real',
-                        lower_bound=None,
-                        upper_bound=None
+                        lower_bound='-1',
+                        upper_bound='1'
                     ),
                     VariableDeclarationConfig(
                         name='dy',
                         type='Real',
-                        lower_bound=None,
-                        upper_bound=None
+                        lower_bound='-1',
+                        upper_bound='1'
                     ),
                     VariableDeclarationConfig(
                         name='w',
                         type='Real',
-                        lower_bound=None,
-                        upper_bound=None
+                        lower_bound='-2',
+                        upper_bound='2'
                     ),
                     VariableDeclarationConfig(
                         name='r',
                         type='Real',
-                        lower_bound=None,
-                        upper_bound=None
+                        lower_bound='-1000',
+                        upper_bound='1000'
                     ),
                     VariableDeclarationConfig(
                         name='xo',
                         type='Real',
-                        lower_bound=None,
-                        upper_bound=None
+                        lower_bound='0',
+                        upper_bound='100'
                     ),
                     VariableDeclarationConfig(
                         name='yo',
                         type='Real',
-                        lower_bound=None,
-                        upper_bound=None
+                        lower_bound='0',
+                        upper_bound='100'
                     ),
                     VariableDeclarationConfig(
                         name='t',
                         type='Real',
-                        lower_bound=None,
-                        upper_bound=None
+                        lower_bound='0',
+                        upper_bound='1'
                     )
                 ],
                 auxiliary_variables=[]

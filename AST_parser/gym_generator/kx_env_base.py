@@ -6,12 +6,16 @@ import re
 import z3
 import matplotlib.pyplot as plt
 import pandas as pd
-from typing import List, Dict, Any, Optional, Tuple, Union
+from typing import List, Dict, Any, Optional, Tuple, Union, Callable # Ensure Callable is imported
 from abc import ABC, abstractmethod
 
 # NEW: Import expression_helpers for AST-based Z3 conversion
 from gym_generator.expression_helpers import format_kx_expr_for_z3_formula_generator
 from gym_generator.expression_helpers import expand_formula as ast_expand_formula # Alias to avoid name collision with self._expand_formula
+
+# NEW: Import cisb_analysis functions
+# Assuming cisb_analysis.py is in the same directory or an accessible package path
+from gym_generator.cisb_analysis import analyze_cisb_diversity, get_dynamic_bounding_box_defs, is_value_in_bounding_box, _approx_eq_helper
 
 # NEW: Safe division helper
 def safe_div(a, b):
@@ -24,7 +28,7 @@ def safe_div(a, b):
         return a * 1e18 if a != 0 else 0.0
 
 class _KeYmaeraXEnvBase(gym.Env, ABC):
-    def __init__(self, config_serialized_str: str, render_mode=None, cisb_size: int = 1000, cisb_populate_attempts: int = 5000, seed: Optional[int] = None, debug_mode: bool = False, max_episode_steps: int = 200):
+    def __init__(self, config_serialized_str: str, render_mode=None, cisb_size: int = 1000, cisb_populate_attempts: int = 1000, seed: Optional[int] = None, debug_mode: bool = False, max_episode_steps: int = 200):
         super().__init__()
         self.render_mode = render_mode
         self.np_random = np.random.default_rng(seed=seed)
@@ -542,7 +546,7 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
                 z3_symbols[const_decl.name] = z3.Real(const_decl.name)
                 if 'bound' in const_decl.metadata:
                     bound_str = const_decl.metadata['bound']
-                    match = re.match(r'\[(-?\d+(\.\d+)?):(-?\d+(\.\d+)?)\]', bound_str)
+                    match = re.match(r'[(-?\d+(\.\d+)?):(-?\d+(\.\d+)?)]', bound_str)
                     if match:
                         low = float(match.group(1))
                         high = float(match.group(3))
@@ -585,7 +589,7 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
                     continue
 
                 low, high = self.sample_ranges.get(var_name, (-100.0, 100.0))
-                if low == high: # Skip if the range is a single point
+                if _approx_eq_helper(low, high, tolerance=1e-9): # Use approx_eq_helper for comparison
                     continue
 
                 target = self.np_random.uniform(low, high)
@@ -670,10 +674,53 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
             print("DEBUG_CISB: Sample initial states from CISB (first 5):")
             for i, sample in enumerate(self._cisb[:min(5, len(self._cisb))]):
                 print(f"  Sample {i+1}: {sample}")
-                print(f"  Solved constants for CISB entry: A={sample.get('A')}, b={sample.get('b')}, ep={sample.get('ep')}")
+                # Ensure these keys exist before accessing
+                A_val = sample.get('A', 'N/A')
+                b_val = sample.get('b', 'N/A')
+                ep_val = sample.get('ep', 'N/A')
+                print(f"  Solved constants for CISB entry: A={A_val}, b={b_val}, ep={ep_val}")
+
         if not self._cisb:
             print("CRITICAL ERROR: CISB is empty! This environment cannot function correctly without initial states.")
             print("Please check precondition and sampling ranges for satisfiability.")
+
+        # NEW: Call the diversity analysis function after CISB population
+        if self.debug_mode or True: # Only run analysis in debug mode
+            # Create a wrapper for _evaluate_expression that temporarily updates state/constants
+            def cisb_entry_evaluate_expression_wrapper(expr_str: str, cisb_entry_context: Dict[str, Any]) -> Any:
+                """
+                A wrapper function to evaluate expressions in the context of a specific CISB entry.
+                It temporarily updates self.state and self.constants, then restores them.
+                """
+                # Store the current state/constants
+                temp_original_state = self.state.copy()
+                temp_original_constants = self.constants.copy()
+
+                # Update self.state and self.constants with values from cisb_entry_context
+                # Prioritize values from cisb_entry_context
+                for k, v in cisb_entry_context.items():
+                    if k in self.state:
+                        self.state[k] = v
+                    elif k in self.constants:
+                        self.constants[k] = v
+                
+                try:
+                    # _evaluate_expression will now use the temporarily updated self.state/self.constants
+                    # Pass an empty local_vars dict as the context is already in self.state/self.constants
+                    result = self._evaluate_expression(expr_str, local_vars={})
+                finally:
+                    # Restore original state and constants
+                    self.state = temp_original_state
+                    self.constants = temp_original_constants
+                return result
+
+            analyze_cisb_diversity(
+                self._cisb,
+                self.config,
+                self.sample_ranges,
+                cisb_entry_evaluate_expression_wrapper, # Pass the wrapper function
+                self.debug_mode
+            )
 
     def _compile_ode_func(self, func_str: str):
         exec_globals = {'np': np, 'math': math, 'self': self, 'safe_div': safe_div}
