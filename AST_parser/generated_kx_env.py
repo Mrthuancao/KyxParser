@@ -26,7 +26,7 @@ class GeneratedKXEnv(_KeYmaeraXEnvBase):
 
     def __init__(self, render_mode=None, cisb_size: int = 1000, cisb_populate_attempts: int = 1000, seed: Optional[int] = None, debug_mode: bool = False):
         super().__init__(config_serialized_str='''GymEnvironmentConfig(
-            env_name='IJRR17_Theorem_1__Static_safety',
+            env_name='IJRR17_Theorem_14__Reach_waypoint_with_deadline',
             definitions=DefinitionsConfig(
                 constants=[
                     ConstantDefinitionConfig(
@@ -60,200 +60,165 @@ class GeneratedKXEnv(_KeYmaeraXEnvBase):
                         }
                     ),
                     ConstantDefinitionConfig(
-                        name='W',
+                        name='GDelta',
                         type='Real',
                         value=None,
                         metadata={
                             'type': 'const',
-                            'bound': '0.1:1.0',
-                            'def': 'maximum steering (rotational velocity)'
+                            'bound': '1.0:10.0',
+                            'def': 'goal area size'
                         }
+                    ),
+                    ConstantDefinitionConfig(
+                        name='Vmax',
+                        type='Real',
+                        value=None,
+                        metadata={
+                            'type': 'const',
+                            'bound': '5.0:30.0',
+                            'def': 'maximum robot velocity'
+                        }
+                    ),
+                    ConstantDefinitionConfig(
+                        name='minV',
+                        type='Real',
+                        value='A*ep',
+                        metadata={}
                     )
                 ],
                 functions=[
+                    FunctionDefinitionConfig(
+                        name='waypointStartDist',
+                        return_type='Real',
+                        parameters=[
+                            ('Real', 'xg')
+                        ],
+                        body='xg-GDelta',
+                        metadata={}
+                    ),
+                    FunctionDefinitionConfig(
+                        name='waypointEndDist',
+                        return_type='Real',
+                        parameters=[
+                            ('Real', 'xg')
+                        ],
+                        body='xg+GDelta',
+                        metadata={}
+                    ),
+                    FunctionDefinitionConfig(
+                        name='maxTravelTime',
+                        return_type='Real',
+                        parameters=[
+                            ('Real', 'g')
+                        ],
+                        body='waypointStartDist(g)/minV',
+                        metadata={}
+                    ),
+                    FunctionDefinitionConfig(
+                        name='stopTime',
+                        return_type='Real',
+                        parameters=[
+                            ('Real', 'v')
+                        ],
+                        body='v/b',
+                        metadata={}
+                    ),
+                    FunctionDefinitionConfig(
+                        name='speedUpTime',
+                        return_type='Real',
+                        parameters=[
+                            ('Real', 'v')
+                        ],
+                        body='ep-v/A',
+                        metadata={}
+                    ),
                     FunctionDefinitionConfig(
                         name='stopDist',
                         return_type='Real',
                         parameters=[
                             ('Real', 'v')
                         ],
-                        body='v^2 / (2*b)',
+                        body='v^2/(2*b)',
                         metadata={}
                     ),
                     FunctionDefinitionConfig(
-                        name='accelComp',
+                        name='accComp',
                         return_type='Real',
                         parameters=[
                             ('Real', 'v')
                         ],
-                        body='((A/b + 1) * (A/2 * ep^2 + ep*v))',
-                        metadata={}
-                    ),
-                    FunctionDefinitionConfig(
-                        name='admissibleSeparation',
-                        return_type='Real',
-                        parameters=[
-                            ('Real', 'v')
-                        ],
-                        body='stopDist(v) + accelComp(v)',
+                        body='( (A/b + 1)*(A/2*ep^2 + ep*v) )',
                         metadata={}
                     )
                 ],
                 predicates=[
                     PredicateDefinitionConfig(
-                        name='isWellformedDir',
-                        parameters=[
-                            ('Real', 'dx'),
-                            ('Real', 'dy')
-                        ],
-                        body='dx^2 + dy^2 = 1',
-                        metadata={
-                            'type': 'progress',
-                            'reward': '10',
-                            'shape': '-((dx**2 + dy**2) - 1)**2',
-                            'on_success': {
-                                'action': 'continue',
-                                'status': 'none'
-                            },
-                            'on_failure': {
-                                'action': 'continue',
-                                'status': 'none'
-                            }
-                        }
-                    ),
-                    PredicateDefinitionConfig(
-                        name='isPhysicallyValid',
-                        parameters=[
-                            ('Real', 'v'),
-                            ('Real', 'r')
-                        ],
-                        body='v >= 0 & r != 0',
-                        metadata={
-                            'type': 'safety',
-                            'penalty': '-500',
-                            'on_failure': {
-                                'action': 'truncate',
-                                'status': 'failure'
-                            },
-                            'on_success': {
-                                'action': 'continue',
-                                'status': 'none'
-                            }
-                        }
-                    ),
-                    PredicateDefinitionConfig(
-                        name='isSafe',
-                        parameters=[
-                            ('Real', 'x'),
-                            ('Real', 'y'),
-                            ('Real', 'v'),
-                            ('Real', 'xo'),
-                            ('Real', 'yo')
-                        ],
-                        body='abs(x-xo) > stopDist(v) | abs(y-yo) > stopDist(v)',
-                        metadata={
-                            'type': 'safety',
-                            'penalty': '-1000',
-                            'shape': '(abs(x-xo) - stopDist(v)) + (abs(y-yo) - stopDist(v))',
-                            'on_failure': {
-                                'action': 'truncate',
-                                'status': 'failure'
-                            },
-                            'on_success': {
-                                'action': 'continue',
-                                'status': 'none'
-                            }
-                        }
-                    ),
-                    PredicateDefinitionConfig(
-                        name='isEfficient',
-                        parameters=[
-                            ('Real', 'v')
-                        ],
-                        body='v >= 0',
-                        metadata={
-                            'type': 'progress',
-                            'shape': '1/v if v > 0 else v',
-                            'on_success': {
-                                'action': 'continue',
-                                'status': 'none'
-                            },
-                            'on_failure': {
-                                'action': 'continue',
-                                'status': 'none'
-                            }
-                        }
-                    ),
-                    PredicateDefinitionConfig(
                         name='bounds',
                         parameters=[],
-                        body="""A >= 0
-    & b > 0
-    & ep > 0""",
+                        body="""A > 0                                                                                                             
+        & b > 0                                                                                                             
+        & ep > 0                                                                                                            
+        & Vmax >= 2*A*ep
+        & GDelta > Vmax*ep + Vmax^2/(2*b)""",
                         metadata={}
                     ),
                     PredicateDefinitionConfig(
                         name='initialState',
                         parameters=[
-                            ('Real', 'x'),
-                            ('Real', 'y'),
-                            ('Real', 'v'),
-                            ('Real', 'dx'),
-                            ('Real', 'dy'),
-                            ('Real', 'xo'),
-                            ('Real', 'yo')
+                            ('Real', 'xr'),
+                            ('Real', 'vr'),
+                            ('Real', 'xg'),
+                            ('Real', 'T')
                         ],
-                        body="""v = 0
-    & (x-xo)^2 + (y-yo)^2 > 0
-    & isWellformedDir(dx, dy)
-    & r != 0""",
+                        body="""vr = 0
+        & xr < waypointStartDist(xg)
+        & T > ep + maxTravelTime(xg-xr) + ep + stopTime(Vmax)""",
                         metadata={}
                     ),
                     PredicateDefinitionConfig(
                         name='assumptions',
                         parameters=[
-                            ('Real', 'x'),
-                            ('Real', 'y'),
-                            ('Real', 'v'),
-                            ('Real', 'dx'),
-                            ('Real', 'dy'),
-                            ('Real', 'xo'),
-                            ('Real', 'yo')
+                            ('Real', 'xr'),
+                            ('Real', 'vr'),
+                            ('Real', 'xg'),
+                            ('Real', 'T')
                         ],
-                        body='bounds() & initialState(x, y, v, dx, dy, xo, yo)',
+                        body='bounds() & initialState(xr, vr, xg, T)',
                         metadata={}
                     ),
                     PredicateDefinitionConfig(
                         name='loopinv',
                         parameters=[
-                            ('Real', 'x'),
-                            ('Real', 'y'),
-                            ('Real', 'v'),
-                            ('Real', 'dx'),
-                            ('Real', 'dy'),
-                            ('Real', 'xo'),
-                            ('Real', 'yo'),
-                            ('Real', 'r')
+                            ('Real', 'xr'),
+                            ('Real', 'vr'),
+                            ('Real', 'xg'),
+                            ('Real', 'T')
                         ],
-                        body="""isPhysicallyValid(v, r)
-    & isWellformedDir(dx, dy)
-    & isSafe(x, y, v, xo, yo)
-    & isEfficient(v)""",
-                        metadata={}
+                        body="""0 <= vr & vr <= Vmax & xr + stopDist(vr) < waypointEndDist(xg)
+                & (waypointStartDist(xg) < xr -> (vr = 0 | T >= stopTime(vr)))
+                & (xr <= waypointStartDist(xg) ->
+                    (vr >= minV & T > maxTravelTime(xg-xr) + ep + stopTime(Vmax))
+                    | (vr <= minV & T > speedUpTime(vr) + maxTravelTime(xg-xr) + ep + stopTime(Vmax)))""",
+                        metadata={
+                            'type': 'safety',
+                            'penalty': '-1000',
+                            'on_failure': {
+                                'action': 'truncate',
+                                'status': 'failure'
+                            }
+                        }
                     ),
                     PredicateDefinitionConfig(
                         name='ensure',
                         parameters=[
-                            ('Real', 'x'),
-                            ('Real', 'y'),
-                            ('Real', 'xo'),
-                            ('Real', 'yo')
+                            ('Real', 'xr'),
+                            ('Real', 'vr'),
+                            ('Real', 'xg')
                         ],
-                        body='(x - xo)^2 + (y - yo)^2 > 0',
+                        body='waypointStartDist(xg) < xr & vr = 0',
                         metadata={
                             'type': 'progress',
-                            'reward': '500',
-                            'penalty': '-1000',
+                            'reward': '1000',
                             'on_success': {
                                 'action': 'terminate',
                                 'status': 'success'
@@ -274,53 +239,39 @@ class GeneratedKXEnv(_KeYmaeraXEnvBase):
                                 SequenceActionConfig(
                                     actions=[
                                         DeterministicAssignmentActionConfig(
-                                            variable='a',
+                                            variable="""(
+                ar""",
                                             value='-b'
                                         )
                                     ]
                                 ),
                                 SequenceActionConfig(
                                     actions=[
-                                        ActionConstraintConfig(
-                                            formula='v = 0'
-                                        ),
                                         DeterministicAssignmentActionConfig(
-                                            variable='a',
-                                            value='0'
-                                        ),
-                                        DeterministicAssignmentActionConfig(
-                                            variable='w',
-                                            value='0'
+                                            variable='ar',
+                                            value="""0) 
+            )
+        )"""
                                         )
                                     ]
                                 ),
                                 SequenceActionConfig(
                                     actions=[
                                         DeterministicAssignmentActionConfig(
-                                            variable='a',
-                                            value='A'
-                                        ),
-                                        NondeterministicAssignmentActionConfig(
-                                            variable='w'
-                                        ),
-                                        ActionConstraintConfig(
-                                            formula='-W<=w & w<=W'
-                                        ),
-                                        NondeterministicAssignmentActionConfig(
-                                            variable='r'
-                                        ),
-                                        NondeterministicAssignmentActionConfig(
-                                            variable='xo'
-                                        ),
-                                        NondeterministicAssignmentActionConfig(
-                                            variable='yo'
-                                        ),
-                                        ActionConstraintConfig(
-                                            formula='r!=0 & r*w = v'
-                                        ),
-                                        ActionConstraintConfig(
-                                            formula="""abs(x-xo) > admissibleSeparation(v)
-        | abs(y-yo) > admissibleSeparation(v)"""
+                                            variable='ar',
+                                            value="""A
+                )"""
+                                        )
+                                    ]
+                                ),
+                                SequenceActionConfig(
+                                    actions=[
+                                        DeterministicAssignmentActionConfig(
+                                            variable='ar',
+                                            value="""0
+                )
+            )
+        )"""
                                         )
                                     ]
                                 )
@@ -332,46 +283,30 @@ class GeneratedKXEnv(_KeYmaeraXEnvBase):
                         name='stepFunc',
                         odes=[
                             ODEConfig(
-                                variable='x',
-                                equation='v * dx'
+                                variable='xr',
+                                equation='vr'
                             ),
                             ODEConfig(
-                                variable='y',
-                                equation='v * dy'
-                            ),
-                            ODEConfig(
-                                variable='v',
-                                equation='a'
-                            ),
-                            ODEConfig(
-                                variable='dx',
-                                equation='-w * dy'
-                            ),
-                            ODEConfig(
-                                variable='dy',
-                                equation='w * dx'
-                            ),
-                            ODEConfig(
-                                variable='w',
-                                equation='a/r'
+                                variable='vr',
+                                equation='ar'
                             ),
                             ODEConfig(
                                 variable='t',
                                 equation='1'
+                            ),
+                            ODEConfig(
+                                variable='T',
+                                equation='-1'
                             )
                         ],
                         evolution_domain=EvolutionDomainConfig(
                             constraints=[
                                 't <= ep',
-                                'v >= 0'
+                                'vr >= 0'
                             ]
                         ),
                         duration=None,
-                        raw_body_snippet="""{
-        x' = v * dx, y' = v * dy, v' = a,
-        dx' = -w * dy, dy' = w * dx, w' = a/r,
-        t' = 1 & t <= ep & v >= 0
-      }""",
+                        raw_body_snippet="{xr' = vr, vr' = ar, t' = 1, T'=-1 & t <= ep & vr >= 0}",
                         metadata={}
                     )
                 ]
@@ -379,61 +314,25 @@ class GeneratedKXEnv(_KeYmaeraXEnvBase):
             variables=VariablesConfig(
                 state_variables=[
                     VariableDeclarationConfig(
-                        name='x',
+                        name='xr',
                         type='Real',
                         lower_bound='0',
                         upper_bound='100'
                     ),
                     VariableDeclarationConfig(
-                        name='y',
-                        type='Real',
-                        lower_bound='0',
-                        upper_bound='100'
-                    ),
-                    VariableDeclarationConfig(
-                        name='v',
+                        name='vr',
                         type='Real',
                         lower_bound='0',
                         upper_bound='20'
                     ),
                     VariableDeclarationConfig(
-                        name='a',
+                        name='ar',
                         type='Real',
                         lower_bound='-10',
                         upper_bound='10'
                     ),
                     VariableDeclarationConfig(
-                        name='dx',
-                        type='Real',
-                        lower_bound='-1',
-                        upper_bound='1'
-                    ),
-                    VariableDeclarationConfig(
-                        name='dy',
-                        type='Real',
-                        lower_bound='-1',
-                        upper_bound='1'
-                    ),
-                    VariableDeclarationConfig(
-                        name='w',
-                        type='Real',
-                        lower_bound='-2',
-                        upper_bound='2'
-                    ),
-                    VariableDeclarationConfig(
-                        name='r',
-                        type='Real',
-                        lower_bound='-1000',
-                        upper_bound='1000'
-                    ),
-                    VariableDeclarationConfig(
-                        name='xo',
-                        type='Real',
-                        lower_bound='0',
-                        upper_bound='100'
-                    ),
-                    VariableDeclarationConfig(
-                        name='yo',
+                        name='xg',
                         type='Real',
                         lower_bound='0',
                         upper_bound='100'
@@ -443,39 +342,30 @@ class GeneratedKXEnv(_KeYmaeraXEnvBase):
                         type='Real',
                         lower_bound='0',
                         upper_bound='1'
+                    ),
+                    VariableDeclarationConfig(
+                        name='T',
+                        type='Real',
+                        lower_bound='0',
+                        upper_bound='1000'
                     )
                 ],
                 auxiliary_variables=[]
             ),
             problem=ProblemConfig(
                 precondition=PreconditionConfig(
-                    formula='assumptions(x, y, v, dx, dy, xo, yo)'
+                    formula='assumptions(xr, vr, xg, T)'
                 ),
                 loop_execution=LoopExecutionConfig(
                     iterations='inf',
-                    loop_invariant_formula='loopinv(x, y, v, dx, dy, xo, yo, r)',
+                    loop_invariant_formula='',
                     loop_body=SequenceActionConfig(
-                        actions=[
-                            SequenceActionConfig(
-                                actions=[
-                                    CallHybridProgramConfig(
-                                        hp_name='controlFunc'
-                                    ),
-                                    DeterministicAssignmentActionConfig(
-                                        variable='t',
-                                        value='0'
-                                    )
-                                ]
-                            ),
-                            HybridProgramStepConfig(
-                                hp_name='stepFunc',
-                                invariant_formula='t>=0, isWellformedDir(dx, dy)'
-                            )
-                        ]
+                        actions=[]
                     )
                 ),
                 postcondition=PostconditionConfig(
-                    formula='ensure(x, y, xo, yo)'
+                    formula="""(xr < waypointEndDist(xg) & (T <= 0 -> ensure(xr, vr, xg))) 
+        & < dwwpdl; > ensure(xr, vr, xg)"""
                 )
             )
         )''', render_mode=render_mode, cisb_size=cisb_size, cisb_populate_attempts=cisb_populate_attempts, seed=seed, debug_mode=debug_mode)
@@ -483,21 +373,23 @@ class GeneratedKXEnv(_KeYmaeraXEnvBase):
         self.constants['ep'] = 0.0
         self.constants['b'] = 0.0
         self.constants['A'] = 0.0
-        self.constants['W'] = 0.0
+        self.constants['GDelta'] = 0.0
+        self.constants['Vmax'] = 0.0
+        self.constants['minV'] = ((self.constants['A']) * (self.constants['ep']))
+        self.functions['waypointStartDist'] = lambda xg: ((xg) - (self.constants['GDelta']))
+        self.functions['waypointEndDist'] = lambda xg: ((xg) + (self.constants['GDelta']))
+        self.functions['maxTravelTime'] = lambda g: ((self.functions['waypointStartDist'](g)) / (self.constants['minV']))
+        self.functions['stopTime'] = lambda v: ((v) / (self.constants['b']))
+        self.functions['speedUpTime'] = lambda v: ((self.constants['ep']) - (((v) / (self.constants['A']))))
         self.functions['stopDist'] = lambda v: ((((v) ** (2))) / (((2) * (self.constants['b']))))
-        self.functions['accelComp'] = lambda v: ((((((self.constants['A']) / (self.constants['b']))) + (1))) * (((((((self.constants['A']) / (2))) * (((self.constants['ep']) ** (2))))) + (((self.constants['ep']) * (v))))))
-        self.functions['admissibleSeparation'] = lambda v: ((self.functions['stopDist'](v)) + (self.functions['accelComp'](v)))
-        self.predicates['isWellformedDir'] = lambda dx, dy: self._approx_eq(((((dx) ** (2))) + (((dy) ** (2)))), 1)
-        self.predicates['isPhysicallyValid'] = lambda v, r: ((((v) >= (0))) and ((not self._approx_eq(r, 0))))
-        self.predicates['isSafe'] = lambda x, y, v, xo, yo: ((((np.abs(((x) - (xo)))) > (self.functions['stopDist'](v)))) or (((np.abs(((y) - (yo)))) > (self.functions['stopDist'](v)))))
-        self.predicates['isEfficient'] = lambda v: ((v) >= (0))
-        self.predicates['bounds'] = lambda : ((((((self.constants['A']) >= (0))) and (((self.constants['b']) > (0))))) and (((self.constants['ep']) > (0))))
-        self.predicates['initialState'] = lambda x, y, v, dx, dy, xo, yo: ((((((self._approx_eq(v, 0)) and (((((((((x) - (xo))) ** (2))) + (((((y) - (yo))) ** (2))))) > (0))))) and (self.predicates['isWellformedDir'](dx, dy)))) and ((not self._approx_eq(self.state['r'], 0))))
-        self.predicates['assumptions'] = lambda x, y, v, dx, dy, xo, yo: ((self.predicates['bounds']()) and (self.predicates['initialState'](x, y, v, dx, dy, xo, yo)))
-        self.predicates['loopinv'] = lambda x, y, v, dx, dy, xo, yo, r: ((((((self.predicates['isPhysicallyValid'](v, r)) and (self.predicates['isWellformedDir'](dx, dy)))) and (self.predicates['isSafe'](x, y, v, xo, yo)))) and (self.predicates['isEfficient'](v)))
-        self.predicates['ensure'] = lambda x, y, xo, yo: ((((((((x) - (xo))) ** (2))) + (((((y) - (yo))) ** (2))))) > (0))
+        self.functions['accComp'] = lambda v: ((((((self.constants['A']) / (self.constants['b']))) + (1))) * (((((((self.constants['A']) / (2))) * (((self.constants['ep']) ** (2))))) + (((self.constants['ep']) * (v))))))
+        self.predicates['bounds'] = lambda : ((((((((((self.constants['A']) > (0))) and (((self.constants['b']) > (0))))) and (((self.constants['ep']) > (0))))) and (((self.constants['Vmax']) >= (((((2) * (self.constants['A']))) * (self.constants['ep']))))))) and (((self.constants['GDelta']) > (((((self.constants['Vmax']) * (self.constants['ep']))) + (((((self.constants['Vmax']) ** (2))) / (((2) * (self.constants['b']))))))))))
+        self.predicates['initialState'] = lambda xr, vr, xg, T: ((((self._approx_eq(vr, 0)) and (((xr) < (self.functions['waypointStartDist'](xg)))))) and (((T) > (((((((self.constants['ep']) + (self.functions['maxTravelTime'](((xg) - (xr)))))) + (self.constants['ep']))) + (self.functions['stopTime'](self.constants['Vmax'])))))))
+        self.predicates['assumptions'] = lambda xr, vr, xg, T: ((self.predicates['bounds']()) and (self.predicates['initialState'](xr, vr, xg, T)))
+        self.predicates['loopinv'] = lambda xr, vr, xg, T: ((((((((((0) <= (vr))) and (((vr) <= (self.constants['Vmax']))))) and (((((xr) + (self.functions['stopDist'](vr)))) < (self.functions['waypointEndDist'](xg)))))) and (((not (((self.functions['waypointStartDist'](xg)) < (xr)))) or (((self._approx_eq(vr, 0)) or (((T) >= (self.functions['stopTime'](vr)))))))))) and (((not (((xr) <= (self.functions['waypointStartDist'](xg))))) or (((((((vr) >= (self.constants['minV']))) and (((T) > (((((self.functions['maxTravelTime'](((xg) - (xr)))) + (self.constants['ep']))) + (self.functions['stopTime'](self.constants['Vmax'])))))))) or (((((vr) <= (self.constants['minV']))) and (((T) > (((((((self.functions['speedUpTime'](vr)) + (self.functions['maxTravelTime'](((xg) - (xr)))))) + (self.constants['ep']))) + (self.functions['stopTime'](self.constants['Vmax'])))))))))))))
+        self.predicates['ensure'] = lambda xr, vr, xg: ((((self.functions['waypointStartDist'](xg)) < (xr))) and (self._approx_eq(vr, 0)))
 
-        self._state_keys = ['x', 'y', 'v', 'a', 'dx', 'dy', 'w', 'r', 'xo', 'yo', 't']
+        self._state_keys = ['xr', 'vr', 'ar', 'xg', 't', 'T']
         self.state = {key: 0.0 for key in self._state_keys}
 
         low_bounds = np.array([-np.inf] * len(self._state_keys), dtype=np.float32)
@@ -505,142 +397,100 @@ class GeneratedKXEnv(_KeYmaeraXEnvBase):
         self.observation_space = spaces.Box(low_bounds, high_bounds, shape=(len(self._state_keys),), dtype=np.float32)
 
         self.action_space = spaces.Dict({
-                'choice_ChoiceLevel_0': spaces.Discrete(3),
-                'assign_w': spaces.Box(low=-np.inf, high=np.inf, shape=(), dtype=np.float32),
-                'assign_r': spaces.Box(low=-np.inf, high=np.inf, shape=(), dtype=np.float32),
-                'assign_xo': spaces.Box(low=-np.inf, high=np.inf, shape=(), dtype=np.float32),
-                'assign_yo': spaces.Box(low=-np.inf, high=np.inf, shape=(), dtype=np.float32),
+                'choice_ChoiceLevel_0': spaces.Discrete(4),
                 })
-        self._action_space_keys = ['choice_ChoiceLevel_0', 'assign_w', 'assign_r', 'assign_xo', 'assign_yo']
+        self._action_space_keys = ['choice_ChoiceLevel_0']
         self._control_func_action_config = ChoiceActionConfig(
                 level_name='ChoiceLevel_0',
                 choices=[
                     SequenceActionConfig(
                         actions=[
                             DeterministicAssignmentActionConfig(
-                                variable='a',
+                                variable="""(
+                ar""",
                                 value='-b'
                             )
                         ]
                     ),
                     SequenceActionConfig(
                         actions=[
-                            ActionConstraintConfig(
-                                formula='v = 0'
-                            ),
                             DeterministicAssignmentActionConfig(
-                                variable='a',
-                                value='0'
-                            ),
-                            DeterministicAssignmentActionConfig(
-                                variable='w',
-                                value='0'
+                                variable='ar',
+                                value="""0) 
+            )
+        )"""
                             )
                         ]
                     ),
                     SequenceActionConfig(
                         actions=[
                             DeterministicAssignmentActionConfig(
-                                variable='a',
-                                value='A'
-                            ),
-                            NondeterministicAssignmentActionConfig(
-                                variable='w'
-                            ),
-                            ActionConstraintConfig(
-                                formula='-W<=w & w<=W'
-                            ),
-                            NondeterministicAssignmentActionConfig(
-                                variable='r'
-                            ),
-                            NondeterministicAssignmentActionConfig(
-                                variable='xo'
-                            ),
-                            NondeterministicAssignmentActionConfig(
-                                variable='yo'
-                            ),
-                            ActionConstraintConfig(
-                                formula='r!=0 & r*w = v'
-                            ),
-                            ActionConstraintConfig(
-                                formula="""abs(x-xo) > admissibleSeparation(v)
-        | abs(y-yo) > admissibleSeparation(v)"""
+                                variable='ar',
+                                value="""A
+                )"""
+                            )
+                        ]
+                    ),
+                    SequenceActionConfig(
+                        actions=[
+                            DeterministicAssignmentActionConfig(
+                                variable='ar',
+                                value="""0
+                )
+            )
+        )"""
                             )
                         ]
                     )
                 ]
             )
 
-        self._ode_state_map = {'x': 0, 'y': 1, 'v': 2, 'a': 3, 'dx': 4, 'dy': 5, 'w': 6, 'r': 7, 'xo': 8, 'yo': 9, 't': 10}
-        self._ode_state_idx_map = {0: 'x', 1: 'y', 2: 'v', 3: 'a', 4: 'dx', 5: 'dy', 6: 'w', 7: 'r', 8: 'xo', 9: 'yo', 10: 't'}
+        self._ode_state_map = {'xr': 0, 'vr': 1, 'ar': 2, 'xg': 3, 't': 4, 'T': 5}
+        self._ode_state_idx_map = {0: 'xr', 1: 'vr', 2: 'ar', 3: 'xg', 4: 't', 5: 'T'}
 
         _ode_func_str_local = '''def ode_func(t_val, y_array):
     # Map y array to named variables for easier access
-    x = y_array[0]
-    y = y_array[1]
-    v = y_array[2]
-    a = y_array[3]
-    dx = y_array[4]
-    dy = y_array[5]
-    w = y_array[6]
-    r = y_array[7]
-    xo = y_array[8]
-    yo = y_array[9]
-    t = y_array[10]
+    xr = y_array[0]
+    vr = y_array[1]
+    ar = y_array[2]
+    xg = y_array[3]
+    t = y_array[4]
+    T = y_array[5]
 
     # Calculate derivatives
     dydt = [
-        ((v) * (dx)), # dx/dt
-        ((v) * (dy)), # dy/dt
-        a, # dv/dt
-        0.0, # da/dt
-        (((-(w))) * (dy)), # ddx/dt
-        ((w) * (dx)), # ddy/dt
-        (((a) / (r))) if r != 0 else 0.0, # dw/dt
-        0.0, # dr/dt
-        0.0, # dxo/dt
-        0.0, # dyo/dt
+        vr, # dxr/dt
+        ar, # dvr/dt
+        0.0, # dar/dt
+        0.0, # dxg/dt
         1, # dt/dt
+        (-(1)), # dT/dt
     ]
     return dydt'''
         _ode_events_str_local = '''def event_t_max(t_val, y_array):
-    return self.constants['ep'] - y_array[10]
+    return self.constants['ep'] - y_array[4]
 event_t_max.terminal = True
 event_t_max.direction = -1
 
-def event_v_min(t_val, y_array):
-    v_val = y_array[2]
-    a_val = y_array[3]
-
-    if v_val == 0 and a_val > 0:
-        return 1.0
-    return v_val
-event_v_min.terminal = True
-event_v_min.direction = -1
-
 ode_events = [
     event_t_max,
-    event_v_min,
 ]'''
         self._ode_func_compiled = self._compile_ode_func(_ode_func_str_local)
         self._ode_events_compiled = self._compile_ode_events(_ode_events_str_local)
 
         self.sample_ranges = {
-                    'x': (-100.0, 100.0),
-                    'y': (-100.0, 100.0),
-                    'v': (0.0, 10.0),
-                    'a': (-5.0, 5.0),
-                    'dx': (-1.0, 1.0),
-                    'dy': (-1.0, 1.0),
-                    'w': (-2.0, 2.0),
-                    'r': (0.1, 10.0),
-                    'xo': (-100.0, 100.0),
-                    'yo': (-100.0, 100.0),
+                    'xr': (-100.0, 100.0),
+                    'vr': (-100.0, 100.0),
+                    'ar': (-100.0, 100.0),
+                    'xg': (-100.0, 100.0),
                     't': (0.0, 0.0),
+                    'T': (-100.0, 100.0),
                     'ep': (0.1, 5.0),
                     'b': (0.1, 5.0),
                     'A': (0.1, 5.0),
-                    'W': (0.0, 2.0),
+                    'GDelta': (-100.0, 100.0),
+                    'Vmax': (-100.0, 100.0),
+                    'minV': (-100.0, 100.0),
                 }
 
         self._populate_cisb_diverse_z3()

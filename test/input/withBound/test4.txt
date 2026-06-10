@@ -85,18 +85,18 @@ Definitions
 End.
 
 ProgramVariables
-  // @var: bound=[0:100]; def="robot position: x"
-  Real xr;		/* robot position: x */
-  // @var: bound=[0:20]; def="robot translational velocity"
-  Real vr;		/* robot translational velocity */
-  // @var: bound=[-10:10]; def="robot translational acceleration"
-  Real ar;		/* robot translational acceleration */
-  // @var: bound=[0:100]; def="goal position: x"
-  Real xg;		/* goal position */
-  // @var: bound=[0:1]; def="time elapsed in current control step"
-  Real t;		  /* control cycle time */
-  // @var: bound=[0:1000]; def="global time remaining until deadline"
-  Real T;		  /* global time */
+  // @var: bound=[0:100], def="robot position: x"
+  Real xr;		
+  // @var: bound=[0:20], def="robot translational velocity"
+  Real vr;		
+  // @var: bound=[-10:10], def="robot translational acceleration"
+  Real ar;		
+  // @var: bound=[0:100], def="goal position: x"
+  Real xg;		
+  // @var: bound=[0:1], def="time elapsed in current control step"
+  Real t;		  
+  // @var: bound=[0:1000], def="global time remaining until deadline"
+  Real T;		 
 End.
 
 Problem

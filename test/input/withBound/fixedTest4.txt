@@ -1,0 +1,141 @@
+Theorem "IJRR17/Theorem 14: Reach waypoint with deadline"
+
+/*
+ *	Robot must stop within distance delta at goal.
+ *
+ *  Robot
+ * 	- must stop within distance delta of goal
+ *  - can only drive straight and forward
+ *  - ensures progress towards goal
+ *
+ *  Liveness property:
+ *  - Robot can stop at goal
+ *
+ */
+
+Definitions
+    // @const: bound=[0.1:0.5]; def="time limit for control decisions"
+    Real ep;      /* time limit for control decisions */
+    // @const: bound=[0.5:5.0]; def="minimum braking capability of the robot"
+    Real b;       /* minimum braking capability of the robot */
+    // @const: bound=[1.0:10.0]; def="maximum acceleration"
+    Real A;       /* maximum acceleration -b <= a <= A */
+    // @const: bound=[1.0:10.0]; def="goal area size"
+    Real GDelta;	 /* goal area size */
+    // @const: bound=[5.0:30.0]; def="maximum robot velocity"
+    Real Vmax;    /* robot cannot go faster than this */
+
+    Real waypointStartDist(Real xg) = xg-GDelta;
+    Real waypointEndDist(Real xg)   = xg+GDelta;
+
+    Real minV = A*ep;
+    Real maxTravelTime(Real g) = waypointStartDist(g)/minV;
+    Real stopTime(Real v)      = v/b;
+    Real speedUpTime(Real v)   = ep-v/A;
+
+    Real stopDist(Real v) = v^2/(2*b);
+    Real accComp(Real v)  = ( (A/b + 1)*(A/2*ep^2 + ep*v) );
+
+    Bool bounds() <-> (                                                                  /* Bounds for global constants */
+        A > 0                                                                                         /* Working engine */
+        & b > 0                                                                                         /* Working brakes */
+        & ep > 0                                                                              /* Controller reaction time */
+        & Vmax >= 2*A*ep
+        & GDelta > Vmax*ep + Vmax^2/(2*b)  /* waypoint is large enough that robot can start driving and still stop inside */
+    );
+
+    Bool initialState(Real xr, Real vr, Real xg, Real T) <-> (                      /* Stopped somewhere safe initially */
+        vr = 0
+        & xr < waypointStartDist(xg)
+        & T > ep + maxTravelTime(xg-xr) + ep + stopTime(Vmax)
+    );
+    Bool assumptions(Real xr, Real vr, Real xg, Real T) <->              /* Under these assumptions we guarantee safety */
+        bounds() & initialState(xr, vr, xg, T);
+
+    // @safety: penalty=-1000, on_failure=truncate:status=failure
+    Bool loopinv(Real xr, Real vr, Real xg, Real T) <-> ( // Added T to parameters as it's used in the invariant
+        0 <= vr & vr <= Vmax & xr + stopDist(vr) < waypointEndDist(xg)
+                & (waypointStartDist(xg) < xr -> (vr = 0 | T >= stopTime(vr)))
+                & (xr <= waypointStartDist(xg) ->
+                    (vr >= minV & T > maxTravelTime(xg-xr) + ep + stopTime(Vmax))
+                    | (vr <= minV & T > speedUpTime(vr) + maxTravelTime(xg-xr) + ep + stopTime(Vmax)))
+    );
+
+    // Renamed 'ctrl' to 'controlFunc' as per documentation.
+    HP controlFunc ::= {
+        // Top-level choice: either enter the "goal area" logic or the "outside goal area" logic
+        (
+            // First branch: if (xr > waypointStartDist(xg))
+            ? (xr > waypointStartDist(xg)) ;
+            (
+                // Choice within this branch: either brake or stay stopped
+                ar := -b
+                ++
+                (?vr = 0 ; ar := 0) // Sequence: test vr=0 then assign ar=0
+            )
+        )
+        ++ // Separates the 'if' part from the 'else' part
+        (
+            // Second branch: else (implicitly, !(xr > waypointStartDist(xg)))
+            ? (!(xr > waypointStartDist(xg))) ;
+            (
+                // Inner choice: accelerate or coast
+                (
+                    // Inner first branch: if (xr + stopDist(vr) + accComp(vr) < waypointEndDist(xg) & vr+A*ep <= Vmax)
+                    ? (xr + stopDist(vr) + accComp(vr) < waypointEndDist(xg) & vr+A*ep <= Vmax) ;
+                    ar := A
+                )
+                ++ // Separates the inner 'if' from the inner 'else'
+                (
+                    // Inner second branch: else (implicitly, !(xr + ...))
+                    ? (!(xr + stopDist(vr) + accComp(vr) < waypointEndDist(xg) & vr+A*ep <= Vmax)) ;
+                    ar := 0
+                )
+            )
+        )
+    };
+
+    // Renamed 'dyn' to 'stepFunc' as per documentation.
+    HP stepFunc ::= {xr' = vr, vr' = ar, t' = 1, T'=-1 & t <= ep & vr >= 0};
+
+    HP dwwpdl ::= {
+        {	{ controlFunc; t := 0; } // Using the renamed controlFunc
+        stepFunc; // Using the renamed stepFunc
+        }*@invariant(loopinv(xr, vr, xg, T)) // Updated loopinv parameters
+    };
+
+    // Define the 'ensure' predicate for the goal condition, with progress metadata.
+    // This captures the liveness postcondition from the original problem statement,
+    // which is typically the success condition for an RL agent.
+    // The safety part of the original postcondition is handled in the Problem section.
+    // @progress: reward=1000, on_success=terminate:status=success, on_failure=terminate:status=failure
+    Bool ensure(Real xr, Real vr, Real xg) <-> (
+        waypointStartDist(xg) < xr & vr = 0
+    );
+
+End.
+
+ProgramVariables
+    // @var: bound=[0:100], def="robot position: x"
+    Real xr;
+    // @var: bound=[0:20], def="robot translational velocity"
+    Real vr;
+    // @var: bound=[-10:10], def="robot translational acceleration"
+    Real ar;
+    // @var: bound=[0:100], def="goal position: x"
+    Real xg;
+    // @var: bound=[0:1], def="time elapsed in current control step"
+    Real t;
+    // @var: bound=[0:1000], def="global time remaining until deadline"
+    Real T;
+End.
+
+Problem
+    // The problem statement is adapted to use 'assumptions' and 'ensure'.
+    // The original problem combined safety and liveness.
+    // The first part is the safety property (what must always hold at the end).
+    // The second part is the liveness property (that the 'ensure' goal is reachable).
+    assumptions(xr, vr, xg, T)
+        -> [ dwwpdl; ](xr < waypointEndDist(xg) & (T <= 0 -> ensure(xr, vr, xg))) // Safety postcondition
+        & < dwwpdl; > ensure(xr, vr, xg)                                         // Liveness postcondition
+End.
