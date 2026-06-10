@@ -42,7 +42,7 @@ def _sanitize_class_name(original_name: str) -> str:
 
 
 def generate_gym_environment_code(config: GymEnvironmentConfig, envName: str = "",
-                                  cisb_size: int = 1000, cisb_populate_attempts: int = 5000,
+                                  cisb_size: int = 1000, cisb_populate_attempts: int = 1000,
                                   seed: Optional[int] = None, debug_mode: bool = False) -> str:
     """
     Generates Python code for a Gymnasium environment based on the provided

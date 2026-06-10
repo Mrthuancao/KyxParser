@@ -2,13 +2,24 @@
 from __future__ import annotations
 import re
 import logging
-from typing import Optional
+from typing import Optional, Dict, Any, List, Tuple, Union
 
-# Import AST node definitions
+# Import AST node definitions from ast_config.py
 from ast_config import ASTNode, Definition, HybridProgram, Variable, ProblemStatement
 
 # Import ast_config and its helper functions
-from pyast_config import *
+# Assuming pyast_config.py contains the GymEnvironmentConfig and related classes
+from pyast_config import (
+    GymEnvironmentConfig, DefinitionsConfig, VariablesConfig, ProblemConfig,
+    ConstantDefinitionConfig, FunctionDefinitionConfig, PredicateDefinitionConfig,
+    HybridProgramConfig, ControlFuncConfig, StepFuncConfig, ODEConfig, EvolutionDomainConfig,
+    VariableDeclarationConfig, PreconditionConfig, PostconditionConfig,
+    LoopExecutionConfig, HybridProgramStepConfig,
+    ActionType, ChoiceActionConfig, SequenceActionConfig,
+    DeterministicAssignmentActionConfig, NondeterministicAssignmentActionConfig,
+    ActionConstraintConfig, CallHybridProgramConfig
+)
+
 
 # Configure logging (you might want to customize this further in a real application)
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
@@ -17,7 +28,8 @@ logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 class KeYmaeraXParser:
     def __init__(self, source_code):
         self.source_code = source_code
-        self.ast_root = ASTNode("KeYmaeraXSpecification")
+        # ASTNode is now imported from ast_config, which has metadata support
+        self.ast_root = ASTNode("KeYmaeraXSpecification") 
         self._cleanup_source()
         logging.debug("KeYmaeraXParser initialized. Source code cleaned.")
 
@@ -287,8 +299,8 @@ class KeYmaeraXParser:
                         if terminator_idx != -1:
                             full_hp_block_end_idx = terminator_idx + 1
                     
-                    hp_node = HybridProgram(hp_name, hp_body_raw)
-                    hp_node.metadata = metadata_dict
+                    # Pass metadata to the HybridProgram AST node constructor
+                    hp_node = HybridProgram(hp_name, hp_body_raw, metadata=metadata_dict) 
                     defs_node.add_child(hp_node)
                     logging.debug(f"Added HybridProgram ASTNode for '{hp_name}' to DefinitionsBlock.")
 
@@ -325,8 +337,8 @@ class KeYmaeraXParser:
                 if d_type == "Bool" and d_val.startswith('(') and d_val.endswith(')'):
                     d_val = d_val[1:-1].strip()
 
-                def_node = Definition(d_name, d_type, value=d_val)
-                def_node.metadata = m_data
+                # Pass metadata to the Definition AST node constructor
+                def_node = Definition(d_name, d_type, value=d_val, metadata=m_data) 
                 
                 if d_params:
                     param_list = [p.strip() for p in self.split_by_operator_outside_braces(d_params, ',')]
@@ -353,44 +365,67 @@ class KeYmaeraXParser:
     def _parse_metadata_string(self, raw_metadata: Optional[str]) -> dict:
         """
         Converts RL-Annotation lines into a dictionary.
-        Supports: // @category: key1=val1, key2={complex_expr}
+        Supports: // @category: key1=val1, key2={complex_expr}, key3=[bounds]
         """
         metadata = {}
         if not raw_metadata: 
             return metadata
         
-        # 1. Extract the category (safety, progress, stability)
+        # 1. Extract the category (e.g., @const, @var, @progress, @safety)
         # This looks for the word immediately following the '@' and before the ':'
         category_match = re.search(r'@(\w+):', raw_metadata)
         if category_match:
             metadata['type'] = category_match.group(1).strip()
 
         # 2. Extract key-value pairs
-        # Logic:
-        # (\w+)          -> The key (e.g., reward, penalty, shape)
-        # \s*=\s*        -> The equals sign with optional whitespace
-        # (              -> Start value capture group
-        #   \{.*?\}      -> Option A: Anything inside curly braces (non-greedy)
-        #   |            -> OR
-        #   [^,\n]+      -> Option B: Anything that isn't a comma or newline
-        # )              -> End value capture group
-        kv_pattern = r'(\w+)\s*=\s*({.*?}|[^,\n]+)'
+        # Corrected regex: (\w+) for key, and four optional capturing groups for values:
+        # (?:(\{.*?\}))? -> curly braces
+        # (?:(\[.*?\]))? -> square brackets (FIXED: escaped square brackets)
+        # (?:(\".*?\"))? -> quoted string
+        # (?:([^,]+))? -> anything not a comma (for single-line values)
         
-        kv_matches = re.findall(kv_pattern, raw_metadata, re.DOTALL)
+        # The re.findall call itself needs to be fixed.
+        attr_pairs_raw = re.findall(
+            r'(\w+)\s*=\s*'
+            r'(?:(\{.*?\})|'   # Group 1: curly braces
+            r'(\[.*?\])|'   # Group 2: square brackets (FIXED: escaped square brackets)
+            r'(\".*?\")|'   # Group 3: quoted string
+            r'([^,]+))',    # Group 4: anything else (non-comma)
+            raw_metadata,
+            re.DOTALL # Keep DOTALL to allow multiline expressions if they ever occur within {} or ""
+        )
         
-        for key, val in kv_matches:
-            clean_val = val.strip()
-            # Remove surrounding curly braces if they exist for the final dict
-            if clean_val.startswith('{') and clean_val.endswith('}'):
-                clean_val = clean_val[1:-1].strip()
+        for match_tuple in attr_pairs_raw:
+            key = match_tuple[0] # The actual key
+            # Find the first non-empty value from the capturing groups (index 1, 2, 3, or 4)
+            value_raw = next((v for v in match_tuple[1:] if v), '').strip()
             
-            metadata[key.strip()] = clean_val
+            # Remove surrounding delimiters for the final dict value
+            if (value_raw.startswith('{') and value_raw.endswith('}')) or \
+               (value_raw.startswith('[') and value_raw.endswith(']')) or \
+               (value_raw.startswith('"') and value_raw.endswith('"')):
+                clean_val = value_raw[1:-1].strip()
+            else:
+                clean_val = value_raw
+            
+            # Handle on_success/on_failure values with optional status
+            if key in ['on_success', 'on_failure']:
+                parts = clean_val.split(':', 1) # Split only on the first colon
+                action = parts[0].strip()
+                status = 'none' # Default status if not specified
+                if len(parts) > 1:
+                    status_part = parts[1].strip()
+                    if status_part.startswith('status='):
+                        status = status_part[len('status='):].strip()
+                metadata[key] = {'action': action, 'status': status}
+            else:
+                metadata[key] = clean_val
 
         return metadata
     
     
     def _parse_step_func_structure(self, body_content: str, hp_node: ASTNode):
-        """FIX: Extracted stepFunc logic into a clean helper"""
+        """Extracted stepFunc logic into a clean helper"""
         ode_node = ASTNode("OrdinaryDifferentialEquations")
         domain_node = ASTNode("EvolutionDomain")
 
@@ -428,17 +463,29 @@ class KeYmaeraXParser:
         self.ast_root.add_child(vars_node)
         logging.debug("Created ProgramVariablesBlock ASTNode.")
 
-        for line in self.split_by_operator_outside_braces(vars_block, ';'):
-            line = line.strip()
-            if not line:
-                continue
+        # Regex to capture optional leading comments (metadata) and the variable declaration itself
+        VAR_LINE_PATTERN = re.compile(
+            r'(?P<raw_comments>(?:^[ \t]*//[^\n]*\n)*)?' # Optional leading comment lines
+            r'[ \t]*(?P<type>Real|Bool)\s+(?P<name>\w+)\s*$', # Type and Name
+            re.MULTILINE # Important for '^' to match start of line for comments
+        )
 
-            var_match = re.search(r'(Real|Bool)\s+(\w+)\s*$', line, re.DOTALL)
+        for line_segment in self.split_by_operator_outside_braces(vars_block, ';'):
+            line_segment = line_segment.strip()
+            if not line_segment:
+                continue
+            
+            var_match = VAR_LINE_PATTERN.search(line_segment)
             if var_match:
-                var_type = var_match.group(1)
-                name = var_match.group(2)
-                vars_node.add_child(Variable(name, var_type))
-                logging.debug(f"Added Variable: Type='{var_type}', Name='{name}'")
+                var_type = var_match.group('type')
+                name = var_match.group('name')
+                raw_comments = var_match.group('raw_comments') or ""
+                metadata = self._parse_metadata_string(raw_comments)
+
+                vars_node.add_child(Variable(name, var_type, metadata=metadata))
+                logging.debug(f"Added Variable: Type='{var_type}', Name='{name}', Metadata={metadata}")
+            else:
+                logging.warning(f"Could not parse variable declaration line: '{line_segment}'")
         logging.debug("Finished _parse_program_variables.")
 
 
@@ -498,13 +545,14 @@ class KeYmaeraXParser:
             logging.debug("No Problem block found. Skipping problem parsing.")
             return
 
-        problem_node = ProblemStatement(problem_block)
+        # ProblemStatement is now imported from ast_config, which has metadata support
+        problem_node = ProblemStatement(problem_block) 
         self.ast_root.add_child(problem_node)
         logging.debug("Created ProblemStatement ASTNode.")
 
+        # FIX: Escape literal square brackets [ and ] in the regex
         implication_match = re.search(
-            # FIX: Escape literal square brackets [ and ]
-            r'([\s\S]+?)\s*->\s*\[([\s\S]+?)\]\s*([\s\S]+)',
+            r'([\s\S]+?)\s*->\s*\[([\s\S]+?)\]\s*([\s\S]+)', # Corrected to escape []
             problem_block,
             re.DOTALL
         )
@@ -522,7 +570,7 @@ class KeYmaeraXParser:
             problem_node.add_child(ASTNode("Precondition (P)", precondition_raw))
 
             loop_match = re.search(
-                # FIX: Use greedy match for invariant to capture full content
+                # Use greedy match for invariant to capture full content
                 r"(\{[\s\S]*?\})\*@invariant\(([\s\S]*)\)",
                 program_raw,
                 re.DOTALL
@@ -659,7 +707,8 @@ def convert_keymaerax_ast_to_intermediate_pyast(kx_ast_root: ASTNode) -> GymEnvi
         
         for def_node_kx in defs_block_kx.children:
             logging.debug(f"Converting definition AST node: {def_node_kx.node_type} (name: {getattr(def_node_kx, 'name', 'N/A')}, type: {getattr(def_node_kx, 'definition_type', 'N/A')})")
-            metadata = getattr(def_node_kx, 'metadata', {})
+            # Access metadata directly from the ASTNode instance
+            metadata = def_node_kx.metadata 
             
             if def_node_kx.node_type == "Definition" and hasattr(def_node_kx, 'definition_type'):
                 parameters = []
@@ -676,23 +725,26 @@ def convert_keymaerax_ast_to_intermediate_pyast(kx_ast_root: ASTNode) -> GymEnvi
 
                 if def_node_kx.definition_type == "HP":
                     logging.debug(f"Processing HP definition: {def_node_kx.name}")
-                    if def_node_kx.name == "controlFunc":
+                    # In HybridProgram, the name and body are attributes, not value/definition_value
+                    hp_name = def_node_kx.name 
+                    hp_body = def_node_kx.body
+                    
+                    if hp_name == "controlFunc":
+                        # The children of the HP node should contain the parsed program fragment
                         control_func_root_action = next((c for c in def_node_kx.children if c.node_type == "ChoiceOperator (++)"), None)
                         action_space_config = None
                         if control_func_root_action:
                             action_space_config = _parse_kx_hp_program_fragment_to_action_config(
                                 control_func_root_action, 0
                             )
-                        # Pass action_space_config directly to constructor
-                        control_func_config = ControlFuncConfig(name=def_node_kx.name, action_space_config=action_space_config, metadata=metadata)
+                        control_func_config = ControlFuncConfig(name=hp_name, action_space_config=action_space_config, metadata=metadata)
                         definitions_config.hybrid_programs.append(control_func_config)
                         logging.debug("Appended ControlFuncConfig to hybrid_programs.")
-                    elif def_node_kx.name == "stepFunc":
+                    elif hp_name == "stepFunc":
                         odes = []
                         evolution_domain_constraints = []
                         duration_expr: Optional[str] = None # Will need to be set from somewhere, perhaps a constant 'ep'
 
-                        # The HybridProgram AST node (def_node_kx) itself has children for ODEs and EvolutionDomain
                         ode_block = next((c for c in def_node_kx.children if c.node_type == "OrdinaryDifferentialEquations"), None)
                         if ode_block:
                             logging.debug(f"Found ODE block for stepFunc with {len(ode_block.children)} children.")
@@ -719,18 +771,12 @@ def convert_keymaerax_ast_to_intermediate_pyast(kx_ast_root: ASTNode) -> GymEnvi
                                 else:
                                     logging.warning(f"Unexpected node type in EvolutionDomain block: {domain_child.node_type}")
                         
-                        # The duration for stepFunc is often a constant like 'ep'.
-                        # The parser doesn't explicitly extract it into the HybridProgram AST node.
-                        # It's typically found in the Problem block's loop execution or as a global constant.
-                        # For now, we'll keep it as None and let the generator use a default.
-                        
                         evolution_domain = EvolutionDomainConfig(constraints=evolution_domain_constraints) if evolution_domain_constraints else None
-                        # Pass raw_body_snippet to StepFuncConfig
-                        step_func_config = StepFuncConfig(name=def_node_kx.name, odes=odes, evolution_domain=evolution_domain, duration=duration_expr, raw_body_snippet=def_node_kx.body, metadata=metadata)
+                        step_func_config = StepFuncConfig(name=hp_name, odes=odes, evolution_domain=evolution_domain, duration=duration_expr, raw_body_snippet=hp_body, metadata=metadata)
                         definitions_config.hybrid_programs.append(step_func_config)
                         logging.debug("Appended StepFuncConfig to hybrid_programs.")
                     else:
-                        logging.debug(f"Unrecognized HP name '{def_node_kx.name}'. Skipping conversion to specific HPConfig.")
+                        logging.debug(f"Unrecognized HP name '{hp_name}'. Skipping conversion to specific HPConfig.")
                 elif def_node_kx.definition_type == "Real":
                     if parameters:
                         definitions_config.functions.append(FunctionDefinitionConfig(
@@ -742,10 +788,12 @@ def convert_keymaerax_ast_to_intermediate_pyast(kx_ast_root: ASTNode) -> GymEnvi
                         ))
                         logging.debug(f"Appended FunctionDefinitionConfig: {def_node_kx.name}")
                     else:
+                        # Set value to None if it's an empty string for constants
+                        constant_value = def_node_kx.definition_value if def_node_kx.definition_value else None
                         definitions_config.constants.append(ConstantDefinitionConfig(
                             name=def_node_kx.name,
-                            type=def_node_kx.definition_type, # Using 'type' now
-                            value=def_node_kx.definition_value,
+                            type=def_node_kx.definition_type,
+                            value=constant_value,
                             metadata=metadata
                         ))
                         logging.debug(f"Appended ConstantDefinitionConfig: {def_node_kx.name}")
@@ -768,15 +816,37 @@ def convert_keymaerax_ast_to_intermediate_pyast(kx_ast_root: ASTNode) -> GymEnvi
         
         for var_node_kx in vars_block_kx.children:
             if var_node_kx.node_type == "Variable":
-                # Changed VariableConfig to VariableDeclarationConfig
-                variables_config.state_variables.append(VariableDeclarationConfig(name=var_node_kx.value, type=var_node_kx.var_type))
-                logging.debug(f"Added VariableDeclarationConfig: {var_node_kx.value}")
+                # Get metadata from the Kx AST node
+                var_metadata = var_node_kx.metadata # Access metadata directly from the ASTNode instance
+                
+                lower_bound = None
+                upper_bound = None
+                if 'bound' in var_metadata:
+                    bound_str = var_metadata['bound']
+                    # Use a more robust regex for parsing bounds like [0:100]
+                    bound_match = re.match(r'(-?\d+(\.\d+)?):(-?\d+(\.\d+)?)', bound_str)
+                    if bound_match:
+                        lower_bound = bound_match.group(1)
+                        upper_bound = bound_match.group(3)
+                    else:
+                        logging.warning(f"Could not parse bound string '{bound_str}' for variable '{var_node_kx.value}'.")
+
+                variables_config.state_variables.append(VariableDeclarationConfig(
+                    name=var_node_kx.value,
+                    type=var_node_kx.var_type, # This should now be correctly present
+                    lower_bound=lower_bound,
+                    upper_bound=upper_bound
+                ))
+                # Note: If 'def' metadata (description) for variables is needed in the final
+                # GymEnvironmentConfig, the VariableDeclarationConfig in pyast_config needs
+                # to be extended with a 'description' field, and metadata['def'] would be
+                # passed to it. Currently, it's parsed but not stored in the PyAST.
+                logging.debug(f"Added VariableDeclarationConfig: {var_node_kx.value} with metadata: {var_metadata}")
 
     problem_block_kx = next((c for c in kx_ast_root.children if c.node_type == "ProblemStatement"), None)
     if problem_block_kx:
         logging.debug("Found ProblemStatement in KeYmaeraX AST for conversion.")
         
-
         precondition_kx = next((c for c in problem_block_kx.children if c.node_type == "Precondition (P)"), None)
         if precondition_kx and precondition_kx.value:
             problem_config.precondition = PreconditionConfig(formula=precondition_kx.value)
@@ -857,7 +927,7 @@ def _parse_kx_hp_program_fragment_to_action_config(kx_node: ASTNode, choice_leve
         logging.debug(f"Creating ChoiceActionConfig for ChoiceOperator (++) at level {choice_level}.")
         for choice_kx_branch in kx_node.children:
             if choice_kx_branch.node_type.startswith("Choice"):
-                # FIX: Handle nested ChoiceOperator directly without wrapping in SequenceAction
+                # Handle nested ChoiceOperator directly without wrapping in SequenceAction
                 if len(choice_kx_branch.children) == 1 and choice_kx_branch.children[0].node_type == "ChoiceOperator (++)":
                     parsed_nested_choice = _parse_kx_hp_program_fragment_to_action_config(
                         choice_kx_branch.children[0], choice_level + 1
@@ -868,8 +938,10 @@ def _parse_kx_hp_program_fragment_to_action_config(kx_node: ASTNode, choice_leve
                     logging.debug(f"Processing choice branch: {choice_kx_branch.node_type}")
                     for sub_node_kx in choice_kx_branch.children:
                         parsed_sub_block = _parse_kx_hp_program_fragment_to_action_config(sub_node_kx, choice_level + 1)
+                        # Corrected: If parsed_sub_block is a SequenceActionConfig, extend the current sequence
+                        # Otherwise, append it as a single action.
                         if isinstance(parsed_sub_block, SequenceActionConfig):
-                            choice_content_sequence.actions.extend(parsed_sub_block.actions)
+                            choice_content_sequence.actions.extend(parsed_sub_block.actions) 
                         else:
                             choice_content_sequence.actions.append(parsed_sub_block)
                     choice_block.choices.append(choice_content_sequence)
@@ -904,3 +976,4 @@ def _parse_kx_hp_program_fragment_to_action_config(kx_node: ASTNode, choice_leve
         return sequence_block
 
     logging.debug(f"Unhandled or empty kx_node type '{kx_node.node_type}'. Returning empty SequenceActionConfig.")
+    return SequenceActionConfig() # Ensure a return value even for unhandled cases
