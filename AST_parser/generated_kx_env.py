@@ -233,7 +233,55 @@ class GeneratedKXEnv(_KeYmaeraXEnvBase):
                 hybrid_programs=[
                     ControlFuncConfig(
                         name='controlFunc',
-                        action_space_config=None,
+                        action_space_config=ChoiceActionConfig(
+                            level_name='ChoiceLevel_0',
+                            choices=[
+                                SequenceActionConfig(
+                                    actions=[
+                                        ActionConstraintConfig(
+                                            formula='(xr > waypointStartDist(xg))'
+                                        ),
+                                        DeterministicAssignmentActionConfig(
+                                            variable='ar',
+                                            value='-b'
+                                        )
+                                    ]
+                                ),
+                                SequenceActionConfig(
+                                    actions=[
+                                        ActionConstraintConfig(
+                                            formula='(xr > waypointStartDist(xg) & vr = 0)'
+                                        ),
+                                        DeterministicAssignmentActionConfig(
+                                            variable='ar',
+                                            value='0'
+                                        )
+                                    ]
+                                ),
+                                SequenceActionConfig(
+                                    actions=[
+                                        ActionConstraintConfig(
+                                            formula='(xr <= waypointStartDist(xg) & (xr + stopDist(vr) + accComp(vr) < waypointEndDist(xg) & vr+A*ep <= Vmax))'
+                                        ),
+                                        DeterministicAssignmentActionConfig(
+                                            variable='ar',
+                                            value='A'
+                                        )
+                                    ]
+                                ),
+                                SequenceActionConfig(
+                                    actions=[
+                                        ActionConstraintConfig(
+                                            formula='(xr <= waypointStartDist(xg) & !(xr + stopDist(vr) + accComp(vr) < waypointEndDist(xg) & vr+A*ep <= Vmax))'
+                                        ),
+                                        DeterministicAssignmentActionConfig(
+                                            variable='ar',
+                                            value='0'
+                                        )
+                                    ]
+                                )
+                            ]
+                        ),
                         metadata={}
                     ),
                     StepFuncConfig(
@@ -321,8 +369,7 @@ class GeneratedKXEnv(_KeYmaeraXEnvBase):
                     )
                 ),
                 postcondition=PostconditionConfig(
-                    formula="""(xr < waypointEndDist(xg) & (T <= 0 -> ensure(xr, vr, xg))) 
-        & < dwwpdl; > ensure(xr, vr, xg)"""
+                    formula='(xr < waypointEndDist(xg) & (T <= 0 -> ensure(xr, vr, xg)))'
                 )
             )
         )''', render_mode=render_mode, cisb_size=cisb_size, cisb_populate_attempts=cisb_populate_attempts, seed=seed, debug_mode=debug_mode)
@@ -353,11 +400,58 @@ class GeneratedKXEnv(_KeYmaeraXEnvBase):
         high_bounds = np.array([np.inf] * len(self._state_keys), dtype=np.float32)
         self.observation_space = spaces.Box(low_bounds, high_bounds, shape=(len(self._state_keys),), dtype=np.float32)
 
-        self.action_space = spaces.Box(low=-np.inf, high=np.inf, shape=(0,), dtype=np.float32)
-        self._action_space_keys = []
+        self.action_space = spaces.Dict({
+                'choice_ChoiceLevel_0': spaces.Discrete(4),
+                })
+        self._action_space_keys = ['choice_ChoiceLevel_0']
         self._control_func_action_config = ChoiceActionConfig(
-                level_name='Default',
-                choices=[]
+                level_name='ChoiceLevel_0',
+                choices=[
+                    SequenceActionConfig(
+                        actions=[
+                            ActionConstraintConfig(
+                                formula='(xr > waypointStartDist(xg))'
+                            ),
+                            DeterministicAssignmentActionConfig(
+                                variable='ar',
+                                value='-b'
+                            )
+                        ]
+                    ),
+                    SequenceActionConfig(
+                        actions=[
+                            ActionConstraintConfig(
+                                formula='(xr > waypointStartDist(xg) & vr = 0)'
+                            ),
+                            DeterministicAssignmentActionConfig(
+                                variable='ar',
+                                value='0'
+                            )
+                        ]
+                    ),
+                    SequenceActionConfig(
+                        actions=[
+                            ActionConstraintConfig(
+                                formula='(xr <= waypointStartDist(xg) & (xr + stopDist(vr) + accComp(vr) < waypointEndDist(xg) & vr+A*ep <= Vmax))'
+                            ),
+                            DeterministicAssignmentActionConfig(
+                                variable='ar',
+                                value='A'
+                            )
+                        ]
+                    ),
+                    SequenceActionConfig(
+                        actions=[
+                            ActionConstraintConfig(
+                                formula='(xr <= waypointStartDist(xg) & !(xr + stopDist(vr) + accComp(vr) < waypointEndDist(xg) & vr+A*ep <= Vmax))'
+                            ),
+                            DeterministicAssignmentActionConfig(
+                                variable='ar',
+                                value='0'
+                            )
+                        ]
+                    )
+                ]
             )
 
         self._ode_state_map = {'xr': 0, 'vr': 1, 'ar': 2, 'xg': 3, 't': 4, 'T': 5}
