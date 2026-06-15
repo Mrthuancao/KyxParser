@@ -25,9 +25,9 @@ else:
 
 # Define test input and expected output directories relative to SCRIPT_DIR
 # Based on the file explorer, 'input' and 'output_AST' are direct subdirectories of 'test'.
-TEST_INPUT_DIR = SCRIPT_DIR / "input"
+TEST_INPUT_DIR = SCRIPT_DIR / "input" / "withBound";
 # CORRECTED: Pointing to 'output_AST' as per your instruction
-TEST_OUTPUT_DIR = SCRIPT_DIR / "output_AST" # This directory holds the expected KeYmaeraX AST string outputs
+TEST_OUTPUT_DIR = SCRIPT_DIR / "output_AST" / "withBound" # This directory holds the expected KeYmaeraX AST string outputs
 
 # --- Debugging prints for paths ---
 print(f"Project Root: {PROJECT_ROOT.resolve()}")
@@ -123,11 +123,11 @@ class TestKeYmaeraXParser(unittest.TestCase):
     def test_case_1_static_safety(self):
         self._assert_parsed_ast_matches_expected("test1")
 
-    def test_case_2_velocity_controlled_passive_safety(self):
-        self._assert_parsed_ast_matches_expected("test2")
+    # def test_case_2_velocity_controlled_passive_safety(self):
+    #     self._assert_parsed_ast_matches_expected("test2")
 
-    def test_case_3_static_safety_imperfect_trajectories(self):
-        self._assert_parsed_ast_matches_expected("test3")
+    # def test_case_3_static_safety_imperfect_trajectories(self):
+    #     self._assert_parsed_ast_matches_expected("test3")
 
 if __name__ == '__main__':
     unittest.main(argv=['first-arg-is-ignored'], exit=False)

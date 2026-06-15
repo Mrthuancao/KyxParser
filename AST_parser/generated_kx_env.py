@@ -35,8 +35,7 @@ class GeneratedKXEnv(_KeYmaeraXEnvBase):
                         value=None,
                         metadata={
                             'type': 'const',
-                            'bound': '0.1:0.5',
-                            'def': 'time limit for control decisions'
+                            'bound': '[0.1:0.5]; def="time limit for control decisions"'
                         }
                     ),
                     ConstantDefinitionConfig(
@@ -45,8 +44,7 @@ class GeneratedKXEnv(_KeYmaeraXEnvBase):
                         value=None,
                         metadata={
                             'type': 'const',
-                            'bound': '0.5:5.0',
-                            'def': 'minimum braking capability of the robot'
+                            'bound': '[0.5:5.0]; def="minimum braking capability of the robot"'
                         }
                     ),
                     ConstantDefinitionConfig(
@@ -55,8 +53,7 @@ class GeneratedKXEnv(_KeYmaeraXEnvBase):
                         value=None,
                         metadata={
                             'type': 'const',
-                            'bound': '1.0:10.0',
-                            'def': 'maximum acceleration'
+                            'bound': '[1.0:10.0]; def="maximum acceleration"'
                         }
                     ),
                     ConstantDefinitionConfig(
@@ -65,8 +62,7 @@ class GeneratedKXEnv(_KeYmaeraXEnvBase):
                         value=None,
                         metadata={
                             'type': 'const',
-                            'bound': '1.0:10.0',
-                            'def': 'goal area size'
+                            'bound': '[1.0:10.0]; def="goal area size"'
                         }
                     ),
                     ConstantDefinitionConfig(
@@ -75,8 +71,7 @@ class GeneratedKXEnv(_KeYmaeraXEnvBase):
                         value=None,
                         metadata={
                             'type': 'const',
-                            'bound': '5.0:30.0',
-                            'def': 'maximum robot velocity'
+                            'bound': '[5.0:30.0]; def="maximum robot velocity"'
                         }
                     ),
                     ConstantDefinitionConfig(
@@ -234,44 +229,66 @@ class GeneratedKXEnv(_KeYmaeraXEnvBase):
                     ControlFuncConfig(
                         name='controlFunc',
                         action_space_config=ChoiceActionConfig(
-                            level_name='ChoiceLevel_0',
+                            level_name='IfElseChoice_0',
                             choices=[
                                 SequenceActionConfig(
                                     actions=[
-                                        DeterministicAssignmentActionConfig(
-                                            variable="""(
-                ar""",
-                                            value='-b'
+                                        ActionConstraintConfig(
+                                            formula='xr > waypointStartDist(xg)'
+                                        ),
+                                        ChoiceActionConfig(
+                                            level_name='ChoiceLevel_1',
+                                            choices=[
+                                                DeterministicAssignmentActionConfig(
+                                                    variable='ar',
+                                                    value='-b'
+                                                ),
+                                                SequenceActionConfig(
+                                                    actions=[
+                                                        ActionConstraintConfig(
+                                                            formula='vr = 0'
+                                                        ),
+                                                        DeterministicAssignmentActionConfig(
+                                                            variable='ar',
+                                                            value='0'
+                                                        )
+                                                    ]
+                                                )
+                                            ]
                                         )
                                     ]
                                 ),
                                 SequenceActionConfig(
                                     actions=[
-                                        DeterministicAssignmentActionConfig(
-                                            variable='ar',
-                                            value="""0) 
-            )
-        )"""
-                                        )
-                                    ]
-                                ),
-                                SequenceActionConfig(
-                                    actions=[
-                                        DeterministicAssignmentActionConfig(
-                                            variable='ar',
-                                            value="""A
-                )"""
-                                        )
-                                    ]
-                                ),
-                                SequenceActionConfig(
-                                    actions=[
-                                        DeterministicAssignmentActionConfig(
-                                            variable='ar',
-                                            value="""0
-                )
-            )
-        )"""
+                                        ActionConstraintConfig(
+                                            formula='!(xr > waypointStartDist(xg))'
+                                        ),
+                                        ChoiceActionConfig(
+                                            level_name='IfElseChoice_1',
+                                            choices=[
+                                                SequenceActionConfig(
+                                                    actions=[
+                                                        ActionConstraintConfig(
+                                                            formula='xr + stopDist(vr) + accComp(vr) < waypointEndDist(xg) & vr+A*ep <= Vmax'
+                                                        ),
+                                                        DeterministicAssignmentActionConfig(
+                                                            variable='ar',
+                                                            value='A'
+                                                        )
+                                                    ]
+                                                ),
+                                                SequenceActionConfig(
+                                                    actions=[
+                                                        ActionConstraintConfig(
+                                                            formula='!(xr + stopDist(vr) + accComp(vr) < waypointEndDist(xg) & vr+A*ep <= Vmax)'
+                                                        ),
+                                                        DeterministicAssignmentActionConfig(
+                                                            variable='ar',
+                                                            value='0'
+                                                        )
+                                                    ]
+                                                )
+                                            ]
                                         )
                                     ]
                                 )
@@ -364,8 +381,7 @@ class GeneratedKXEnv(_KeYmaeraXEnvBase):
                     )
                 ),
                 postcondition=PostconditionConfig(
-                    formula="""(xr < waypointEndDist(xg) & (T <= 0 -> ensure(xr, vr, xg))) 
-        & < dwwpdl; > ensure(xr, vr, xg)"""
+                    formula=''
                 )
             )
         )''', render_mode=render_mode, cisb_size=cisb_size, cisb_populate_attempts=cisb_populate_attempts, seed=seed, debug_mode=debug_mode)
@@ -397,48 +413,72 @@ class GeneratedKXEnv(_KeYmaeraXEnvBase):
         self.observation_space = spaces.Box(low_bounds, high_bounds, shape=(len(self._state_keys),), dtype=np.float32)
 
         self.action_space = spaces.Dict({
-                'choice_ChoiceLevel_0': spaces.Discrete(4),
+                'choice_IfElseChoice_0': spaces.Discrete(2),
+                'choice_ChoiceLevel_1': spaces.Discrete(2),
+                'choice_IfElseChoice_1': spaces.Discrete(2),
                 })
-        self._action_space_keys = ['choice_ChoiceLevel_0']
+        self._action_space_keys = ['choice_IfElseChoice_0', 'choice_ChoiceLevel_1', 'choice_IfElseChoice_1']
         self._control_func_action_config = ChoiceActionConfig(
-                level_name='ChoiceLevel_0',
+                level_name='IfElseChoice_0',
                 choices=[
                     SequenceActionConfig(
                         actions=[
-                            DeterministicAssignmentActionConfig(
-                                variable="""(
-                ar""",
-                                value='-b'
+                            ActionConstraintConfig(
+                                formula='xr > waypointStartDist(xg)'
+                            ),
+                            ChoiceActionConfig(
+                                level_name='ChoiceLevel_1',
+                                choices=[
+                                    DeterministicAssignmentActionConfig(
+                                        variable='ar',
+                                        value='-b'
+                                    ),
+                                    SequenceActionConfig(
+                                        actions=[
+                                            ActionConstraintConfig(
+                                                formula='vr = 0'
+                                            ),
+                                            DeterministicAssignmentActionConfig(
+                                                variable='ar',
+                                                value='0'
+                                            )
+                                        ]
+                                    )
+                                ]
                             )
                         ]
                     ),
                     SequenceActionConfig(
                         actions=[
-                            DeterministicAssignmentActionConfig(
-                                variable='ar',
-                                value="""0) 
-            )
-        )"""
-                            )
-                        ]
-                    ),
-                    SequenceActionConfig(
-                        actions=[
-                            DeterministicAssignmentActionConfig(
-                                variable='ar',
-                                value="""A
-                )"""
-                            )
-                        ]
-                    ),
-                    SequenceActionConfig(
-                        actions=[
-                            DeterministicAssignmentActionConfig(
-                                variable='ar',
-                                value="""0
-                )
-            )
-        )"""
+                            ActionConstraintConfig(
+                                formula='!(xr > waypointStartDist(xg))'
+                            ),
+                            ChoiceActionConfig(
+                                level_name='IfElseChoice_1',
+                                choices=[
+                                    SequenceActionConfig(
+                                        actions=[
+                                            ActionConstraintConfig(
+                                                formula='xr + stopDist(vr) + accComp(vr) < waypointEndDist(xg) & vr+A*ep <= Vmax'
+                                            ),
+                                            DeterministicAssignmentActionConfig(
+                                                variable='ar',
+                                                value='A'
+                                            )
+                                        ]
+                                    ),
+                                    SequenceActionConfig(
+                                        actions=[
+                                            ActionConstraintConfig(
+                                                formula='!(xr + stopDist(vr) + accComp(vr) < waypointEndDist(xg) & vr+A*ep <= Vmax)'
+                                            ),
+                                            DeterministicAssignmentActionConfig(
+                                                variable='ar',
+                                                value='0'
+                                            )
+                                        ]
+                                    )
+                                ]
                             )
                         ]
                     )

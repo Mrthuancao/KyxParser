@@ -1,0 +1,86 @@
+[KeYmaeraXSpecification]:
+  [TheoremName]: IJRR17/Theorem 1: Static safety
+  [DefinitionsBlock]:
+    [DEF]: Real ep [Meta: {'type': 'const', 'bound': '0.1:0.5', 'def': 'time limit for control decisions'}]
+    [DEF]: Real b [Meta: {'type': 'const', 'bound': '0.5:5.0', 'def': 'minimum braking capability of the robot'}]
+    [DEF]: Real A [Meta: {'type': 'const', 'bound': '1.0:10.0', 'def': 'maximum acceleration'}]
+    [DEF]: Real W [Meta: {'type': 'const', 'bound': '0.1:1.0', 'def': 'maximum steering (rotational velocity)'}]
+    [DEF]: Real stopDist = v^2 / (2*b)
+      [Parameters]: Real v
+    [DEF]: Real accelComp = ((A/b + 1) * (A/2 * ep^2 + ep*v))
+      [Parameters]: Real v
+    [DEF]: Real admissibleSeparation = stopDist(v) + accelComp(v)
+      [Parameters]: Real v
+    [DEF]: Bool isWellformedDir = dx^2 + dy^2 = 1 [Meta: {'type': 'progress', 'reward': '10', 'shape': '-((dx**2 + dy**2) - 1)**2', 'on_success': {'action': 'continue', 'status': 'none'}, 'on_failure': {'action': 'continue', 'status': 'none'}}]
+      [Parameters]: Real dx, Real dy
+    [DEF]: Bool isPhysicallyValid = v >= 0 & r != 0 [Meta: {'type': 'safety', 'penalty': '-500', 'on_failure': {'action': 'truncate', 'status': 'failure'}, 'on_success': {'action': 'continue', 'status': 'none'}}]
+      [Parameters]: Real v, Real r
+    [DEF]: Bool isSafe = abs(x-xo) > stopDist(v) | abs(y-yo) > stopDist(v) [Meta: {'type': 'safety', 'penalty': '-1000', 'shape': '(abs(x-xo) - stopDist(v)) + (abs(y-yo) - stopDist(v))', 'on_failure': {'action': 'truncate', 'status': 'failure'}, 'on_success': {'action': 'continue', 'status': 'none'}}]
+      [Parameters]: Real x, Real y, Real v, Real xo, Real yo
+    [DEF]: Bool isEfficient = v >= 0 [Meta: {'type': 'progress', 'shape': '1/v if v > 0 else v', 'on_success': {'action': 'continue', 'status': 'none'}, 'on_failure': {'action': 'continue', 'status': 'none'}}]
+      [Parameters]: Real v
+    [DEF]: Bool bounds = A >= 0 & b > 0 & ep > 0
+    [DEF]: Bool initialState = v = 0 & (x-xo)^2 + (y-yo)^2 > 0 & isWellformedDir(dx, dy) & ...
+      [Parameters]: Real x, Real y, Real v, Real dx, Real dy, Real xo, Real yo
+    [DEF]: Bool assumptions = bounds() & initialState(x, y, v, dx, dy, xo, yo)
+      [Parameters]: Real x, Real y, Real v, Real dx, Real dy, Real xo, Real yo
+    [DEF]: Bool loopinv = isPhysicallyValid(v, r) & isWellformedDir(dx, dy) & isSafe(x...
+      [Parameters]: Real x, Real y, Real v, Real dx, Real dy, Real xo, Real yo, Real r
+    [DEF]: Bool ensure = (x - xo)^2 + (y - yo)^2 > 0 [Meta: {'type': 'progress', 'reward': '500', 'penalty': '-1000', 'on_success': {'action': 'terminate', 'status': 'success'}, 'on_failure': {'action': 'terminate', 'status': 'failure'}}]
+      [Parameters]: Real x, Real y, Real xo, Real yo
+    [HP]: controlFunc
+      Body (raw): { { a := -b; } ++ { ?v = 0; a := 0; w := 0; } ++ { a := A; w := *; ?-W<=w & w<=W...
+      [ChoiceOperator (++)]:
+        [Choice 1]:
+          [Statement]: a := -b
+        [Choice 2]:
+          [Test]: v = 0
+          [Statement]: a := 0
+          [Statement]: w := 0
+        [Choice 3]:
+          [Statement]: a := A
+          [Statement]: w := *
+          [Test]: -W<=w & w<=W
+          [Statement]: r := *
+          [Statement]: xo := *
+          [Statement]: yo := *
+          [Test]: r!=0 & r*w = v
+          [Test]: abs(x-xo) > admissibleSeparation(v)
+        | abs(y-yo) > admissibleSeparation(v)
+    [HP]: stepFunc
+      Body (raw): { x' = v * dx, y' = v * dy, v' = a, dx' = -w * dy, dy' = w * dx, w' = a/r, t' = ...
+      [OrdinaryDifferentialEquations]:
+        [ODE]: x' = v * dx
+        [ODE]: y' = v * dy
+        [ODE]: v' = a
+        [ODE]: dx' = -w * dy
+        [ODE]: dy' = w * dx
+        [ODE]: w' = a/r
+        [ODE]: t' = 1
+      [EvolutionDomain]:
+        [Constraint]: t <= ep
+        [Constraint]: v >= 0
+  [ProgramVariablesBlock]:
+    [VAR]: Real x [Meta: {'type': 'var', 'bound': '0:100', 'def': 'robot position: x'}]
+    [VAR]: Real y [Meta: {'type': 'var', 'bound': '0:100', 'def': 'robot position: y'}]
+    [VAR]: Real v [Meta: {'type': 'var', 'bound': '0:20', 'def': 'robot translational velocity'}]
+    [VAR]: Real a [Meta: {'type': 'var', 'bound': '-10:10', 'def': 'robot translational acceleration'}]
+    [VAR]: Real dx [Meta: {'type': 'var', 'bound': '-1:1', 'def': 'robot orientation: x component'}]
+    [VAR]: Real dy [Meta: {'type': 'var', 'bound': '-1:1', 'def': 'robot orientation: y component'}]
+    [VAR]: Real w [Meta: {'type': 'var', 'bound': '-2:2', 'def': 'robot rotational velocity'}]
+    [VAR]: Real r [Meta: {'type': 'var', 'bound': '-1000:1000', 'def': 'robot curve radius (r!=0)'}]
+    [VAR]: Real xo [Meta: {'type': 'var', 'bound': '0:100', 'def': 'position of closest obstacle on curve: x'}]
+    [VAR]: Real yo [Meta: {'type': 'var', 'bound': '0:100', 'def': 'position of closest obstacle on curve: y'}]
+    [VAR]: Real t [Meta: {'type': 'var', 'bound': '0:1', 'def': 'time elapsed in current control step'}]
+  [PROBLEM]:
+    [Precondition (P)]: assumptions(x, y, v, dx, dy, xo, yo)
+    [LoopExecution]:
+      [HP]: 
+        [HP]: 
+          [Statement]: controlFunc
+          [Statement]: t := 0
+        [HP]: 
+          [Statement]: stepFunc
+          [Invariant]: t>=0, isWellformedDir(dx, dy)
+      [Invariant]: loopinv(x, y, v, dx, dy, xo, yo, r)
+    [Postcondition (Q)]: ensure(x, y, xo, yo)

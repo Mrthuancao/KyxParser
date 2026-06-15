@@ -64,35 +64,18 @@ Definitions
     // Renamed 'ctrl' to 'controlFunc' as per documentation.
     HP controlFunc ::= {
         // Top-level choice: either enter the "goal area" logic or the "outside goal area" logic
-        (
-            // First branch: if (xr > waypointStartDist(xg))
-            ? (xr > waypointStartDist(xg)) ;
-            (
-                // Choice within this branch: either brake or stay stopped
-                ar := -b
-                ++
-                (?vr = 0 ; ar := 0) // Sequence: test vr=0 then assign ar=0
-            )
-        )
-        ++ // Separates the 'if' part from the 'else' part
-        (
-            // Second branch: else (implicitly, !(xr > waypointStartDist(xg)))
-            ? (!(xr > waypointStartDist(xg))) ;
-            (
-                // Inner choice: accelerate or coast
-                (
-                    // Inner first branch: if (xr + stopDist(vr) + accComp(vr) < waypointEndDist(xg) & vr+A*ep <= Vmax)
-                    ? (xr + stopDist(vr) + accComp(vr) < waypointEndDist(xg) & vr+A*ep <= Vmax) ;
-                    ar := A
-                )
-                ++ // Separates the inner 'if' from the inner 'else'
-                (
-                    // Inner second branch: else (implicitly, !(xr + ...))
-                    ? (!(xr + stopDist(vr) + accComp(vr) < waypointEndDist(xg) & vr+A*ep <= Vmax)) ;
-                    ar := 0
-                )
-            )
-        )
+        if (xr > waypointStartDist(xg)) {
+        /* in the goal area: brake or stay stopped */
+        ar := -b; ++ ?vr = 0; ar := 0;
+        } else {
+            if (xr + stopDist(vr) + accComp(vr) < waypointEndDist(xg) & vr+A*ep <= Vmax) {
+                /* if robot can stop from higher speed before leaving goal area then accelerate */
+                ar := A;
+            } else {
+                /* else coast until at goal */
+                ar := 0;
+            }
+        }
     };
 
     // Renamed 'dyn' to 'stepFunc' as per documentation.

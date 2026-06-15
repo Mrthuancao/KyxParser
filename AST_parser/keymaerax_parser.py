@@ -3,9 +3,19 @@ from __future__ import annotations
 import re
 import logging
 from typing import Optional, Dict, Any, List, Tuple, Union
+import sys # Import the sys module
+
+# Increase the recursion limit to handle deeply nested program structures.
+# The default is usually 1000 or 3000. 5000 should be sufficient for most cases.
+# Adjust if necessary based on the complexity of your KeYmaera X programs.
+sys.setrecursionlimit(5000)
 
 # Import AST node definitions from ast_config.py
-from ast_config import ASTNode, Definition, HybridProgram, Variable, ProblemStatement
+from ast_config import (
+    ASTNode, Definition, HybridProgram, Variable, ProblemStatement,
+    IfElseStatement, ChoiceStatement, SequenceStatement, TestStatement,
+    AssignmentStatement, HPCall, SafetyPostcondition, LivenessPostcondition
+)
 
 # Import ast_config and its helper functions
 # Assuming pyast_config.py contains the GymEnvironmentConfig and related classes
@@ -29,7 +39,7 @@ class KeYmaeraXParser:
     def __init__(self, source_code):
         self.source_code = source_code
         # ASTNode is now imported from ast_config, which has metadata support
-        self.ast_root = ASTNode("KeYmaeraXSpecification") 
+        self.ast_root = ASTNode("KeYmaeraXSpecification")
         self._cleanup_source()
         logging.debug("KeYmaeraXParser initialized. Source code cleaned.")
 
@@ -43,7 +53,7 @@ class KeYmaeraXParser:
         # 3. Normalize line endings and remove excessive blank lines
         self.source_code = re.sub(r'\n\s*\n', '\n', self.source_code)
         self.source_code = self.source_code.strip()
-        
+
         # print("Source code cleanup complete. Cleaned source:", self.source_code)
         logging.debug("Source code cleanup complete.")
 
@@ -52,22 +62,35 @@ class KeYmaeraXParser:
     def split_by_operator_outside_braces(text, operator):
         """
         Splits a string by a given operator, but only if the operator is not
-        enclosed within curly braces {}.
+        enclosed within any type of braces (curly {}, parentheses (), or square []).
         """
         parts = []
         brace_level = 0
+        paren_level = 0
+        square_level = 0
         current_part_start = 0
 
         i = 0
         while i < len(text):
-            if text[i] == '{':
+            char = text[i]
+
+            if char == '{':
                 brace_level += 1
-            elif text[i] == '}':
+            elif char == '}':
                 brace_level -= 1
+            elif char == '(':
+                paren_level += 1
+            elif char == ')':
+                paren_level -= 1
+            elif char == '[':
+                square_level += 1
+            elif char == ']':
+                square_level -= 1
 
             # Check for operator match, ensuring we don't go out of bounds
+            # and that all levels are zero (i.e., outside all delimiters)
             if (i + len(operator) <= len(text) and
-                brace_level == 0 and
+                brace_level == 0 and paren_level == 0 and square_level == 0 and
                 text[i:i+len(operator)] == operator):
 
                 part = text[current_part_start:i].strip()
@@ -188,7 +211,7 @@ class KeYmaeraXParser:
         if match:
             theorem_name = match.group(1)
             self.ast_root.add_child(ASTNode("TheoremName", theorem_name))
-            logging.debug(f"Theorem name found from Theorem: '{theorem_name}'")
+            logging.debug(f"Theorem name found from Theorem: '{theorem_name}')")
             return
 
         logging.debug("No Theorem name (neither ArchiveEntry nor Theorem) found in the source code.")
@@ -230,7 +253,7 @@ class KeYmaeraXParser:
             r'\s*HP\s+(?P<name>\w+)\s*::=\s*\{',
             re.DOTALL # Allows '.' to match newlines for the overall pattern, though metadata is line-limited
         )
-        
+
         # DEF_FULL_PATTERN: Matches a complete Real or Bool definition, including metadata,
         # parameters, value, and the terminating semicolon.
         # Uses `[^\n]*` for single-line comments.
@@ -252,7 +275,7 @@ class KeYmaeraXParser:
             # Recreate the string from the mutable list for each search.
             # Regex `search` will naturally skip over the ' ' characters from previous replacements.
             current_definitions_text_for_search = "".join(mutable_definitions_block_chars)
-            
+
             # Search for the next HP header and Real/Bool definition from the current offset
             hp_match = HP_START_PATTERN.search(current_definitions_text_for_search, current_search_global_offset)
             def_match = DEF_FULL_PATTERN.search(current_definitions_text_for_search, current_search_global_offset)
@@ -282,13 +305,13 @@ class KeYmaeraXParser:
                 )
 
                 if closing_brace_idx is not None:
-                    hp_body_raw = current_definitions_text_for_search[open_brace_idx : closing_brace_idx + 1].strip()
-                    logging.debug(f"Extracted HP '{hp_name}' body (raw): '{hp_body_raw[:100]}...'")
+                    # hp_body_raw_within_braces includes the outer { }
+                    hp_body_raw_within_braces = current_definitions_text_for_search[open_brace_idx : closing_brace_idx + 1].strip()
+                    logging.debug(f"Extracted HP '{hp_name}' body (raw): '{hp_body_raw_within_braces[:100]}...'")
 
                     full_hp_block_end_idx = closing_brace_idx + 1
-                    
+
                     # Check for optional HP terminators (;; or ;) immediately after the closing brace
-                    # We need to find the *absolute* index of these terminators from the start of the full string
                     temp_str_after_brace = current_definitions_text_for_search[full_hp_block_end_idx:].lstrip()
                     if temp_str_after_brace.startswith(';;'):
                         terminator_idx = current_definitions_text_for_search.find(';;', full_hp_block_end_idx)
@@ -298,25 +321,51 @@ class KeYmaeraXParser:
                         terminator_idx = current_definitions_text_for_search.find(';', full_hp_block_end_idx)
                         if terminator_idx != -1:
                             full_hp_block_end_idx = terminator_idx + 1
-                    
-                    # Pass metadata to the HybridProgram AST node constructor
-                    hp_node = HybridProgram(hp_name, hp_body_raw, metadata=metadata_dict) 
-                    defs_node.add_child(hp_node)
-                    logging.debug(f"Added HybridProgram ASTNode for '{hp_name}' to DefinitionsBlock.")
 
-                    # Parse HP body structure if specific functions are defined
-                    body_content = hp_body_raw.strip()
-                    if hp_name == 'controlFunc':
-                        self._parse_program_fragment(body_content, hp_node)
-                        logging.debug(f"Parsed controlFunc structure for '{hp_name}'.")
-                    elif hp_name == 'stepFunc':
-                        self._parse_step_func_structure(hp_body_raw, hp_node)
-                    
+                    # --- NEW LOGIC FOR LOOP HPs LIKE dwwpdl ---
+                    loop_match = re.search(
+                        r'\{\s*(.*?)\s*\}\s*\*@invariant\s*\((.*?)\)',
+                        hp_body_raw_within_braces, # Search within the content *including* the outer braces
+                        re.DOTALL
+                    )
+
+                    if loop_match:
+                        loop_body_inner_raw = loop_match.group(1).strip()
+                        loop_invariant_formula = loop_match.group(2).strip()
+
+                        hp_node = HybridProgram(hp_name, hp_body_raw_within_braces, metadata=metadata_dict)
+                        hp_node.add_child(ASTNode("LoopBodyRaw", value=loop_body_inner_raw))
+                        hp_node.add_child(ASTNode("Invariant", value=loop_invariant_formula))
+
+                        # Recursively parse the *inner* loop body using the refactored _parse_program_fragment
+                        parsed_loop_body = self._parse_program_fragment(loop_body_inner_raw)
+                        hp_node.add_child(ASTNode("ParsedLoopBody", children=[parsed_loop_body]))
+
+                        defs_node.add_child(hp_node)
+                        logging.debug(f"Added Loop HybridProgram ASTNode for '{hp_name}' to DefinitionsBlock.")
+                    else:
+                        # Original logic for non-loop HPs
+                        hp_node = HybridProgram(hp_name, hp_body_raw_within_braces, metadata=metadata_dict)
+                        defs_node.add_child(hp_node)
+                        logging.debug(f"Added HybridProgram ASTNode for '{hp_name}' to DefinitionsBlock.")
+
+                        # Parse HP body structure if specific functions are defined
+                        body_content_without_outer_braces = hp_body_raw_within_braces[1:-1].strip() # Remove outer braces for parsing
+                        if hp_name == 'controlFunc':
+                            # Use the refactored _parse_program_fragment
+                            parsed_fragment_root = self._parse_program_fragment(body_content_without_outer_braces)
+                            hp_node.add_child(ASTNode("ParsedControlFunc", children=[parsed_fragment_root]))
+                            logging.debug(f"Parsed controlFunc structure for '{hp_name}'.")
+                        elif hp_name == 'stepFunc':
+                            self._parse_step_func_structure(hp_body_raw_within_braces, hp_node) # _parse_step_func_structure expects raw body with braces
+                        # Other HPs like 'dwwpdl' without loop syntax would also fall here if not caught above.
+                        # For 'dwwpdl' in the example, it *does* have loop syntax, so it's handled above.
+
                     # Replace the processed HP block with spaces in the mutable character list
                     for i in range(hp_header_start_idx, full_hp_block_end_idx):
                         if i < len(mutable_definitions_block_chars):
                             mutable_definitions_block_chars[i] = ' '
-                    
+
                     # Advance search position past the *original* end of the processed block
                     current_search_global_offset = full_hp_block_end_idx
                 else:
@@ -338,12 +387,12 @@ class KeYmaeraXParser:
                     d_val = d_val[1:-1].strip()
 
                 # Pass metadata to the Definition AST node constructor
-                def_node = Definition(d_name, d_type, value=d_val, metadata=m_data) 
-                
+                def_node = Definition(d_name, d_type, value=d_val, metadata=m_data)
+
                 if d_params:
                     param_list = [p.strip() for p in self.split_by_operator_outside_braces(d_params, ',')]
                     def_node.add_child(ASTNode("Parameters", ", ".join(param_list)))
-                
+
                 defs_node.add_child(def_node)
                 logging.debug(f"Added Definition ASTNode for '{d_name}' (Type: {d_type}) to DefinitionsBlock.")
 
@@ -352,7 +401,7 @@ class KeYmaeraXParser:
                 for i in range(def_start_idx, def_end_idx):
                     if i < len(mutable_definitions_block_chars):
                         mutable_definitions_block_chars[i] = ' '
-                
+
                 # Advance search position past the end of the processed block
                 current_search_global_offset = def_end_idx
 
@@ -361,16 +410,16 @@ class KeYmaeraXParser:
         if remaining_text_after_loop:
             logging.warning(f"Unparsed content remaining in Definitions block: '{remaining_text_after_loop[:200]}...'")
 
-        
+
     def _parse_metadata_string(self, raw_metadata: Optional[str]) -> dict:
         """
         Converts RL-Annotation lines into a dictionary.
         Supports: // @category: key1=val1, key2={complex_expr}, key3=[bounds]
         """
         metadata = {}
-        if not raw_metadata: 
+        if not raw_metadata:
             return metadata
-        
+
         # 1. Extract the category (e.g., @const, @var, @progress, @safety)
         # This looks for the word immediately following the '@' and before the ':'
         category_match = re.search(r'@(\w+):', raw_metadata)
@@ -378,28 +427,21 @@ class KeYmaeraXParser:
             metadata['type'] = category_match.group(1).strip()
 
         # 2. Extract key-value pairs
-        # Corrected regex: (\w+) for key, and four optional capturing groups for values:
-        # (?:(\{.*?\}))? -> curly braces
-        # (?:(\[.*?\]))? -> square brackets (FIXED: escaped square brackets)
-        # (?:(\".*?\"))? -> quoted string
-        # (?:([^,]+))? -> anything not a comma (for single-line values)
-        
-        # The re.findall call itself needs to be fixed.
         attr_pairs_raw = re.findall(
             r'(\w+)\s*=\s*'
             r'(?:(\{.*?\})|'   # Group 1: curly braces
-            r'(\[.*?\])|'   # Group 2: square brackets (FIXED: escaped square brackets)
+            r'([.*?])|'   # Group 2: square brackets (escaped)
             r'(\".*?\")|'   # Group 3: quoted string
             r'([^,]+))',    # Group 4: anything else (non-comma)
             raw_metadata,
-            re.DOTALL # Keep DOTALL to allow multiline expressions if they ever occur within {} or ""
+            re.DOTALL
         )
-        
+
         for match_tuple in attr_pairs_raw:
             key = match_tuple[0] # The actual key
             # Find the first non-empty value from the capturing groups (index 1, 2, 3, or 4)
             value_raw = next((v for v in match_tuple[1:] if v), '').strip()
-            
+
             # Remove surrounding delimiters for the final dict value
             if (value_raw.startswith('{') and value_raw.endswith('}')) or \
                (value_raw.startswith('[') and value_raw.endswith(']')) or \
@@ -407,7 +449,7 @@ class KeYmaeraXParser:
                 clean_val = value_raw[1:-1].strip()
             else:
                 clean_val = value_raw
-            
+
             # Handle on_success/on_failure values with optional status
             if key in ['on_success', 'on_failure']:
                 parts = clean_val.split(':', 1) # Split only on the first colon
@@ -422,8 +464,8 @@ class KeYmaeraXParser:
                 metadata[key] = clean_val
 
         return metadata
-    
-    
+
+
     def _parse_step_func_structure(self, body_content: str, hp_node: ASTNode):
         """Extracted stepFunc logic into a clean helper"""
         ode_node = ASTNode("OrdinaryDifferentialEquations")
@@ -433,19 +475,27 @@ class KeYmaeraXParser:
         if clean_body.startswith('{') and clean_body.endswith('}'):
             clean_body = clean_body[1:-1].strip()
 
-        parts = [p.strip() for p in self.split_by_operator_outside_braces(clean_body, ',') if p.strip()]
+        # Split by comma first to separate ODEs and domain constraints
+        parts = self.split_by_operator_outside_braces(clean_body, ',')
         for part in parts:
+            part = part.strip()
+            if not part: continue
+
+            # Further split by '&' for multiple domain constraints or ODEs
             sub_parts = self.split_by_operator_outside_braces(part, '&')
             if not sub_parts: continue
 
-            ode_or_formula = sub_parts[0]
-            if "'" in ode_or_formula:
+            # The first sub_part might be an ODE or a constraint
+            ode_or_formula = sub_parts[0].strip()
+            if "'" in ode_or_formula: # Heuristic for ODEs (contains a prime)
                 ode_node.add_child(ASTNode("ODE", value=ode_or_formula))
             else:
                 domain_node.add_child(ASTNode("Constraint", value=ode_or_formula))
 
+            # Remaining sub_parts are always domain constraints
             for domain_constraint in sub_parts[1:]:
-                domain_node.add_child(ASTNode("Constraint", value=domain_constraint))
+                if domain_constraint.strip():
+                    domain_node.add_child(ASTNode("Constraint", value=domain_constraint.strip()))
 
         hp_node.add_child(ode_node)
         if domain_node.children:
@@ -474,7 +524,7 @@ class KeYmaeraXParser:
             line_segment = line_segment.strip()
             if not line_segment:
                 continue
-            
+
             var_match = VAR_LINE_PATTERN.search(line_segment)
             if var_match:
                 var_type = var_match.group('type')
@@ -489,53 +539,134 @@ class KeYmaeraXParser:
         logging.debug("Finished _parse_program_variables.")
 
 
-    def _parse_program_fragment(self, program_fragment_string: str, parent_node: ASTNode):
+    def _parse_atomic_statement(self, statement_string: str) -> ASTNode:
+        """
+        Parses a single, non-compound statement (assignment, test, HP call, or raw).
+        This is the base case for program fragment parsing.
+        Assumes outer braces have already been stripped by _parse_program_fragment if present.
+        """
+        fragment = statement_string.strip()
+        if not fragment:
+            return ASTNode("EmptyFragment")
+
+        if fragment.startswith('?'):
+            return TestStatement(fragment[1:].strip())
+        elif ":=" in fragment:
+            return AssignmentStatement(fragment)
+        elif re.match(r'^\w+$', fragment): # Simple identifier, likely an HP call
+            return HPCall(fragment)
+        else:
+            logging.warning(f"Unrecognized program fragment (atomic base case): '{fragment}'. Treating as RawStatement.")
+            return ASTNode("RawStatement", value=fragment)
+
+
+    def _parse_program_fragment(self, program_fragment_string: str) -> ASTNode:
+        """
+        Parses a program fragment into an ASTNode representing its structure.
+        Handles if/else, choice (++) and sequence (;) operators by precedence.
+        This function now handles sequence parsing iteratively at the top level
+        to prevent RecursionError for long sequences of atomic statements.
+        """
         fragment = program_fragment_string.strip()
         if not fragment:
-            return
+            return ASTNode("EmptyFragment")
 
-        # 1. Peel off ALL outer braces until we find the actual content.
-        # This prevents {{...}} from confusing the splitter.
-        while fragment.startswith('{') and fragment.endswith('}'):
-            # Check if these braces actually match each other
-            if self._find_matching_brace_span(fragment, 0) == len(fragment) - 1:
-                fragment = fragment[1:-1].strip()
-            else:
-                break # Braces are like {a};{b}, don't peel.
+        # 1. Handle top-level braces: If the entire fragment is enclosed in braces,
+        # strip them and recursively parse the inner content.
+        if fragment.startswith('{'):
+            matching_brace_idx = self._find_matching_brace_span(fragment, 0)
+            if matching_brace_idx == len(fragment) - 1:
+                inner_content = fragment[1:-1].strip()
+                return self._parse_program_fragment(inner_content)
+            # If braces are not balanced or don't enclose the whole thing, proceed.
 
-        if not fragment:
-            return
+        # 2. Handle If-Else statements (highest precedence for compound statements)
+        if fragment.startswith("if"):
+            cond_match = re.match(r'if\s*\((.*?)\)\s*\{', fragment, re.DOTALL)
+            if cond_match:
+                condition = cond_match.group(1).strip()
+                then_block_start = cond_match.end() - 1
+                then_block_end = self._find_matching_brace_span(fragment, then_block_start)
+                if then_block_end is None:
+                    logging.warning(f"Unbalanced braces in 'then' block of if statement: '{fragment}'")
+                    return ASTNode("ErrorFragment", value=fragment)
 
-        # 2. Check for Choice Operator (++)
-        # Use the helper to split, ensuring we only split at the TOP level of this fragment
+                then_content_raw = fragment[then_block_start + 1 : then_block_end].strip()
+                then_node = self._parse_program_fragment(then_content_raw) # Recursive call for then block
+
+                else_node = None
+                remaining_after_then = fragment[then_block_end + 1:].strip()
+                if remaining_after_then.startswith("else"):
+                    else_keyword_end_match = re.match(r'else\s*(\{.*\}|.*)', remaining_after_then, re.DOTALL)
+                    if else_keyword_end_match:
+                        else_content_full = else_keyword_end_match.group(1).strip()
+                        if else_content_full.startswith('{'):
+                            else_block_start = remaining_after_then.find('{')
+                            else_block_end = self._find_matching_brace_span(remaining_after_then, else_block_start)
+                            if else_block_end is None:
+                                logging.warning(f"Unbalanced braces in 'else' block of if statement: '{fragment}'")
+                                return ASTNode("ErrorFragment", value=fragment)
+                            else_content_raw = remaining_after_then[else_block_start + 1 : else_block_end].strip()
+                            else_node = self._parse_program_fragment(else_content_raw) # Recursive call for else block
+                        else: # 'else' followed by a single statement (or a sequence without explicit braces)
+                            else_node = self._parse_program_fragment(else_content_full)
+
+                if_else_ast_node = IfElseStatement(condition)
+                if_else_ast_node.add_child(then_node)
+                if else_node:
+                    if_else_ast_node.add_child(else_node)
+                return if_else_ast_node
+
+        # 3. Check for Choice Operator (++) (next precedence)
         choice_parts = self.split_by_operator_outside_braces(fragment, '++')
-        
         if len(choice_parts) > 1:
-            choice_node = ASTNode("ChoiceOperator (++)")
-            parent_node.add_child(choice_node)
-            for i, part in enumerate(choice_parts):
-                child_choice_node = ASTNode(f"Choice {i+1}")
-                choice_node.add_child(child_choice_node)
-                # Recurse into the part
-                self._parse_program_fragment(part, child_choice_node)
-            return
+            choice_ast_node = ChoiceStatement()
+            for part in choice_parts:
+                if part.strip():
+                    choice_ast_node.add_child(self._parse_program_fragment(part)) # Recursive call for each choice branch
+            return choice_ast_node
 
-        # 3. Check for Sequence Operator (;)
+        # 4. Handle Sequence or single Atomic statement
+        # If it's not an if/else, a top-level choice, or a fully enclosed braced block,
+        # it must be a sequence of statements (separated by ';') or a single atomic statement.
         statements = self.split_by_operator_outside_braces(fragment, ';')
-        
-        # If we have multiple statements OR a single statement that ends in a semicolon
-        if len(statements) > 1 or (len(statements) == 1 and fragment.endswith(';')):
-            for stmt_value in statements:
-                if stmt_value.strip():
-                    self._parse_program_fragment(stmt_value, parent_node)
-            return
+        non_empty_statements = [s.strip() for s in statements if s.strip()]
 
-        # 4. Base Case: It's a single Action/Test
-        if fragment.startswith('?'):
-            parent_node.add_child(ASTNode("Test", value=fragment[1:].strip()))
-        else:
-            # Check for assignment or HP call
-            parent_node.add_child(ASTNode("Statement", value=fragment))
+        if not non_empty_statements:
+            return ASTNode("EmptyFragment")
+
+        # If there's only one non-empty statement, it means the fragment itself was a single unit.
+        # Since top-level if/else, choice, and fully enclosed braced blocks are handled above,
+        # if we reach here with a single statement, it must be atomic.
+        if len(non_empty_statements) == 1:
+            return self._parse_atomic_statement(non_empty_statements[0])
+        
+        # If there are multiple non-empty statements, it's a true sequence.
+        sequence_ast_node = SequenceStatement()
+        for stmt_value in non_empty_statements:
+            if stmt_value.strip():
+                temp_stmt_value = stmt_value.strip()
+                
+                # Determine if the current statement within the sequence is itself a compound structure.
+                is_compound_nested = False
+                
+                # Check for nested if-else
+                if temp_stmt_value.startswith('if '):
+                    is_compound_nested = True
+                # Check for nested choice (using split_by_operator_outside_braces for robustness)
+                elif len(self.split_by_operator_outside_braces(temp_stmt_value, '++')) > 1:
+                    is_compound_nested = True
+                # Check for nested braced block (e.g., `{x:=1; y:=2}` within a sequence `a:=0; {x:=1; y:=2}; b:=3;`)
+                elif temp_stmt_value.startswith('{') and self._find_matching_brace_span(temp_stmt_value, 0) == len(temp_stmt_value) - 1:
+                    is_compound_nested = True
+                
+                if is_compound_nested:
+                    # If it's a nested compound statement, recurse with _parse_program_fragment.
+                    sequence_ast_node.add_child(self._parse_program_fragment(stmt_value))
+                else:
+                    # Otherwise, it's an atomic statement, parse it directly.
+                    sequence_ast_node.add_child(self._parse_atomic_statement(stmt_value))
+        return sequence_ast_node
 
 
     def _parse_problem(self):
@@ -545,123 +676,67 @@ class KeYmaeraXParser:
             logging.debug("No Problem block found. Skipping problem parsing.")
             return
 
-        # ProblemStatement is now imported from ast_config, which has metadata support
-        problem_node = ProblemStatement(problem_block) 
+        problem_node = ProblemStatement(problem_block)
         self.ast_root.add_child(problem_node)
         logging.debug("Created ProblemStatement ASTNode.")
 
-        # FIX: Escape literal square brackets [ and ] in the regex
+        # Split the problem_block into precondition, safety, and liveness parts
+        # The pattern is: P -> [HP] Q_safety & <HP> Q_liveness
+
+        # First, find P -> ProgramAndPostconditions
         implication_match = re.search(
-            r'([\s\S]+?)\s*->\s*\[([\s\S]+?)\]\s*([\s\S]+)', # Corrected to escape []
+            r'^(.*?)\s*->\s*(.*)$', # P -> ProgramAndPostconditions
             problem_block,
             re.DOTALL
         )
 
         if implication_match:
             precondition_raw = implication_match.group(1).strip()
-            program_raw = implication_match.group(2).strip()
-            postcondition_raw = implication_match.group(3).strip()
-            logging.debug(f"Problem structure P -> [HP] Q matched.")
-            logging.debug(f"Precondition: '{precondition_raw[:50]}...'")
-            logging.debug(f"Program: '{program_raw[:50]}...'")
-            logging.debug(f"Postcondition: '{postcondition_raw[:50]}...'")
-
+            program_and_postconditions_raw = implication_match.group(2).strip()
 
             problem_node.add_child(ASTNode("Precondition (P)", precondition_raw))
+            logging.debug(f"Precondition: '{precondition_raw[:50]}...'")
 
-            loop_match = re.search(
-                # Use greedy match for invariant to capture full content
-                r"(\{[\s\S]*?\})\*@invariant\(([\s\S]*)\)",
-                program_raw,
-                re.DOTALL
-            )
+            # Now parse the ProgramAndPostconditions_raw: [dwwpdl;](...) & <dwwpdl;>(...)
+            # We need to find the '&' that separates the safety and liveness parts.
+            # This '&' should be at the top level, outside any parenthesis for the postconditions.
+            safety_and_liveness_parts = self.split_by_operator_outside_braces(program_and_postconditions_raw, '&')
 
-            if loop_match:
-                loop_body_raw = loop_match.group(1).strip()
-                loop_invariant_raw = loop_match.group(2).strip()
-                logging.debug(f"Loop structure matched. Loop body: '{loop_body_raw[:50]}...', Invariant: '{loop_invariant_raw[:50]}...'")
+            if len(safety_and_liveness_parts) == 2:
+                safety_part_raw = safety_and_liveness_parts[0].strip()
+                liveness_part_raw = safety_and_liveness_parts[1].strip()
 
-                program_node = ASTNode("LoopExecution")
-                outer_hp_node = ASTNode("HP", "")
-
-                loop_body_inner_content = loop_body_raw[1:-1].strip()
-
-                discrete_start_idx = loop_body_inner_content.find('{')
-                if discrete_start_idx == -1:
-                    logging.warning(f"Could not find discrete block in loop body: '{loop_body_inner_content}'")
-                    program_node.add_child(ASTNode("Raw Loop Body Content", loop_body_raw))
-                    program_node.add_child(ASTNode("Invariant", loop_invariant_raw))
-                    problem_node.add_child(program_node)
-                    problem_node.add_child(ASTNode("Postcondition (Q)", postcondition_raw))
-                    return
-
-                discrete_end_idx = self._find_matching_brace_span(loop_body_inner_content, discrete_start_idx)
-                if discrete_end_idx is None:
-                    logging.warning(f"Unmatched braces in discrete block of loop body: '{loop_body_inner_content}'")
-                    program_node.add_child(ASTNode("Raw Loop Body Content", loop_body_raw))
-                    program_node.add_child(ASTNode("Invariant", loop_invariant_raw))
-                    problem_node.add_child(program_node)
-                    problem_node.add_child(ASTNode("Postcondition (Q)", postcondition_raw))
-                    return
-
-                discrete_block_full_str = loop_body_inner_content[discrete_start_idx : discrete_end_idx + 1].strip()
-                logging.debug(f"Discrete block extracted: '{discrete_block_full_str[:50]}...'")
-
-
-                continuous_search_start_idx = discrete_end_idx + 1
-                continuous_start_idx = loop_body_inner_content.find('{', continuous_search_start_idx)
-
-                if continuous_start_idx == -1:
-                    logging.warning(f"Could not find continuous block in loop body: '{loop_body_inner_content}'")
-                    program_node.add_child(ASTNode("Raw Loop Body Content", loop_body_raw))
-                    program_node.add_child(ASTNode("Invariant", loop_invariant_raw))
-                    problem_node.add_child(program_node)
-                    problem_node.add_child(ASTNode("Postcondition (Q)", postcondition_raw))
-                    return
-
-                continuous_end_idx = self._find_matching_brace_span(loop_body_inner_content, continuous_start_idx)
-                if continuous_end_idx == None:
-                    logging.warning(f"Unmatched braces in continuous block of loop body: '{loop_body_inner_content}'")
-                    program_node.add_child(ASTNode("Raw Loop Body Content", loop_body_raw))
-                    program_node.add_child(ASTNode("Invariant", loop_invariant_raw))
-                    problem_node.add_child(program_node)
-                    problem_node.add_child(ASTNode("Postcondition (Q)", postcondition_raw))
-                    return
-
-                continuous_block_full_str = loop_body_inner_content[continuous_start_idx : continuous_end_idx + 1].strip()
-                logging.debug(f"Continuous block extracted: '{continuous_block_full_str[:50]}...'")
-
-                control_hp_node = ASTNode("HP", "")
-                discrete_fragment_content = discrete_block_full_str[1:-1].strip()
-                self._parse_program_fragment(discrete_fragment_content, control_hp_node)
-                outer_hp_node.add_child(control_hp_node)
-                logging.debug("Processed discrete control block.")
-
-                dynamics_hp_node = ASTNode("HP", "")
-                dynamics_fragment_content = continuous_block_full_str[1:-1].strip()
-
-                stmt_inv_match = re.search(r'^(.*?);@invariant\((.*?)\)$', dynamics_fragment_content, re.DOTALL)
-                if stmt_inv_match:
-                    statement_name = stmt_inv_match.group(1).strip()
-                    invariant_content = stmt_inv_match.group(2).strip()
-                    dynamics_hp_node.add_child(ASTNode("Statement", statement_name))
-                    dynamics_hp_node.add_child(ASTNode("Invariant", invariant_content))
-                    logging.debug(f"Processed dynamics block with invariant: Statement='{statement_name}', Invariant='{invariant_content}'")
+                # Parse Safety Postcondition: [HP;](Q_safety)
+                safety_match = re.match(r'\[\s*(\w+)\s*;\s*\]\s*\((.*)\)', safety_part_raw, re.DOTALL)
+                if safety_match:
+                    hp_name_safety = safety_match.group(1).strip()
+                    safety_formula = safety_match.group(2).strip()
+                    safety_ast_node = SafetyPostcondition()
+                    safety_ast_node.add_child(HPCall(hp_name_safety))
+                    safety_ast_node.add_child(ASTNode("Formula", value=safety_formula))
+                    problem_node.add_child(safety_ast_node)
+                    logging.debug(f"Safety Postcondition: HP='{hp_name_safety}', Formula='{safety_formula[:50]}...'")
                 else:
-                    dynamics_hp_node.add_child(ASTNode("Statement", dynamics_fragment_content))
-                    logging.debug(f"Processed dynamics block without explicit invariant: Statement='{dynamics_fragment_content}'")
-                outer_hp_node.add_child(dynamics_hp_node)
+                    problem_node.add_child(ASTNode("Error", f"Could not parse safety part: '{safety_part_raw}'"))
+                    logging.warning(f"Could not parse safety part: '{safety_part_raw}'")
 
-                program_node.add_child(outer_hp_node)
-                program_node.add_child(ASTNode("Invariant", loop_invariant_raw))
-                problem_node.add_child(program_node)
-                logging.debug("Added LoopExecution to ProblemStatement.")
+                # Parse Liveness Postcondition: <HP;> Q_liveness
+                # Note: The liveness formula might not be enclosed in parentheses.
+                liveness_match = re.match(r'<\s*(\w+)\s*;\s*>\s*(.*)', liveness_part_raw, re.DOTALL)
+                if liveness_match:
+                    hp_name_liveness = liveness_match.group(1).strip()
+                    liveness_formula = liveness_match.group(2).strip()
+                    liveness_ast_node = LivenessPostcondition()
+                    liveness_ast_node.add_child(HPCall(hp_name_liveness))
+                    liveness_ast_node.add_child(ASTNode("Formula", value=liveness_formula))
+                    problem_node.add_child(liveness_ast_node)
+                    logging.debug(f"Liveness Postcondition: HP='{hp_name_liveness}', Formula='{liveness_formula[:50]}...'")
+                else:
+                    problem_node.add_child(ASTNode("Error", f"Could not parse liveness part: '{liveness_part_raw}'"))
+                    logging.warning(f"Could not parse liveness part: '{liveness_part_raw}'")
             else:
-                program_node = ASTNode("RawProgram", program_raw)
-                problem_node.add_child(program_node)
-                logging.debug(f"No loop structure found in program, added as RawProgram.")
-
-            problem_node.add_child(ASTNode("Postcondition (Q)", postcondition_raw))
+                problem_node.add_child(ASTNode("Error", f"Could not split program and postconditions by '&': '{program_and_postconditions_raw}'"))
+                logging.warning(f"Could not split program and postconditions by '&': '{program_and_postconditions_raw}'")
         else:
             problem_node.add_child(ASTNode("Error", "Could not parse P -> [HP] Q structure."))
             logging.debug("Failed to parse P -> [HP] Q structure.")
@@ -679,18 +754,23 @@ def convert_keymaerax_ast_to_intermediate_pyast(kx_ast_root: ASTNode) -> GymEnvi
     env_name = "KeYmaeraX_RL_Environment" # Default name
     theorem_name_node = next((c for c in kx_ast_root.children if c.node_type == "TheoremName"), None)
     if theorem_name_node and theorem_name_node.value:
-        # The replacement logic here correctly handles the string from ArchiveEntry
         env_name = theorem_name_node.value.replace(' ', '_').replace(':', '_').replace('"', '').replace('/', '_').replace('.', '_')
         logging.debug(f"Set environment name to '{env_name}' from theorem name.")
 
     # Initialize sub-configs first
     definitions_config = DefinitionsConfig()
     variables_config = VariablesConfig()
+
+    # --- MODIFICATION START ---
+    # Initialize ProblemConfig without safety_postcondition and liveness_postcondition
     problem_config = ProblemConfig(
         precondition=PreconditionConfig(formula=""),
-        loop_execution=LoopExecutionConfig(),
-        postcondition=PostconditionConfig(formula="")
+        loop_execution=LoopExecutionConfig()
     )
+    # These attributes will be set later in the function if found in the AST
+    problem_config.safety_postcondition = None
+    problem_config.liveness_postcondition = None
+    # --- MODIFICATION END ---
 
     # Pass them to GymEnvironmentConfig constructor
     gym_config = GymEnvironmentConfig(
@@ -704,12 +784,12 @@ def convert_keymaerax_ast_to_intermediate_pyast(kx_ast_root: ASTNode) -> GymEnvi
     defs_block_kx = next((c for c in kx_ast_root.children if c.node_type == "DefinitionsBlock"), None)
     if defs_block_kx:
         logging.debug("Found DefinitionsBlock in KeYmaeraX AST for conversion.")
-        
+
         for def_node_kx in defs_block_kx.children:
             logging.debug(f"Converting definition AST node: {def_node_kx.node_type} (name: {getattr(def_node_kx, 'name', 'N/A')}, type: {getattr(def_node_kx, 'definition_type', 'N/A')})")
             # Access metadata directly from the ASTNode instance
-            metadata = def_node_kx.metadata 
-            
+            metadata = def_node_kx.metadata
+
             if def_node_kx.node_type == "Definition" and hasattr(def_node_kx, 'definition_type'):
                 parameters = []
                 params_node = next((c for c in def_node_kx.children if c.node_type == "Parameters"), None)
@@ -724,18 +804,31 @@ def convert_keymaerax_ast_to_intermediate_pyast(kx_ast_root: ASTNode) -> GymEnvi
                     logging.debug(f"Extracted parameters for '{def_node_kx.name}': {parameters}")
 
                 if def_node_kx.definition_type == "HP":
-                    logging.debug(f"Processing HP definition: {def_node_kx.name}")
-                    # In HybridProgram, the name and body are attributes, not value/definition_value
-                    hp_name = def_node_kx.name 
-                    hp_body = def_node_kx.body
-                    
-                    if hp_name == "controlFunc":
+                    hp_name = def_node_kx.name
+                    hp_body = def_node_kx.body # This is the raw body string
+
+                    # Check if it's a loop HP (like dwwpdl)
+                    loop_body_raw_node = next((c for c in def_node_kx.children if c.node_type == "LoopBodyRaw"), None)
+                    invariant_node = next((c for c in def_node_kx.children if c.node_type == "Invariant"), None)
+                    parsed_loop_body_node = next((c for c in def_node_kx.children if c.node_type == "ParsedLoopBody"), None)
+
+                    if loop_body_raw_node and invariant_node and parsed_loop_body_node:
+                        # This is a loop HP (like dwwpdl). Its structure is stored in the HP definition.
+                        # The Problem block will reference this.
+                        logging.debug(f"Detected and parsed Loop HP '{hp_name}' with invariant: {invariant_node.value}")
+                        # We don't add a specific config for it in definitions_config.hybrid_programs
+                        # because its primary role is in the problem statement's loop execution.
+                        # Its parsed body is available via parsed_loop_body_node.children[0]
+                        # for when the Problem block needs to build the LoopExecutionConfig.
+
+                    elif hp_name == "controlFunc":
                         # The children of the HP node should contain the parsed program fragment
-                        control_func_root_action = next((c for c in def_node_kx.children if c.node_type == "ChoiceOperator (++)"), None)
+                        parsed_control_func_root = next((c for c in def_node_kx.children if c.node_type == "ParsedControlFunc"), None)
                         action_space_config = None
-                        if control_func_root_action:
+                        if parsed_control_func_root and parsed_control_func_root.children:
+                            # The actual root of the parsed control flow is the first child of ParsedControlFunc
                             action_space_config = _parse_kx_hp_program_fragment_to_action_config(
-                                control_func_root_action, 0
+                                parsed_control_func_root.children[0], 0
                             )
                         control_func_config = ControlFuncConfig(name=hp_name, action_space_config=action_space_config, metadata=metadata)
                         definitions_config.hybrid_programs.append(control_func_config)
@@ -743,11 +836,10 @@ def convert_keymaerax_ast_to_intermediate_pyast(kx_ast_root: ASTNode) -> GymEnvi
                     elif hp_name == "stepFunc":
                         odes = []
                         evolution_domain_constraints = []
-                        duration_expr: Optional[str] = None # Will need to be set from somewhere, perhaps a constant 'ep'
+                        duration_expr: Optional[str] = None
 
                         ode_block = next((c for c in def_node_kx.children if c.node_type == "OrdinaryDifferentialEquations"), None)
                         if ode_block:
-                            logging.debug(f"Found ODE block for stepFunc with {len(ode_block.children)} children.")
                             for ode_child in ode_block.children:
                                 if ode_child.node_type == "ODE" and ode_child.value:
                                     parts = ode_child.value.split("=", 1)
@@ -755,22 +847,13 @@ def convert_keymaerax_ast_to_intermediate_pyast(kx_ast_root: ASTNode) -> GymEnvi
                                         var = parts[0].strip().replace("'", "")
                                         equation = parts[1].strip()
                                         odes.append(ODEConfig(variable=var, equation=equation))
-                                        logging.debug(f"  Parsed ODE: {var}' = {equation}")
-                                    else:
-                                        logging.warning(f"Could not parse ODE: {ode_child.value}")
-                                else:
-                                    logging.warning(f"Unexpected node type in ODE block: {ode_child.node_type}")
 
                         domain_block = next((c for c in def_node_kx.children if c.node_type == "EvolutionDomain"), None)
                         if domain_block:
-                            logging.debug(f"Found EvolutionDomain block for stepFunc with {len(domain_block.children)} children.")
                             for domain_child in domain_block.children:
                                 if domain_child.node_type == "Constraint" and domain_child.value:
                                     evolution_domain_constraints.append(domain_child.value)
-                                    logging.debug(f"  Parsed Domain Constraint: {domain_child.value}")
-                                else:
-                                    logging.warning(f"Unexpected node type in EvolutionDomain block: {domain_child.node_type}")
-                        
+
                         evolution_domain = EvolutionDomainConfig(constraints=evolution_domain_constraints) if evolution_domain_constraints else None
                         step_func_config = StepFuncConfig(name=hp_name, odes=odes, evolution_domain=evolution_domain, duration=duration_expr, raw_body_snippet=hp_body, metadata=metadata)
                         definitions_config.hybrid_programs.append(step_func_config)
@@ -813,12 +896,12 @@ def convert_keymaerax_ast_to_intermediate_pyast(kx_ast_root: ASTNode) -> GymEnvi
     vars_block_kx = next((c for c in kx_ast_root.children if c.node_type == "ProgramVariablesBlock"), None)
     if vars_block_kx:
         logging.debug("Found ProgramVariablesBlock in KeYmaeraX AST for conversion.")
-        
+
         for var_node_kx in vars_block_kx.children:
             if var_node_kx.node_type == "Variable":
                 # Get metadata from the Kx AST node
                 var_metadata = var_node_kx.metadata # Access metadata directly from the ASTNode instance
-                
+
                 lower_bound = None
                 upper_bound = None
                 if 'bound' in var_metadata:
@@ -846,134 +929,149 @@ def convert_keymaerax_ast_to_intermediate_pyast(kx_ast_root: ASTNode) -> GymEnvi
     problem_block_kx = next((c for c in kx_ast_root.children if c.node_type == "ProblemStatement"), None)
     if problem_block_kx:
         logging.debug("Found ProblemStatement in KeYmaeraX AST for conversion.")
-        
+
         precondition_kx = next((c for c in problem_block_kx.children if c.node_type == "Precondition (P)"), None)
         if precondition_kx and precondition_kx.value:
             problem_config.precondition = PreconditionConfig(formula=precondition_kx.value)
             logging.debug(f"Set precondition: '{precondition_kx.value[:50]}...'")
 
-        loop_execution_kx = next((c for c in problem_block_kx.children if c.node_type == "LoopExecution"), None)
-        if loop_execution_kx:
-            logging.debug("Found LoopExecution in KeYmaeraX AST for conversion.")
-            loop_inv_kx = next((c for c in loop_execution_kx.children if c.node_type == "Invariant"), None)
-            loop_execution_config = LoopExecutionConfig(
-                loop_invariant_formula=loop_inv_kx.value if loop_inv_kx and loop_inv_kx.value else "",
-                iterations="inf"
-            )
-            problem_config.loop_execution = loop_execution_config
-            logging.debug(f"Set loop invariant: '{loop_execution_config.loop_invariant_formula[:50]}...'")
+        # --- NEW LOGIC FOR SAFETY AND LIVENESS POSTCONDITIONS ---
+        safety_postcondition_kx = next((c for c in problem_block_kx.children if c.node_type == "SafetyPostcondition"), None)
+        if safety_postcondition_kx:
+            hp_call_node = next((c for c in safety_postcondition_kx.children if c.node_type == "HPCall"), None)
+            formula_node = next((c for c in safety_postcondition_kx.children if c.node_type == "Formula"), None)
+            if hp_call_node and formula_node:
+                problem_config.safety_postcondition = PostconditionConfig(
+                    formula=formula_node.value,
+                    hp_name=hp_call_node.value # Store the HP name for reference
+                )
+                logging.debug(f"Set safety postcondition: HP='{hp_call_node.value}', Formula='{formula_node.value[:50]}...'")
 
-            loop_body_hp_kx = next((c for c in loop_execution_kx.children if c.node_type == "HP"), None)
-            if loop_body_hp_kx and len(loop_body_hp_kx.children) == 2:
-                logging.debug("Found loop body HP structure (discrete and continuous parts).")
-                discrete_hp_kx = loop_body_hp_kx.children[0]
-                if discrete_hp_kx.node_type == "HP":
-                    discrete_sequence_config = SequenceActionConfig()
-                    for stmt_kx in discrete_hp_kx.children:
-                        if stmt_kx.node_type == "Statement":
-                            if stmt_kx.value == "controlFunc":
-                                discrete_sequence_config.actions.append(CallHybridProgramConfig(hp_name="controlFunc"))
-                                logging.debug("Added CallHybridProgramConfig for 'controlFunc' to loop body.")
-                            elif ":=" in stmt_kx.value:
-                                var, val = stmt_kx.value.split(':=', 1)
-                                discrete_sequence_config.actions.append(DeterministicAssignmentActionConfig(variable=var.strip(), value=val.strip()))
-                                logging.debug(f"Added DeterministicAssignmentActionConfig: {var.strip()} := {val.strip()}")
-                            else:
-                                logging.warning(f"Unhandled statement in discrete loop body: {stmt_kx.value}")
-                        else:
-                            logging.warning(f"Unhandled node type in discrete loop body: {stmt_kx.node_type}")
-                    loop_execution_config.loop_body.actions.append(discrete_sequence_config)
+        liveness_postcondition_kx = next((c for c in problem_block_kx.children if c.node_type == "LivenessPostcondition"), None)
+        if liveness_postcondition_kx:
+            hp_call_node = next((c for c in liveness_postcondition_kx.children if c.node_type == "HPCall"), None)
+            formula_node = next((c for c in liveness_postcondition_kx.children if c.node_type == "Formula"), None)
+            if hp_call_node and formula_node:
+                problem_config.liveness_postcondition = PostconditionConfig(
+                    formula=formula_node.value,
+                    hp_name=hp_call_node.value # Store the HP name for reference
+                )
+                logging.debug(f"Set liveness postcondition: HP='{hp_call_node.value}', Formula='{liveness_formula[:50]}...'")
 
-                continuous_hp_kx = loop_body_hp_kx.children[1]
-                if continuous_hp_kx.node_type == "HP":
-                    step_func_call_kx = next((c for c in continuous_hp_kx.children if c.node_type == "Statement" and c.value == "stepFunc"), None)
-                    step_inv_kx = next((c for c in continuous_hp_kx.children if c.node_type == "Invariant"), None)
-                    if step_func_call_kx:
-                        loop_execution_config.loop_body.actions.append(HybridProgramStepConfig(
-                            hp_name="stepFunc",
-                            invariant_formula=step_inv_kx.value if step_inv_kx and step_inv_kx.value else None
-                        ))
-                        logging.debug("Added HybridProgramStepConfig for 'stepFunc' to loop body.")
-                    else:
-                        logging.warning(f"Could not find stepFunc call in continuous loop body.")
-                else:
-                    logging.warning(f"Expected HP node for continuous part, got {continuous_hp_kx.node_type}")
+        # The LoopExecutionConfig for the problem should now refer to the dwwpdl HP definition.
+        # Find the dwwpdl HP definition in the KeYmaeraX AST to get its parsed loop body and invariant.
+        dwwpdl_hp_def = None
+        if defs_block_kx:
+            for hp_def in defs_block_kx.children: # Iterate through raw Kx AST nodes
+                if hp_def.node_type == "HP" and hp_def.name == "dwwpdl":
+                    dwwpdl_hp_def = hp_def
+                    break
+
+        if dwwpdl_hp_def:
+            loop_invariant_node = next((c for c in dwwpdl_hp_def.children if c.node_type == "Invariant"), None)
+            parsed_loop_body_node = next((c for c in dwwpdl_hp_def.children if c.node_type == "ParsedLoopBody"), None)
+
+            if loop_invariant_node and parsed_loop_body_node and parsed_loop_body_node.children:
+                # The parsed_loop_body_node's first child is the root of the parsed program fragment
+                loop_body_root_kx_node = parsed_loop_body_node.children[0]
+
+                # Convert this Kx AST program fragment into PyAST ActionType
+                loop_execution_actions_config = _parse_kx_hp_program_fragment_to_action_config(loop_body_root_kx_node, 0)
+
+                # The loop body is expected to be a SequenceActionConfig at the top level
+                if not isinstance(loop_execution_actions_config, SequenceActionConfig):
+                    # If it's not a sequence, wrap it in one for consistency
+                    loop_execution_actions_config = SequenceActionConfig(actions=[loop_execution_actions_config])
+
+                problem_config.loop_execution = LoopExecutionConfig(
+                    loop_invariant_formula=loop_invariant_node.value,
+                    iterations="inf", # Assumed for general loops
+                    loop_body=loop_execution_actions_config
+                )
+                logging.debug("Populated LoopExecutionConfig from dwwpdl HP definition.")
             else:
-                logging.warning(f"Loop body HP node structure unexpected: {loop_body_hp_kx}")
+                logging.warning("Could not find invariant or parsed loop body for dwwpdl HP.")
+        else:
+            logging.warning("Could not find dwwpdl HP definition to populate LoopExecutionConfig.")
 
-
-        postcondition_kx = next((c for c in problem_block_kx.children if c.node_type == "Postcondition (Q)"), None)
-        if postcondition_kx and postcondition_kx.value:
-            problem_config.postcondition = PostconditionConfig(formula=postcondition_kx.value)
-            logging.debug(f"Set postcondition: '{postcondition_kx.value[:50]}...'")
-
-    logging.debug(f"Final GymEnvironmentConfig.definitions.hybrid_programs contains: {[hp.name for hp in gym_config.definitions.hybrid_programs]}")
     logging.debug("Finished convert_keymaerax_ast_to_intermediate_pyast.")
     return gym_config
 
 def _parse_kx_hp_program_fragment_to_action_config(kx_node: ASTNode, choice_level: int) -> ActionType:
     """
-    Recursively parses a KeYmaera X program fragment (like controlFunc body)
-    into an ActionBlockConfig structure (ChoiceActionConfig or SequenceActionConfig).
-    This function now expects to receive the *already parsed* ASTNodes from KeYmaeraXParser.
+    Recursively parses a KeYmaera X program fragment AST node into an ActionType representation.
     """
-    logging.debug(f"_parse_kx_hp_program_fragment_to_action_config called for node type: {kx_node.node_type}, level: {choice_level}")
-    if not kx_node:
-        logging.debug("Empty kx_node, returning empty SequenceActionConfig.")
-        return SequenceActionConfig()
+    logging.debug(f"_parse_kx_hp_program_fragment_to_action_config called for node type: {kx_node.node_type}, value: {kx_node.value}, level: {choice_level}")
+    if not kx_node or kx_node.node_type == "EmptyFragment":
+        return SequenceActionConfig(actions=[]) # Return an empty sequence for empty fragments
 
-    if kx_node.node_type == "ChoiceOperator (++)":
+    if kx_node.node_type == "ChoiceStatement":
         choice_block = ChoiceActionConfig(level_name=f"ChoiceLevel_{choice_level}", choices=[])
-        logging.debug(f"Creating ChoiceActionConfig for ChoiceOperator (++) at level {choice_level}.")
-        for choice_kx_branch in kx_node.children:
-            if choice_kx_branch.node_type.startswith("Choice"):
-                # Handle nested ChoiceOperator directly without wrapping in SequenceAction
-                if len(choice_kx_branch.children) == 1 and choice_kx_branch.children[0].node_type == "ChoiceOperator (++)":
-                    parsed_nested_choice = _parse_kx_hp_program_fragment_to_action_config(
-                        choice_kx_branch.children[0], choice_level + 1
-                    )
-                    choice_block.choices.append(parsed_nested_choice)
-                else:
-                    choice_content_sequence = SequenceActionConfig()
-                    logging.debug(f"Processing choice branch: {choice_kx_branch.node_type}")
-                    for sub_node_kx in choice_kx_branch.children:
-                        parsed_sub_block = _parse_kx_hp_program_fragment_to_action_config(sub_node_kx, choice_level + 1)
-                        # Corrected: If parsed_sub_block is a SequenceActionConfig, extend the current sequence
-                        # Otherwise, append it as a single action.
-                        if isinstance(parsed_sub_block, SequenceActionConfig):
-                            choice_content_sequence.actions.extend(parsed_sub_block.actions) 
-                        else:
-                            choice_content_sequence.actions.append(parsed_sub_block)
-                    choice_block.choices.append(choice_content_sequence)
+        for child_kx in kx_node.children:
+            # Each child of a ChoiceStatement is a branch (could be Sequence, IfElse, etc.)
+            parsed_child_action = _parse_kx_hp_program_fragment_to_action_config(child_kx, choice_level + 1)
+            choice_block.choices.append(parsed_child_action)
         return choice_block
 
-    elif kx_node.node_type == "Statement":
-        if kx_node.value.endswith(":= *"):
-            var_name = kx_node.value.split(':=')[0].strip()
-            logging.debug(f"Creating NondeterministicAssignmentActionConfig for '{var_name}'.")
-            return NondeterministicAssignmentActionConfig(variable=var_name)
-        elif ":=" in kx_node.value:
-            var_name, value = kx_node.value.split(':=', 1)
-            logging.debug(f"Creating DeterministicAssignmentActionConfig for '{var_name}' := '{value}'.")
-            return DeterministicAssignmentActionConfig(variable=var_name.strip(), value=value.strip())
-        else:
-            logging.warning(f"Unhandled statement type in controlFunc parsing: {kx_node.value}. Returning empty SequenceActionConfig.")
-            return SequenceActionConfig()
-
-    elif kx_node.node_type == "Test":
-        logging.debug(f"Creating ActionConstraintConfig for Test: '{kx_node.value}'.")
-        return ActionConstraintConfig(formula=kx_node.value)
-
-    elif kx_node.children:
-        logging.debug(f"Node '{kx_node.node_type}' has children, treating as implicit sequence.")
+    elif kx_node.node_type == "SequenceStatement":
         sequence_block = SequenceActionConfig()
         for child_kx in kx_node.children:
-            parsed_child_block = _parse_kx_hp_program_fragment_to_action_config(child_kx, choice_level)
-            if isinstance(parsed_child_block, SequenceActionConfig):
-                sequence_block.actions.extend(parsed_child_block.actions)
+            parsed_child_action = _parse_kx_hp_program_fragment_to_action_config(child_kx, choice_level)
+            # If a child is also a sequence, extend the current sequence
+            if isinstance(parsed_child_action, SequenceActionConfig):
+                sequence_block.actions.extend(parsed_child_action.actions)
             else:
-                sequence_block.actions.append(parsed_child_block)
+                sequence_block.actions.append(parsed_child_action)
         return sequence_block
 
-    logging.debug(f"Unhandled or empty kx_node type '{kx_node.node_type}'. Returning empty SequenceActionConfig.")
-    return SequenceActionConfig() # Ensure a return value even for unhandled cases
+    elif kx_node.node_type == "IfElseStatement":
+        condition = kx_node.value # The condition is stored in the value of IfElseStatement
+        then_block_node = kx_node.children[0] if kx_node.children else None
+        else_block_node = kx_node.children[1] if len(kx_node.children) > 1 else None
+
+        if not condition or not then_block_node:
+            logging.warning(f"Malformed IfElseStatement: {kx_node.value}")
+            return SequenceActionConfig(actions=[])
+
+        # Recursively parse then and else blocks
+        then_actions_config = _parse_kx_hp_program_fragment_to_action_config(then_block_node, choice_level + 1)
+        else_actions_config = _parse_kx_hp_program_fragment_to_action_config(else_block_node, choice_level + 1) if else_block_node else SequenceActionConfig(actions=[])
+
+        # Ensure then_actions_config and else_actions_config are SequenceActionConfig
+        if not isinstance(then_actions_config, SequenceActionConfig):
+            then_actions_config = SequenceActionConfig(actions=[then_actions_config])
+        if not isinstance(else_actions_config, SequenceActionConfig):
+            else_actions_config = SequenceActionConfig(actions=[else_actions_config])
+
+        # Represent if/else as a choice between two guarded sequences
+        return ChoiceActionConfig(
+            level_name=f"IfElseChoice_{choice_level}",
+            choices=[
+                SequenceActionConfig(actions=[ActionConstraintConfig(formula=condition)] + then_actions_config.actions),
+                SequenceActionConfig(actions=[ActionConstraintConfig(formula=f"!({condition})")] + else_actions_config.actions)
+            ]
+        )
+
+    elif kx_node.node_type == "AssignmentStatement":
+        # Handle both deterministic and non-deterministic assignments
+        if kx_node.value.endswith(":= *"):
+            var_name = kx_node.value.split(':=')[0].strip()
+            return NondeterministicAssignmentActionConfig(variable=var_name)
+        else:
+            var_name, value = kx_node.value.split(':=', 1)
+            return DeterministicAssignmentActionConfig(variable=var_name.strip(), value=value.strip())
+
+    elif kx_node.node_type == "TestStatement":
+        return ActionConstraintConfig(formula=kx_node.value)
+
+    elif kx_node.node_type == "HPCall":
+        return CallHybridProgramConfig(hp_name=kx_node.value)
+
+    elif kx_node.node_type == "RawStatement":
+        logging.warning(f"Converting RawStatement '{kx_node.value}' to a generic sequence action. This might indicate incomplete parsing.")
+        # This is a fallback, ideally all statements should be parsed into specific types.
+        # For a raw statement, we'll represent it as an assignment to a placeholder for now.
+        return SequenceActionConfig(actions=[DeterministicAssignmentActionConfig(variable="raw_statement_placeholder", value=f"'{kx_node.value}'")])
+
+    logging.warning(f"Unhandled or empty kx_node type '{kx_node.node_type}' in _parse_kx_hp_program_fragment_to_action_config. Returning empty SequenceActionConfig.")
+    return SequenceActionConfig(actions=[]) # Ensure a return value even for unhandled cases
