@@ -83,87 +83,61 @@ class KeYmaeraXParser:
             parts.append(last_part)
         return parts
 
-    def _find_matching_brace_span(self, text: str, start_brace_idx: int) -> int | None:
+    @staticmethod
+    def _find_matching_delimiter_span(text: str, start_idx: int, open_delim: str, close_delim: str) -> int | None:
         """
-        Finds the index of the closing brace '}' that matches the opening brace
-        at start_brace_idx.
-        Returns the index of the matching '}' or None if no match is found (unbalanced).
+        Finds the index of the closing delimiter that matches the opening delimiter
+        at start_idx.
+        Returns the index of the matching closing delimiter or None if no match is found (unbalanced).
         """
-        if text[start_brace_idx] != '{':
-            raise ValueError("start_brace_idx must point to an opening brace '{'")
+        if text[start_idx] != open_delim:
+            raise ValueError(f"start_idx must point to an opening delimiter '{open_delim}'")
 
         balance = 1
-        for i in range(start_brace_idx + 1, len(text)):
-            if text[i] == '{':
+        for i in range(start_idx + 1, len(text)):
+            if text[i] == open_delim:
                 balance += 1
-            elif text[i] == '}':
+            elif text[i] == close_delim:
                 balance -= 1
 
             if balance == 0:
                 return i
 
-        return None # Unbalanced braces
+        return None # Unbalanced delimiters
 
-
-    def _extract_top_level_brace_blocks(self, text: str) -> list[str | list]:
+    def _find_top_level_operator(self, text: str, operator: str) -> Optional[int]:
         """
-        Parses a string with nested braces and returns a list representing
-        the nested structure. Each element in the list can be:
-        - a string (content outside of braces, stripped of leading/trailing whitespace)
-        - a list (representing the content of a nested brace block, recursively parsed)
-
-        This function is now recursive to achieve the "nested array" output.
+        Finds the index of the first occurrence of `operator` that is not
+        enclosed within any `{}`, `[]`, or `()` braces/brackets.
         """
-        result = []
-        balance = 0
-        current_text_segment_start = 0
-        block_start_index = -1 # Marks the start of content *inside* a '{'
+        balance_curly = 0
+        balance_square = 0
+        balance_round = 0
+        op_len = len(operator)
 
-        for i, char in enumerate(text):
-            if char == '{':
-                if balance == 0:
-                    # If we encounter an opening brace at balance 0,
-                    # it means any text collected so far is outside this new block.
-                    if i > current_text_segment_start:
-                        segment = text[current_text_segment_start:i].strip()
-                        if segment: # Only add if not empty after stripping
-                            result.append(segment)
-                    block_start_index = i + 1 # Content of this new block starts after '{'
-                balance += 1
-            elif char == '}':
-                balance -= 1
-                if balance == 0:
-                    # If we encounter a closing brace and balance returns to 0,
-                    # it means a top-level block (for the current recursion level) has ended.
-                    if block_start_index != -1:
-                        block_content = text[block_start_index:i]
-                        # Recursively parse the content of this block
-                        result.append(self._extract_top_level_brace_blocks(block_content))
-                        block_start_index = -1 # Reset block start
-                    current_text_segment_start = i + 1 # Start collecting text after this block
-                elif balance < 0:
-                    # Malformed input: closing brace without a matching opening brace.
-                    logging.warning(f"Malformed brace structure (unmatched '}}') at index {i} in '{text}'")
-                    balance = 0 # Attempt to recover by resetting balance
-                    current_text_segment_start = i + 1 # Continue as if this '}' was just text
+        i = 0
+        while i < len(text):
+            if text[i] == '{':
+                balance_curly += 1
+            elif text[i] == '}':
+                balance_curly -= 1
+            elif text[i] == '[':
+                balance_square += 1
+            elif text[i] == ']':
+                balance_square -= 1
+            elif text[i] == '(':
+                balance_round += 1
+            elif text[i] == ')':
+                balance_round -= 1
 
-        # Add any remaining text segment after the last block or if no blocks were found
-        if current_text_segment_start < len(text):
-            segment = text[current_text_segment_start:len(text)].strip()
-            if segment:
-                result.append(segment)
+            # Check for operator match only if all balances are zero
+            if (balance_curly == 0 and balance_square == 0 and balance_round == 0 and
+                i + op_len <= len(text) and
+                text[i:i+op_len] == operator):
+                return i
+            i += 1
+        return None
 
-        # Check for unclosed braces at the end of the string
-        if balance > 0:
-            logging.warning(f"Unclosed brace block detected in text: '{text}'")
-            # If there's an unclosed block, its content from block_start_index to the end
-            # should be treated as a single text segment for this level, or handled as an error.
-            if block_start_index != -1 and block_start_index < len(text):
-                remaining_content = text[block_start_index:].strip()
-                if remaining_content:
-                    result.append(remaining_content)
-
-        return result
 
     def parse(self):
         logging.debug("Starting parsing process.")
@@ -275,20 +249,35 @@ class KeYmaeraXParser:
                 metadata_dict = self._parse_metadata_string(raw_meta) if raw_meta else {}
                 logging.debug(f"Found HP header for '{hp_name}' at global index {hp_header_start_idx}.")
 
-                # Use the full current string for brace matching
-                closing_brace_idx = self._find_matching_brace_span(
+                # Find the matching closing brace for the HP's main body
+                closing_brace_of_hp_body_idx = self._find_matching_delimiter_span(
                     current_definitions_text_for_search,
-                    open_brace_idx
+                    open_brace_idx, '{', '}'
                 )
 
-                if closing_brace_idx is not None:
-                    hp_body_raw = current_definitions_text_for_search[open_brace_idx : closing_brace_idx + 1].strip()
-                    logging.debug(f"Extracted HP '{hp_name}' body (raw): '{hp_body_raw[:100]}...'")
+                if closing_brace_of_hp_body_idx is not None:
+                    # The content *inside* the outermost braces of the HP definition
+                    full_hp_content_with_potential_invariant = current_definitions_text_for_search[open_brace_idx + 1 : closing_brace_of_hp_body_idx].strip()
+                    
+                    hp_program_body_content = full_hp_content_with_potential_invariant
+                    loop_invariant_formula = None
 
-                    full_hp_block_end_idx = closing_brace_idx + 1
+                    # Check for '*@invariant(...)' pattern within the HP content (at the end)
+                    invariant_pattern_in_body = re.compile(r'(?P<program_part>.*?)\s*\*\s*@invariant\((?P<invariant_formula>.*?)\)\s*$', re.DOTALL)
+                    invariant_match_in_body = invariant_pattern_in_body.match(full_hp_content_with_potential_invariant)
+
+                    if invariant_match_in_body:
+                        hp_program_body_content = invariant_match_in_body.group('program_part').strip()
+                        loop_invariant_formula = invariant_match_in_body.group('invariant_formula').strip()
+                        logging.debug(f"Extracted program part '{hp_program_body_content[:50]}...' and invariant '{loop_invariant_formula[:50]}...' from HP '{hp_name}' body.")
+                    
+                    # Reconstruct the raw body string including its outermost braces
+                    hp_body_raw = "{" + full_hp_content_with_potential_invariant + "}" 
+                    
+                    # The full HP block now extends to the closing brace of the HP body
+                    full_hp_block_end_idx = closing_brace_of_hp_body_idx + 1
                     
                     # Check for optional HP terminators (;; or ;) immediately after the closing brace
-                    # We need to find the *absolute* index of these terminators from the start of the full string
                     temp_str_after_brace = current_definitions_text_for_search[full_hp_block_end_idx:].lstrip()
                     if temp_str_after_brace.startswith(';;'):
                         terminator_idx = current_definitions_text_for_search.find(';;', full_hp_block_end_idx)
@@ -304,13 +293,21 @@ class KeYmaeraXParser:
                     defs_node.add_child(hp_node)
                     logging.debug(f"Added HybridProgram ASTNode for '{hp_name}' to DefinitionsBlock.")
 
+                    if loop_invariant_formula:
+                        hp_node.add_child(ASTNode("Invariant", value=loop_invariant_formula))
+                        # FIX: Store hp_program_body_content directly, it already has the outer braces if it's a loop body
+                        # The value for LoopBodyRaw should be the program part itself, without extra braces added here.
+                        hp_node.add_child(ASTNode("LoopBodyRaw", value=hp_program_body_content)) 
+                        logging.debug(f"Added Invariant and LoopBodyRaw children to HP '{hp_name}'.")
+
                     # Parse HP body structure if specific functions are defined
-                    body_content = hp_body_raw.strip()
+                    # Use hp_program_body_content for parsing, not the raw one that might contain invariant
+                    body_content_for_parsing = "{" + hp_program_body_content + "}" # Wrap in braces for consistency with _parse_program_fragment
                     if hp_name == 'controlFunc':
-                        self._parse_program_fragment(body_content, hp_node)
+                        self._parse_program_fragment(body_content_for_parsing, hp_node)
                         logging.debug(f"Parsed controlFunc structure for '{hp_name}'.")
                     elif hp_name == 'stepFunc':
-                        self._parse_step_func_structure(hp_body_raw, hp_node)
+                        self._parse_step_func_structure(body_content_for_parsing, hp_node)
                     
                     # Replace the processed HP block with spaces in the mutable character list
                     for i in range(hp_header_start_idx, full_hp_block_end_idx):
@@ -380,15 +377,14 @@ class KeYmaeraXParser:
         # 2. Extract key-value pairs
         # Corrected regex: (\w+) for key, and four optional capturing groups for values:
         # (?:(\{.*?\}))? -> curly braces
-        # (?:(\[.*?\]))? -> square brackets (FIXED: escaped square brackets)
+        # (?:([.*?]))? -> square brackets (FIXED: escaped square brackets)
         # (?:(\".*?\"))? -> quoted string
         # (?:([^,]+))? -> anything not a comma (for single-line values)
         
-        # The re.findall call itself needs to be fixed.
         attr_pairs_raw = re.findall(
             r'(\w+)\s*=\s*'
             r'(?:(\{.*?\})|'   # Group 1: curly braces
-            r'(\[.*?\])|'   # Group 2: square brackets (FIXED: escaped square brackets)
+            r'([.*?])|'   # Group 2: square brackets (FIXED: escaped square brackets)
             r'(\".*?\")|'   # Group 3: quoted string
             r'([^,]+))',    # Group 4: anything else (non-comma)
             raw_metadata,
@@ -498,7 +494,7 @@ class KeYmaeraXParser:
         # This prevents {{...}} from confusing the splitter.
         while fragment.startswith('{') and fragment.endswith('}'):
             # Check if these braces actually match each other
-            if self._find_matching_brace_span(fragment, 0) == len(fragment) - 1:
+            if self._find_matching_delimiter_span(fragment, 0, '{', '}') == len(fragment) - 1:
                 fragment = fragment[1:-1].strip()
             else:
                 break # Braces are like {a};{b}, don't peel.
@@ -545,126 +541,85 @@ class KeYmaeraXParser:
             logging.debug("No Problem block found. Skipping problem parsing.")
             return
 
-        # ProblemStatement is now imported from ast_config, which has metadata support
         problem_node = ProblemStatement(problem_block) 
         self.ast_root.add_child(problem_node)
         logging.debug("Created ProblemStatement ASTNode.")
 
-        # FIX: Escape literal square brackets [ and ] in the regex
-        implication_match = re.search(
-            r'([\s\S]+?)\s*->\s*\[([\s\S]+?)\]\s*([\s\S]+)', # Corrected to escape []
-            problem_block,
-            re.DOTALL
-        )
+        # Find the top-level '->'
+        arrow_idx = self._find_top_level_operator(problem_block, '->')
 
-        if implication_match:
-            precondition_raw = implication_match.group(1).strip()
-            program_raw = implication_match.group(2).strip()
-            postcondition_raw = implication_match.group(3).strip()
-            logging.debug(f"Problem structure P -> [HP] Q matched.")
-            logging.debug(f"Precondition: '{precondition_raw[:50]}...'")
-            logging.debug(f"Program: '{program_raw[:50]}...'")
-            logging.debug(f"Postcondition: '{postcondition_raw[:50]}...'")
+        if arrow_idx is None:
+            problem_node.add_child(ASTNode("Error", "Could not find top-level '->' in Problem block."))
+            logging.error("Failed to find top-level '->' in Problem block.")
+            return
 
+        precondition_raw = problem_block[:arrow_idx].strip()
+        rhs_raw = problem_block[arrow_idx + 2:].strip() # +2 for '->'
 
-            problem_node.add_child(ASTNode("Precondition (P)", precondition_raw))
+        problem_node.add_child(ASTNode("Precondition (P)", precondition_raw))
+        logging.debug(f"Precondition: '{precondition_raw[:50]}...'")
 
-            loop_match = re.search(
-                # Use greedy match for invariant to capture full content
-                r"(\{[\s\S]*?\})\*@invariant\(([\s\S]*)\)",
-                program_raw,
-                re.DOTALL
-            )
-
-            if loop_match:
-                loop_body_raw = loop_match.group(1).strip()
-                loop_invariant_raw = loop_match.group(2).strip()
-                logging.debug(f"Loop structure matched. Loop body: '{loop_body_raw[:50]}...', Invariant: '{loop_invariant_raw[:50]}...'")
-
-                program_node = ASTNode("LoopExecution")
-                outer_hp_node = ASTNode("HP", "")
-
-                loop_body_inner_content = loop_body_raw[1:-1].strip()
-
-                discrete_start_idx = loop_body_inner_content.find('{')
-                if discrete_start_idx == -1:
-                    logging.warning(f"Could not find discrete block in loop body: '{loop_body_inner_content}'")
-                    program_node.add_child(ASTNode("Raw Loop Body Content", loop_body_raw))
-                    program_node.add_child(ASTNode("Invariant", loop_invariant_raw))
-                    problem_node.add_child(program_node)
-                    problem_node.add_child(ASTNode("Postcondition (Q)", postcondition_raw))
-                    return
-
-                discrete_end_idx = self._find_matching_brace_span(loop_body_inner_content, discrete_start_idx)
-                if discrete_end_idx is None:
-                    logging.warning(f"Unmatched braces in discrete block of loop body: '{loop_body_inner_content}'")
-                    program_node.add_child(ASTNode("Raw Loop Body Content", loop_body_raw))
-                    program_node.add_child(ASTNode("Invariant", loop_invariant_raw))
-                    problem_node.add_child(program_node)
-                    problem_node.add_child(ASTNode("Postcondition (Q)", postcondition_raw))
-                    return
-
-                discrete_block_full_str = loop_body_inner_content[discrete_start_idx : discrete_end_idx + 1].strip()
-                logging.debug(f"Discrete block extracted: '{discrete_block_full_str[:50]}...'")
+        # Now parse the RHS which can contain multiple modal formulas connected by '&'
+        clauses = []
+        current_rhs_segment = rhs_raw
+        while True:
+            ampersand_idx = self._find_top_level_operator(current_rhs_segment, '&')
+            # FIX: Changed '===' to 'is None'
+            if ampersand_idx is None: 
+                if current_rhs_segment.strip():
+                    clauses.append(current_rhs_segment.strip())
+                break
+            
+            clause_part = current_rhs_segment[:ampersand_idx].strip()
+            if clause_part:
+                clauses.append(clause_part)
+            current_rhs_segment = current_rhs_segment[ampersand_idx + 1:].strip()
+        
+        rhs_clauses = clauses
 
 
-                continuous_search_start_idx = discrete_end_idx + 1
-                continuous_start_idx = loop_body_inner_content.find('{', continuous_search_start_idx)
+        for clause in rhs_clauses:
+            clause = clause.strip()
+            if not clause:
+                continue
 
-                if continuous_start_idx == -1:
-                    logging.warning(f"Could not find continuous block in loop body: '{loop_body_inner_content}'")
-                    program_node.add_child(ASTNode("Raw Loop Body Content", loop_body_raw))
-                    program_node.add_child(ASTNode("Invariant", loop_invariant_raw))
-                    problem_node.add_child(program_node)
-                    problem_node.add_child(ASTNode("Postcondition (Q)", postcondition_raw))
-                    return
+            # Check for Box Modality: [HP]Q
+            box_match = re.match(r'\[\s*(?P<hp_name>.*?)\s*\]\s*(?P<formula>.*)', clause, re.DOTALL)
+            # Check for Diamond Modality: <HP>Q
+            diamond_match = re.match(r'<\s*(?P<hp_name>.*?)\s*>\s*(?P<formula>.*)', clause, re.DOTALL)
 
-                continuous_end_idx = self._find_matching_brace_span(loop_body_inner_content, continuous_start_idx)
-                if continuous_end_idx == None:
-                    logging.warning(f"Unmatched braces in continuous block of loop body: '{loop_body_inner_content}'")
-                    program_node.add_child(ASTNode("Raw Loop Body Content", loop_body_raw))
-                    program_node.add_child(ASTNode("Invariant", loop_invariant_raw))
-                    problem_node.add_child(program_node)
-                    problem_node.add_child(ASTNode("Postcondition (Q)", postcondition_raw))
-                    return
-
-                continuous_block_full_str = loop_body_inner_content[continuous_start_idx : continuous_end_idx + 1].strip()
-                logging.debug(f"Continuous block extracted: '{continuous_block_full_str[:50]}...'")
-
-                control_hp_node = ASTNode("HP", "")
-                discrete_fragment_content = discrete_block_full_str[1:-1].strip()
-                self._parse_program_fragment(discrete_fragment_content, control_hp_node)
-                outer_hp_node.add_child(control_hp_node)
-                logging.debug("Processed discrete control block.")
-
-                dynamics_hp_node = ASTNode("HP", "")
-                dynamics_fragment_content = continuous_block_full_str[1:-1].strip()
-
-                stmt_inv_match = re.search(r'^(.*?);@invariant\((.*?)\)$', dynamics_fragment_content, re.DOTALL)
-                if stmt_inv_match:
-                    statement_name = stmt_inv_match.group(1).strip()
-                    invariant_content = stmt_inv_match.group(2).strip()
-                    dynamics_hp_node.add_child(ASTNode("Statement", statement_name))
-                    dynamics_hp_node.add_child(ASTNode("Invariant", invariant_content))
-                    logging.debug(f"Processed dynamics block with invariant: Statement='{statement_name}', Invariant='{invariant_content}'")
-                else:
-                    dynamics_hp_node.add_child(ASTNode("Statement", dynamics_fragment_content))
-                    logging.debug(f"Processed dynamics block without explicit invariant: Statement='{dynamics_fragment_content}'")
-                outer_hp_node.add_child(dynamics_hp_node)
-
-                program_node.add_child(outer_hp_node)
-                program_node.add_child(ASTNode("Invariant", loop_invariant_raw))
-                problem_node.add_child(program_node)
-                logging.debug("Added LoopExecution to ProblemStatement.")
+            if box_match:
+                hp_name = box_match.group('hp_name').strip()
+                formula = box_match.group('formula').strip()
+                # Remove trailing semicolon if present in HP name
+                if hp_name.endswith(';'):
+                    hp_name = hp_name[:-1].strip()
+                # Remove outer parentheses if present in formula
+                if formula.startswith('(') and formula.endswith(')'):
+                    # Ensure these are actual matching outer parentheses
+                    if self._find_matching_delimiter_span(formula, 0, '(', ')') == len(formula) - 1:
+                        formula = formula[1:-1].strip()
+                problem_node.add_child(ASTNode("BoxModality", metadata={'hp': hp_name, 'formula': formula}))
+                logging.debug(f"Parsed Box Modality: HP='{hp_name}', Formula='{formula[:50]}...'")
+            elif diamond_match:
+                hp_name = diamond_match.group('hp_name').strip()
+                formula = diamond_match.group('formula').strip()
+                # Remove trailing semicolon if present in HP name
+                if hp_name.endswith(';'):
+                    hp_name = hp_name[:-1].strip()
+                # Remove outer parentheses if present in formula
+                if formula.startswith('(') and formula.endswith(')'):
+                    if self._find_matching_delimiter_span(formula, 0, '(', ')') == len(formula) - 1:
+                        formula = formula[1:-1].strip()
+                problem_node.add_child(ASTNode("DiamondModality", metadata={'hp': hp_name, 'formula': formula}))
+                logging.debug(f"Parsed Diamond Modality: HP='{hp_name}', Formula='{formula[:50]}...'")
             else:
-                program_node = ASTNode("RawProgram", program_raw)
-                problem_node.add_child(program_node)
-                logging.debug(f"No loop structure found in program, added as RawProgram.")
-
-            problem_node.add_child(ASTNode("Postcondition (Q)", postcondition_raw))
-        else:
-            problem_node.add_child(ASTNode("Error", "Could not parse P -> [HP] Q structure."))
-            logging.debug("Failed to parse P -> [HP] Q structure.")
+                # If it's not a modal formula, treat it as a simple postcondition
+                if clause.startswith('(') and clause.endswith(')'):
+                    if self._find_matching_delimiter_span(clause, 0, '(', ')') == len(clause) - 1:
+                        clause = clause[1:-1].strip()
+                problem_node.add_child(ASTNode("Postcondition (Q)", clause))
+                logging.debug(f"Parsed simple Postcondition: '{clause[:50]}...'")
         logging.debug("Finished _parse_problem.")
 
 # --- Helper to convert KeYmaeraX AST to Intermediate PyAST ---
@@ -686,10 +641,10 @@ def convert_keymaerax_ast_to_intermediate_pyast(kx_ast_root: ASTNode) -> GymEnvi
     # Initialize sub-configs first
     definitions_config = DefinitionsConfig()
     variables_config = VariablesConfig()
+    # ProblemConfig now takes a list of postconditions
     problem_config = ProblemConfig(
         precondition=PreconditionConfig(formula=""),
-        loop_execution=LoopExecutionConfig(),
-        postcondition=PostconditionConfig(formula="")
+        postconditions=[] # Initialize as empty list
     )
 
     # Pass them to GymEnvironmentConfig constructor
@@ -714,7 +669,7 @@ def convert_keymaerax_ast_to_intermediate_pyast(kx_ast_root: ASTNode) -> GymEnvi
                 parameters = []
                 params_node = next((c for c in def_node_kx.children if c.node_type == "Parameters"), None)
                 if params_node and params_node.value:
-                    param_strings = [p.strip() for p in params_node.value.split(',')]
+                    param_strings = [p.strip() for p in KeYmaeraXParser.split_by_operator_outside_braces(params_node.value, ',')]
                     for p_str in param_strings:
                         parts = p_str.split(' ')
                         if len(parts) == 2:
@@ -725,25 +680,23 @@ def convert_keymaerax_ast_to_intermediate_pyast(kx_ast_root: ASTNode) -> GymEnvi
 
                 if def_node_kx.definition_type == "HP":
                     logging.debug(f"Processing HP definition: {def_node_kx.name}")
-                    # In HybridProgram, the name and body are attributes, not value/definition_value
                     hp_name = def_node_kx.name 
-                    hp_body = def_node_kx.body
+                    hp_body = def_node_kx.body # This is the raw body string { ... }
                     
                     if hp_name == "controlFunc":
-                        # The children of the HP node should contain the parsed program fragment
                         control_func_root_action = next((c for c in def_node_kx.children if c.node_type == "ChoiceOperator (++)"), None)
                         action_space_config = None
                         if control_func_root_action:
                             action_space_config = _parse_kx_hp_program_fragment_to_action_config(
                                 control_func_root_action, 0
                             )
-                        control_func_config = ControlFuncConfig(name=hp_name, action_space_config=action_space_config, metadata=metadata)
+                        control_func_config = ControlFuncConfig(name=hp_name, action_space_config=action_space_config, metadata=metadata, raw_body_snippet=hp_body)
                         definitions_config.hybrid_programs.append(control_func_config)
                         logging.debug("Appended ControlFuncConfig to hybrid_programs.")
                     elif hp_name == "stepFunc":
                         odes = []
                         evolution_domain_constraints = []
-                        duration_expr: Optional[str] = None # Will need to be set from somewhere, perhaps a constant 'ep'
+                        duration_expr: Optional[str] = None 
 
                         ode_block = next((c for c in def_node_kx.children if c.node_type == "OrdinaryDifferentialEquations"), None)
                         if ode_block:
@@ -775,8 +728,83 @@ def convert_keymaerax_ast_to_intermediate_pyast(kx_ast_root: ASTNode) -> GymEnvi
                         step_func_config = StepFuncConfig(name=hp_name, odes=odes, evolution_domain=evolution_domain, duration=duration_expr, raw_body_snippet=hp_body, metadata=metadata)
                         definitions_config.hybrid_programs.append(step_func_config)
                         logging.debug("Appended StepFuncConfig to hybrid_programs.")
-                    else:
-                        logging.debug(f"Unrecognized HP name '{hp_name}'. Skipping conversion to specific HPConfig.")
+                    elif hp_name == "dwwpdl": # Handle the dwwpdl HP with loop structure
+                        loop_invariant_node = next((c for c in def_node_kx.children if c.node_type == "Invariant"), None)
+                        loop_body_raw_node = next((c for c in def_node_kx.children if c.node_type == "LoopBodyRaw"), None)
+                        logging.debug(f"For dwwpdl: loop_invariant_node={loop_invariant_node is not None}, loop_body_raw_node={loop_body_raw_node is not None}")
+
+                        if loop_invariant_node and loop_body_raw_node:
+                            loop_execution_config = LoopExecutionConfig(
+                                loop_invariant_formula=loop_invariant_node.value,
+                                iterations="inf" # Assuming infinite iterations for now
+                            )
+                            
+                            # The raw body for dwwpdl is {{ controlFunc; t := 0; } { stepFunc; }}
+                            full_loop_body_content = loop_body_raw_node.value
+                            # Remove outermost braces if present
+                            if full_loop_body_content.startswith('{') and full_loop_body_content.endswith('}'):
+                                # Use the generalized delimiter span to ensure correct peeling
+                                if KeYmaeraXParser._find_matching_delimiter_span(full_loop_body_content, 0, '{', '}') == len(full_loop_body_content) - 1:
+                                    full_loop_body_content = full_loop_body_content[1:-1].strip()
+
+                            # Parse the discrete and continuous parts
+                            # They are separated by a space at the top level, but enclosed in their own braces.
+                            # We need to find the first '{' and its matching '}', then the next '{' and its matching '}'
+                            
+                            discrete_part_start_idx = full_loop_body_content.find('{')
+                            if discrete_part_start_idx != -1:
+                                discrete_part_end_idx = KeYmaeraXParser._find_matching_delimiter_span(full_loop_body_content, discrete_part_start_idx, '{', '}')
+                                if discrete_part_end_idx is not None:
+                                    discrete_block_content = full_loop_body_content[discrete_part_start_idx + 1 : discrete_part_end_idx].strip()
+                                    
+                                    # Parse discrete actions
+                                    discrete_sequence_config = SequenceActionConfig()
+                                    discrete_statements = [s.strip() for s in KeYmaeraXParser.split_by_operator_outside_braces(discrete_block_content, ';') if s.strip()]
+                                    for stmt in discrete_statements:
+                                        if stmt == "controlFunc":
+                                            discrete_sequence_config.actions.append(CallHybridProgramConfig(hp_name="controlFunc"))
+                                        elif ":=" in stmt:
+                                            var, val = stmt.split(':=', 1)
+                                            discrete_sequence_config.actions.append(DeterministicAssignmentActionConfig(variable=var.strip(), value=val.strip()))
+                                        else:
+                                            logging.warning(f"Unhandled statement in dwwpdl discrete loop body: '{stmt}'")
+                                    loop_execution_config.loop_body.actions.append(discrete_sequence_config)
+
+                                    # Find and parse continuous part
+                                    continuous_part_search_start = discrete_part_end_idx + 1
+                                    continuous_part_start_idx = full_loop_body_content.find('{', continuous_part_search_start)
+                                    if continuous_part_start_idx != -1:
+                                        continuous_part_end_idx = KeYmaeraXParser._find_matching_delimiter_span(full_loop_body_content, continuous_part_start_idx, '{', '}')
+                                        if continuous_part_end_idx is not None:
+                                            continuous_block_content = full_loop_body_content[continuous_part_start_idx + 1 : continuous_part_end_idx].strip()
+                                            
+                                            # Assuming continuous part is just "stepFunc;"
+                                            if continuous_block_content.startswith("stepFunc"): # Allow for optional trailing ';'
+                                                # The stepFunc in the problem example doesn't have an invariant, but if it did,
+                                                # it would be parsed here. For now, just call stepFunc.
+                                                loop_execution_config.loop_body.actions.append(HybridProgramStepConfig(hp_name="stepFunc"))
+                                            else:
+                                                logging.warning(f"Unhandled continuous loop body content in dwwpdl: '{continuous_block_content}'")
+                                        else:
+                                            logging.warning(f"Unmatched braces in continuous part of dwwpdl loop body: '{full_loop_body_content}'")
+                                    else:
+                                        logging.warning(f"Could not find continuous part in dwwpdl loop body: '{full_loop_body_content}'")
+                                else:
+                                    logging.warning(f"Unmatched braces in discrete part of dwwpdl loop body: '{full_loop_body_content}'")
+                            else:
+                                logging.warning(f"Could not find discrete part in dwwpdl loop body: '{full_loop_body_content}'")
+
+                            dwwpdl_hp_config = HybridProgramConfig(name=hp_name, raw_body_snippet=hp_body, metadata=metadata, loop_execution_config=loop_execution_config)
+                            definitions_config.hybrid_programs.append(dwwpdl_hp_config)
+                            logging.debug("Appended dwwpdl HybridProgramConfig with LoopExecutionConfig.")
+                        else:
+                            logging.warning(f"dwwpdl HP found but missing Invariant or LoopBodyRaw children. Appending without LoopExecutionConfig.")
+                            definitions_config.hybrid_programs.append(HybridProgramConfig(name=hp_name, raw_body_snippet=hp_body, metadata=metadata))
+
+                    else: # Generic HP
+                        definitions_config.hybrid_programs.append(HybridProgramConfig(name=hp_name, raw_body_snippet=hp_body, metadata=metadata))
+                        logging.debug(f"Appended generic HybridProgramConfig for '{hp_name}'.")
+
                 elif def_node_kx.definition_type == "Real":
                     if parameters:
                         definitions_config.functions.append(FunctionDefinitionConfig(
@@ -826,8 +854,8 @@ def convert_keymaerax_ast_to_intermediate_pyast(kx_ast_root: ASTNode) -> GymEnvi
                     # Use a more robust regex for parsing bounds like [0:100]
                     bound_match = re.match(r'(-?\d+(\.\d+)?):(-?\d+(\.\d+)?)', bound_str)
                     if bound_match:
-                        lower_bound = bound_match.group(1)
-                        upper_bound = bound_match.group(3)
+                        lower_bound = float(bound_match.group(1)) # Convert to float
+                        upper_bound = float(bound_match.group(3)) # Convert to float
                     else:
                         logging.warning(f"Could not parse bound string '{bound_str}' for variable '{var_node_kx.value}'.")
 
@@ -852,60 +880,38 @@ def convert_keymaerax_ast_to_intermediate_pyast(kx_ast_root: ASTNode) -> GymEnvi
             problem_config.precondition = PreconditionConfig(formula=precondition_kx.value)
             logging.debug(f"Set precondition: '{precondition_kx.value[:50]}...'")
 
-        loop_execution_kx = next((c for c in problem_block_kx.children if c.node_type == "LoopExecution"), None)
-        if loop_execution_kx:
-            logging.debug("Found LoopExecution in KeYmaeraX AST for conversion.")
-            loop_inv_kx = next((c for c in loop_execution_kx.children if c.node_type == "Invariant"), None)
-            loop_execution_config = LoopExecutionConfig(
-                loop_invariant_formula=loop_inv_kx.value if loop_inv_kx and loop_inv_kx.value else "",
-                iterations="inf"
-            )
-            problem_config.loop_execution = loop_execution_config
-            logging.debug(f"Set loop invariant: '{loop_execution_config.loop_invariant_formula[:50]}...'")
-
-            loop_body_hp_kx = next((c for c in loop_execution_kx.children if c.node_type == "HP"), None)
-            if loop_body_hp_kx and len(loop_body_hp_kx.children) == 2:
-                logging.debug("Found loop body HP structure (discrete and continuous parts).")
-                discrete_hp_kx = loop_body_hp_kx.children[0]
-                if discrete_hp_kx.node_type == "HP":
-                    discrete_sequence_config = SequenceActionConfig()
-                    for stmt_kx in discrete_hp_kx.children:
-                        if stmt_kx.node_type == "Statement":
-                            if stmt_kx.value == "controlFunc":
-                                discrete_sequence_config.actions.append(CallHybridProgramConfig(hp_name="controlFunc"))
-                                logging.debug("Added CallHybridProgramConfig for 'controlFunc' to loop body.")
-                            elif ":=" in stmt_kx.value:
-                                var, val = stmt_kx.value.split(':=', 1)
-                                discrete_sequence_config.actions.append(DeterministicAssignmentActionConfig(variable=var.strip(), value=val.strip()))
-                                logging.debug(f"Added DeterministicAssignmentActionConfig: {var.strip()} := {val.strip()}")
-                            else:
-                                logging.warning(f"Unhandled statement in discrete loop body: {stmt_kx.value}")
-                        else:
-                            logging.warning(f"Unhandled node type in discrete loop body: {stmt_kx.node_type}")
-                    loop_execution_config.loop_body.actions.append(discrete_sequence_config)
-
-                continuous_hp_kx = loop_body_hp_kx.children[1]
-                if continuous_hp_kx.node_type == "HP":
-                    step_func_call_kx = next((c for c in continuous_hp_kx.children if c.node_type == "Statement" and c.value == "stepFunc"), None)
-                    step_inv_kx = next((c for c in continuous_hp_kx.children if c.node_type == "Invariant"), None)
-                    if step_func_call_kx:
-                        loop_execution_config.loop_body.actions.append(HybridProgramStepConfig(
-                            hp_name="stepFunc",
-                            invariant_formula=step_inv_kx.value if step_inv_kx and step_inv_kx.value else None
-                        ))
-                        logging.debug("Added HybridProgramStepConfig for 'stepFunc' to loop body.")
-                    else:
-                        logging.warning(f"Could not find stepFunc call in continuous loop body.")
-                else:
-                    logging.warning(f"Expected HP node for continuous part, got {continuous_hp_kx.node_type}")
-            else:
-                logging.warning(f"Loop body HP node structure unexpected: {loop_body_hp_kx}")
-
-
-        postcondition_kx = next((c for c in problem_block_kx.children if c.node_type == "Postcondition (Q)"), None)
-        if postcondition_kx and postcondition_kx.value:
-            problem_config.postcondition = PostconditionConfig(formula=postcondition_kx.value)
-            logging.debug(f"Set postcondition: '{postcondition_kx.value[:50]}...'")
+        # Iterate through all children of ProblemStatement to find postconditions
+        for child_kx in problem_block_kx.children:
+            if child_kx.node_type == "BoxModality":
+                hp_name = child_kx.metadata.get('hp')
+                formula = child_kx.metadata.get('formula')
+                if hp_name and formula:
+                    problem_config.postconditions.append(PostconditionConfig(
+                        formula=formula,
+                        modality="Box",
+                        hp_name=hp_name
+                    ))
+                    logging.debug(f"Added Box Postcondition: HP='{hp_name}', Formula='{formula[:50]}...'")
+            elif child_kx.node_type == "DiamondModality":
+                hp_name = child_kx.metadata.get('hp')
+                formula = child_kx.metadata.get('formula')
+                if hp_name and formula:
+                    problem_config.postconditions.append(PostconditionConfig(
+                        formula=formula,
+                        modality="Diamond",
+                        hp_name=hp_name
+                    ))
+                    logging.debug(f"Added Diamond Postcondition: HP='{hp_name}', Formula='{formula[:50]}...'")
+            elif child_kx.node_type == "Postcondition (Q)":
+                if child_kx.value:
+                    problem_config.postconditions.append(PostconditionConfig(
+                        formula=child_kx.value,
+                        modality=None, # No modality for simple postcondition
+                        hp_name=None
+                    ))
+                    logging.debug(f"Added simple Postcondition: '{child_kx.value[:50]}...'")
+    else:
+        logging.debug("No ProblemStatement found in KeYmaeraX AST for conversion.")
 
     logging.debug(f"Final GymEnvironmentConfig.definitions.hybrid_programs contains: {[hp.name for hp in gym_config.definitions.hybrid_programs]}")
     logging.debug("Finished convert_keymaerax_ast_to_intermediate_pyast.")

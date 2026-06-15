@@ -35,8 +35,7 @@ class GeneratedKXEnv(_KeYmaeraXEnvBase):
                         value=None,
                         metadata={
                             'type': 'const',
-                            'bound': '0.1:0.5',
-                            'def': 'time limit for control decisions'
+                            'bound': '[0.1:0.5]; def="time limit for control decisions"'
                         }
                     ),
                     ConstantDefinitionConfig(
@@ -45,8 +44,7 @@ class GeneratedKXEnv(_KeYmaeraXEnvBase):
                         value=None,
                         metadata={
                             'type': 'const',
-                            'bound': '0.5:5.0',
-                            'def': 'minimum braking capability of the robot'
+                            'bound': '[0.5:5.0]; def="minimum braking capability of the robot"'
                         }
                     ),
                     ConstantDefinitionConfig(
@@ -55,8 +53,7 @@ class GeneratedKXEnv(_KeYmaeraXEnvBase):
                         value=None,
                         metadata={
                             'type': 'const',
-                            'bound': '1.0:10.0',
-                            'def': 'maximum acceleration'
+                            'bound': '[1.0:10.0]; def="maximum acceleration"'
                         }
                     ),
                     ConstantDefinitionConfig(
@@ -65,8 +62,7 @@ class GeneratedKXEnv(_KeYmaeraXEnvBase):
                         value=None,
                         metadata={
                             'type': 'const',
-                            'bound': '1.0:10.0',
-                            'def': 'goal area size'
+                            'bound': '[1.0:10.0]; def="goal area size"'
                         }
                     ),
                     ConstantDefinitionConfig(
@@ -75,8 +71,7 @@ class GeneratedKXEnv(_KeYmaeraXEnvBase):
                         value=None,
                         metadata={
                             'type': 'const',
-                            'bound': '5.0:30.0',
-                            'def': 'maximum robot velocity'
+                            'bound': '[5.0:30.0]; def="maximum robot velocity"'
                         }
                     ),
                     ConstantDefinitionConfig(
@@ -282,7 +277,14 @@ class GeneratedKXEnv(_KeYmaeraXEnvBase):
                                 )
                             ]
                         ),
-                        metadata={}
+                        metadata={},
+                        raw_body_snippet="""{? (xr > waypointStartDist(xg)); { ar := -b; }
+        ++
+        ? (xr > waypointStartDist(xg) & vr = 0); { ar := 0; }
+        ++
+        ? (xr <= waypointStartDist(xg) & (xr + stopDist(vr) + accComp(vr) < waypointEndDist(xg) & vr+A*ep <= Vmax)); { ar := A; }
+        ++
+        ? (xr <= waypointStartDist(xg) & !(xr + stopDist(vr) + accComp(vr) < waypointEndDist(xg) & vr+A*ep <= Vmax)); { ar := 0; }}"""
                     ),
                     StepFuncConfig(
                         name='stepFunc',
@@ -313,6 +315,36 @@ class GeneratedKXEnv(_KeYmaeraXEnvBase):
                         duration=None,
                         raw_body_snippet="{xr' = vr, vr' = ar, t' = 1, T'=-1 & t <= ep & vr >= 0}",
                         metadata={}
+                    ),
+                    HybridProgramConfig(
+                        name='dwwpdl',
+                        raw_body_snippet="""{{	{ controlFunc; t := 0; }
+            { stepFunc; }
+        }*@invariant(loopinv(xr, vr, xg, T))}""",
+                        metadata={},
+                        loop_execution_config=LoopExecutionConfig(
+                            loop_invariant_formula='loopinv(xr, vr, xg, T)',
+                            iterations='inf',
+                            loop_body=SequenceActionConfig(
+                                actions=[
+                                    SequenceActionConfig(
+                                        actions=[
+                                            CallHybridProgramConfig(
+                                                hp_name='controlFunc'
+                                            ),
+                                            DeterministicAssignmentActionConfig(
+                                                variable='t',
+                                                value='0'
+                                            )
+                                        ]
+                                    ),
+                                    HybridProgramStepConfig(
+                                        hp_name='stepFunc',
+                                        invariant_formula=None
+                                    )
+                                ]
+                            )
+                        )
                     )
                 ]
             ),
@@ -321,38 +353,38 @@ class GeneratedKXEnv(_KeYmaeraXEnvBase):
                     VariableDeclarationConfig(
                         name='xr',
                         type='Real',
-                        lower_bound='0',
-                        upper_bound='100'
+                        lower_bound=0.0,
+                        upper_bound=100.0
                     ),
                     VariableDeclarationConfig(
                         name='vr',
                         type='Real',
-                        lower_bound='0',
-                        upper_bound='20'
+                        lower_bound=0.0,
+                        upper_bound=20.0
                     ),
                     VariableDeclarationConfig(
                         name='ar',
                         type='Real',
-                        lower_bound='-10',
-                        upper_bound='10'
+                        lower_bound=-10.0,
+                        upper_bound=10.0
                     ),
                     VariableDeclarationConfig(
                         name='xg',
                         type='Real',
-                        lower_bound='0',
-                        upper_bound='100'
+                        lower_bound=0.0,
+                        upper_bound=100.0
                     ),
                     VariableDeclarationConfig(
                         name='t',
                         type='Real',
-                        lower_bound='0',
-                        upper_bound='1'
+                        lower_bound=0.0,
+                        upper_bound=1.0
                     ),
                     VariableDeclarationConfig(
                         name='T',
                         type='Real',
-                        lower_bound='0',
-                        upper_bound='1000'
+                        lower_bound=0.0,
+                        upper_bound=1000.0
                     )
                 ],
                 auxiliary_variables=[]
@@ -361,16 +393,18 @@ class GeneratedKXEnv(_KeYmaeraXEnvBase):
                 precondition=PreconditionConfig(
                     formula='assumptions(xr, vr, xg, T)'
                 ),
-                loop_execution=LoopExecutionConfig(
-                    iterations='inf',
-                    loop_invariant_formula='',
-                    loop_body=SequenceActionConfig(
-                        actions=[]
+                postconditions=[
+                    PostconditionConfig(
+                        formula='xr < waypointEndDist(xg) & (T <= 0 -> ensure(xr, vr, xg))',
+                        modality='Box',
+                        hp_name='dwwpdl'
+                    ),
+                    PostconditionConfig(
+                        formula='ensure(xr, vr, xg)',
+                        modality='Diamond',
+                        hp_name='dwwpdl'
                     )
-                ),
-                postcondition=PostconditionConfig(
-                    formula='(xr < waypointEndDist(xg) & (T <= 0 -> ensure(xr, vr, xg)))'
-                )
+                ]
             )
         )''', render_mode=render_mode, cisb_size=cisb_size, cisb_populate_attempts=cisb_populate_attempts, seed=seed, debug_mode=debug_mode)
 

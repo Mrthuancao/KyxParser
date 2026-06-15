@@ -1,7 +1,7 @@
-#pyast_config.py
-
+# pyast_config.py
 import logging
 from typing import List, Dict, Any, Optional, Union, Tuple, Callable
+from dataclasses import dataclass, field # Import dataclass and field
 
 # Configure logging for ast_config.py
 logger = logging.getLogger(__name__)
@@ -233,7 +233,6 @@ class PredicateDefinitionConfig(ASTConfigNode):
         indent_base = "  " * level
         # The subsequent prefix needs to account for the fixed string part before the body
         # e.g., "[PredicateDefinition](name): Params=(): Body='"
-        # Let's approximate a good alignment for now, or refine if needed.
         # For simplicity, using a fixed offset relative to the current indent.
         return _format_multiline_formula(self.body, indent_base, "    ", "    ", max_len=77)
 
@@ -254,25 +253,60 @@ class PredicateDefinitionConfig(ASTConfigNode):
             "metadata": self.metadata,
         }
 
-class HybridProgramConfig(ASTConfigNode):
-    """Base class for specific hybrid program configurations."""
-    def __init__(self, name: str):
-        self.name = name
+@dataclass
+class LoopExecutionConfig(ASTConfigNode): # Make LoopExecutionConfig a dataclass
+    loop_invariant_formula: Optional[str] = None
+    iterations: str = "inf" # Default to infinite iterations for now
+    loop_body: 'SequenceActionConfig' = field(default_factory=lambda: SequenceActionConfig()) # The body of the loop
 
     def _repr_indent(self, level=0):
         indent = "  " * level
-        return f"{indent}[HybridProgram]({self.name})"
+        invariant_str = f"'{self.loop_invariant_formula}'" if self.loop_invariant_formula else "(None)"
+        return (f"{indent}[LoopExecution]\n"
+                f"{indent}  [Iterations]: '{self.iterations}'\n"
+                f"{indent}  [LoopInvariant]: {invariant_str}\n"
+                f"{indent}  [LoopBody]:\n{self.loop_body._repr_indent(level + 2)}")
 
     def _get_serialization_params(self) -> Dict[str, Any]:
-        return {"name": self.name}
+        return {
+            "loop_invariant_formula": self.loop_invariant_formula,
+            "iterations": self.iterations,
+            "loop_body": self.loop_body,
+        }
+
+class HybridProgramConfig(ASTConfigNode):
+    """Base class for specific hybrid program configurations."""
+    def __init__(self, name: str, raw_body_snippet: str, metadata: Dict[str, Any] = field(default_factory=dict),
+                 loop_execution_config: Optional[LoopExecutionConfig] = None): # Added loop_execution_config
+        self.name = name
+        self.raw_body_snippet = raw_body_snippet
+        self.metadata = metadata
+        self.loop_execution_config = loop_execution_config
+
+    def _repr_indent(self, level=0):
+        indent = "  " * level
+        meta = f" [Meta: {self.metadata}]" if self.metadata else ""
+        loop_exec_str = ""
+        if self.loop_execution_config:
+            loop_exec_str = f"\n{self.loop_execution_config._repr_indent(level + 1)}"
+        return (f"{indent}[HybridProgram]({self.name}){meta}\n"
+                f"{indent}  [Raw Body Snippet]: '{self.raw_body_snippet}'"
+                f"{loop_exec_str}")
+
+    def _get_serialization_params(self) -> Dict[str, Any]:
+        return {
+            "name": self.name,
+            "raw_body_snippet": self.raw_body_snippet,
+            "metadata": self.metadata,
+            "loop_execution_config": self.loop_execution_config,
+        }
 
 
 class ControlFuncConfig(HybridProgramConfig):
     """Configuration for a control function (discrete choices and assignments)."""
-    def __init__(self, name: str, action_space_config: Optional['ActionConfig'] = None, metadata: Optional[Dict] = None):
-        super().__init__(name)
+    def __init__(self, name: str, action_space_config: Optional['ActionConfig'] = None, metadata: Optional[Dict] = None, raw_body_snippet: str = ""): # Added raw_body_snippet
+        super().__init__(name, raw_body_snippet=raw_body_snippet, metadata=metadata) # Pass raw_body_snippet
         self.action_space_config = action_space_config
-        self.metadata = metadata or {}
 
     def _get_formatted_action_space_body(self) -> str:
         if self.action_space_config:
@@ -286,18 +320,24 @@ class ControlFuncConfig(HybridProgramConfig):
         indent = "  " * level
         meta = f" [Meta: {self.metadata}]" if self.metadata else ""
 
+        body_display = self._get_formatted_action_space_body() if self.action_space_config else self.raw_body_snippet
+        if len(body_display) > 80:
+            body_display = body_display[:77] + "..."
+
+        action_space_str = ""
         if self.action_space_config:
-            body_display = self._get_formatted_action_space_body()
-            return (f"{indent}[HybridProgram]({self.name}){meta}\n"
-                    f"{indent}  [Body (parsed)]: '{body_display}'\n"
-                    f"{self.action_space_config._repr_indent(level + 1)}")
-        return f"{indent}[HybridProgram]({self.name}): No action space defined."
+            action_space_str = f"\n{self.action_space_config._repr_indent(level + 1)}"
+
+        return (f"{indent}[HybridProgram]({self.name}){meta}\n"
+                f"{indent}  [Body (parsed)]: '{body_display}'"
+                f"{action_space_str}")
 
     def _get_serialization_params(self) -> Dict[str, Any]:
         return {
             "name": self.name,
             "action_space_config": self.action_space_config,
             "metadata": self.metadata,
+            "raw_body_snippet": self.raw_body_snippet,
         }
 
 class ODEConfig(ASTConfigNode):
@@ -332,20 +372,10 @@ class EvolutionDomainConfig(ASTConfigNode):
 class StepFuncConfig(HybridProgramConfig):
     """Configuration for a step function (differential equations)."""
     def __init__(self, name: str, odes: List[ODEConfig], evolution_domain: Optional[EvolutionDomainConfig] = None, duration: Optional[str] = None, raw_body_snippet: Optional[str] = None, metadata: Optional[Dict] = None):
-        super().__init__(name)
+        super().__init__(name, raw_body_snippet=raw_body_snippet, metadata=metadata)
         self.odes = odes
         self.evolution_domain = evolution_domain
         self.duration = duration
-        self.raw_body_snippet = raw_body_snippet
-        self.metadata = metadata or {}
-
-    def _get_formatted_raw_body_snippet(self) -> str:
-        if self.raw_body_snippet:
-            body_display = self.raw_body_snippet
-            if len(body_display) > 80: # Truncate for display
-                body_display = body_display[:77] + "..."
-            return body_display
-        return ""
 
     def _repr_indent(self, level=0):
         indent = "  " * level
@@ -358,13 +388,7 @@ class StepFuncConfig(HybridProgramConfig):
         ode_block_str = "\n".join(odes_lines) if odes_lines else f"{indent}    (None)"
         domain_block_str = self.evolution_domain._repr_indent(level + 1) if self.evolution_domain else f"{indent}  [Evolution Domain]:\n{indent}    (None)"
 
-        body_parsed_str = ""
-        formatted_snippet = self._get_formatted_raw_body_snippet()
-        if formatted_snippet:
-            body_parsed_str = f"{indent}  [Body (parsed)]: '{formatted_snippet}'\n"
-
         return (f"{indent}[HybridProgram]({self.name}){duration_str}{meta}\n"
-                f"{body_parsed_str}"
                 f"{indent}  [ODEs]:\n{ode_block_str}\n"
                 f"{domain_block_str}")
 
@@ -402,7 +426,7 @@ class VariablesConfig(ASTConfigNode):
         }
 
 class VariableDeclarationConfig(ASTConfigNode):
-    def __init__(self, name: str, type: str, lower_bound: Optional[str] = None, upper_bound: Optional[str] = None):
+    def __init__(self, name: str, type: str, lower_bound: Optional[float] = None, upper_bound: Optional[float] = None): # Changed bounds to float
         super().__init__()
         self.name = name
         self.type = type
@@ -435,61 +459,44 @@ class PreconditionConfig(ASTConfigNode):
     def _get_serialization_params(self) -> Dict[str, Any]:
         return {"formula": self.formula}
 
-class PostconditionConfig(ASTConfigNode):
-    def __init__(self, formula: str):
-        self.formula = formula
+@dataclass
+class PostconditionConfig(ASTConfigNode): # Make PostconditionConfig a dataclass
+    formula: str
+    modality: Optional[str] = None # e.g., 'Box', 'Diamond'
+    hp_name: Optional[str] = None # The HP name if a modality is used
+
     def _repr_indent(self, level=0):
         indent = "  " * level
-        return f"{indent}[Postcondition]: '{self.formula}'" # Consistent with ProblemConfig's desired output
+        modality_str = f" {self.modality}" if self.modality else ""
+        hp_name_str = f" HP='{self.hp_name}'" if self.hp_name else ""
+        return f"{indent}[Postcondition]{modality_str}{hp_name_str}: '{self.formula}'"
 
     def _get_serialization_params(self) -> Dict[str, Any]:
-        return {"formula": self.formula}
+        return {
+            "formula": self.formula,
+            "modality": self.modality,
+            "hp_name": self.hp_name,
+        }
 
 class ProblemConfig(ASTConfigNode):
     def __init__(self, precondition: Optional[PreconditionConfig] = None,
-                 loop_execution: Optional['LoopExecutionConfig'] = None,
-                 postcondition: Optional[PostconditionConfig] = None):
+                 postconditions: List[PostconditionConfig] = field(default_factory=list)): # Changed to list of postconditions
         self.precondition = precondition if precondition is not None else PreconditionConfig(formula="")
-        self.loop_execution = loop_execution if loop_execution is not None else LoopExecutionConfig()
-        self.postcondition = postcondition if postcondition is not None else PostconditionConfig(formula="")
+        self.postconditions = postconditions # This will be a list
 
     def _repr_indent(self, level=0):
         indent = "  " * level
-        # Consistently call _repr_indent for all sub-nodes
         pre_str = self.precondition._repr_indent(level + 1)
-        loop_str = self.loop_execution._repr_indent(level + 1)
-        post_str = self.postcondition._repr_indent(level + 1)
+        post_list_str = "\n".join([p._repr_indent(level + 1) for p in self.postconditions])
         
         return (f"{indent}[ProblemConfig]\n"
                 f"{pre_str}\n"
-                f"{loop_str}\n"
-                f"{post_str}")
+                f"{post_list_str or f'{indent}  (No Postconditions)'}")
 
     def _get_serialization_params(self) -> Dict[str, Any]:
         return {
             "precondition": self.precondition,
-            "loop_execution": self.loop_execution,
-            "postcondition": self.postcondition,
-        }
-
-class LoopExecutionConfig(ASTConfigNode):
-    def __init__(self, iterations: str = "inf", loop_invariant_formula: str = "", loop_body: 'SequenceActionConfig' = None):
-        self.iterations = iterations
-        self.loop_invariant_formula = loop_invariant_formula
-        self.loop_body = loop_body if loop_body is not None else SequenceActionConfig()
-
-    def _repr_indent(self, level=0):
-        indent = "  " * level
-        return (f"{indent}[LoopExecution]\n"
-                f"{indent}  [Iterations]: '{self.iterations}'\n"
-                f"{indent}  [LoopInvariant]: '{self.loop_invariant_formula}'\n"
-                f"{indent}  [LoopBody]:\n{self.loop_body._repr_indent(level + 2)}")
-
-    def _get_serialization_params(self) -> Dict[str, Any]:
-        return {
-            "iterations": self.iterations,
-            "loop_invariant_formula": self.loop_invariant_formula,
-            "loop_body": self.loop_body,
+            "postconditions": self.postconditions,
         }
 
 class HybridProgramStepConfig(ASTConfigNode):
