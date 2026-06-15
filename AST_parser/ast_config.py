@@ -21,9 +21,9 @@ class ASTNode:
 
     def __repr__(self, level=0):
         indent = "  " * level
-        value_str = ""
+        value_str = ":"
         if self.value is not None:
-            value_str = f": {self.value}"
+            value_str += f" {self.value}"
         meta_str = f" [Meta: {self.metadata}]" if self.metadata else ""
         s = f"{indent}[{self.node_type}]{value_str}{meta_str}\n"
         for child in self.children:
@@ -36,7 +36,7 @@ class Definition(ASTNode):
         super().__init__("Definition", name, metadata=metadata) # Pass metadata to ASTNode
         self.name = name
         self.definition_type = definition_type
-        self.definition_value = value
+        self.definition_value = value 
         self.comment = comment
         # self.metadata is already set by super().__init__ from ASTNode
 
@@ -94,87 +94,6 @@ class ProblemStatement(ASTNode):
         indent = "  " * level
         meta_str = f" [Meta: {self.metadata}]" if self.metadata else ""
         s = f"{indent}[PROBLEM]{meta_str}:\n"
-        for child in self.children:
-            s += child.__repr__(level + 1)
-        return s
-
-# --- NEW AST NODE TYPES FOR PROGRAM FRAGMENTS AND PROBLEM STRUCTURE ---
-
-class IfElseStatement(ASTNode):
-    def __init__(self, condition: str, metadata: Optional[Dict] = None):
-        super().__init__("IfElseStatement", value=condition, metadata=metadata)
-
-    def __repr__(self, level=0):
-        indent = "  " * level
-        s = f"{indent}[IfElseStatement]: if ({self.value})\n"
-        for child in self.children:
-            s += child.__repr__(level + 1)
-        return s
-
-class ChoiceStatement(ASTNode):
-    def __init__(self, metadata: Optional[Dict] = None):
-        super().__init__("ChoiceStatement", metadata=metadata)
-
-    def __repr__(self, level=0):
-        indent = "  " * level
-        s = f"{indent}[ChoiceStatement] (++)\n"
-        for child in self.children:
-            s += child.__repr__(level + 1)
-        return s
-
-class SequenceStatement(ASTNode):
-    def __init__(self, metadata: Optional[Dict] = None):
-        super().__init__("SequenceStatement", metadata=metadata)
-
-    def __repr__(self, level=0):
-        indent = "  " * level
-        s = f"{indent}[SequenceStatement] (;)\n"
-        for child in self.children:
-            s += child.__repr__(level + 1)
-        return s
-
-class TestStatement(ASTNode):
-    def __init__(self, formula: str, metadata: Optional[Dict] = None):
-        super().__init__("TestStatement", value=formula, metadata=metadata)
-
-    def __repr__(self, level=0):
-        indent = "  " * level
-        return f"{indent}[TestStatement]: ?({self.value})\n"
-
-class AssignmentStatement(ASTNode):
-    def __init__(self, assignment: str, metadata: Optional[Dict] = None):
-        super().__init__("AssignmentStatement", value=assignment, metadata=metadata)
-
-    def __repr__(self, level=0):
-        indent = "  " * level
-        return f"{indent}[AssignmentStatement]: {self.value}\n"
-
-class HPCall(ASTNode):
-    def __init__(self, hp_name: str, metadata: Optional[Dict] = None):
-        super().__init__("HPCall", value=hp_name, metadata=metadata)
-
-    def __repr__(self, level=0):
-        indent = "  " * level
-        return f"{indent}[HPCall]: {self.value}\n"
-
-class SafetyPostcondition(ASTNode):
-    def __init__(self, metadata: Optional[Dict] = None):
-        super().__init__("SafetyPostcondition", metadata=metadata)
-
-    def __repr__(self, level=0):
-        indent = "  " * level
-        s = f"{indent}[SafetyPostcondition] ([] operator)\n"
-        for child in self.children:
-            s += child.__repr__(level + 1)
-        return s
-
-class LivenessPostcondition(ASTNode):
-    def __init__(self, metadata: Optional[Dict] = None):
-        super().__init__("LivenessPostcondition", metadata=metadata)
-
-    def __repr__(self, level=0):
-        indent = "  " * level
-        s = f"{indent}[LivenessPostcondition] (<> operator)\n"
         for child in self.children:
             s += child.__repr__(level + 1)
         return s

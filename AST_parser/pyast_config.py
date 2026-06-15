@@ -1,4 +1,5 @@
-# pyast_config.py
+#pyast_config.py
+
 import logging
 from typing import List, Dict, Any, Optional, Union, Tuple, Callable
 
@@ -435,61 +436,40 @@ class PreconditionConfig(ASTConfigNode):
         return {"formula": self.formula}
 
 class PostconditionConfig(ASTConfigNode):
-    # MODIFIED: Added hp_name to the constructor
-    def __init__(self, formula: str, hp_name: Optional[str] = None):
+    def __init__(self, formula: str):
         self.formula = formula
-        self.hp_name = hp_name # Store the HP name
-
     def _repr_indent(self, level=0):
         indent = "  " * level
-        hp_name_str = f" (HP: '{self.hp_name}')" if self.hp_name else ""
-        return f"{indent}[Postcondition]{hp_name_str}: '{self.formula}'"
+        return f"{indent}[Postcondition]: '{self.formula}'" # Consistent with ProblemConfig's desired output
 
     def _get_serialization_params(self) -> Dict[str, Any]:
-        # MODIFIED: Added hp_name to serialization parameters
-        return {"formula": self.formula, "hp_name": self.hp_name}
+        return {"formula": self.formula}
 
 class ProblemConfig(ASTConfigNode):
     def __init__(self, precondition: Optional[PreconditionConfig] = None,
                  loop_execution: Optional['LoopExecutionConfig'] = None,
-                 # MODIFIED: Renamed 'postcondition' to 'safety_postcondition' and added 'liveness_postcondition'
-                 safety_postcondition: Optional[PostconditionConfig] = None,
-                 liveness_postcondition: Optional[PostconditionConfig] = None):
+                 postcondition: Optional[PostconditionConfig] = None):
         self.precondition = precondition if precondition is not None else PreconditionConfig(formula="")
         self.loop_execution = loop_execution if loop_execution is not None else LoopExecutionConfig()
-        self.safety_postcondition = safety_postcondition
-        self.liveness_postcondition = liveness_postcondition
+        self.postcondition = postcondition if postcondition is not None else PostconditionConfig(formula="")
 
     def _repr_indent(self, level=0):
         indent = "  " * level
         # Consistently call _repr_indent for all sub-nodes
         pre_str = self.precondition._repr_indent(level + 1)
         loop_str = self.loop_execution._repr_indent(level + 1)
-        
-        safety_str = ""
-        if self.safety_postcondition:
-            safety_str = self.safety_postcondition._repr_indent(level + 1)
-        else:
-            safety_str = f"{indent}  [Safety Postcondition]: (None)"
-
-        liveness_str = ""
-        if self.liveness_postcondition:
-            liveness_str = self.liveness_postcondition._repr_indent(level + 1)
-        else:
-            liveness_str = f"{indent}  [Liveness Postcondition]: (None)"
+        post_str = self.postcondition._repr_indent(level + 1)
         
         return (f"{indent}[ProblemConfig]\n"
                 f"{pre_str}\n"
-                f"{safety_str}\n" # Added safety postcondition
-                f"{liveness_str}\n" # Added liveness postcondition
-                f"{loop_str}")
+                f"{loop_str}\n"
+                f"{post_str}")
 
     def _get_serialization_params(self) -> Dict[str, Any]:
         return {
             "precondition": self.precondition,
             "loop_execution": self.loop_execution,
-            "safety_postcondition": self.safety_postcondition,
-            "liveness_postcondition": self.liveness_postcondition,
+            "postcondition": self.postcondition,
         }
 
 class LoopExecutionConfig(ASTConfigNode):
