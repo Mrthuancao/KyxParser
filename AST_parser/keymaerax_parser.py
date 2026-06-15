@@ -1,4 +1,3 @@
-# keymaerax_parser.py
 from __future__ import annotations
 import re
 import logging
@@ -112,8 +111,10 @@ class KeYmaeraXParser:
         at start_brace_idx.
         Returns the index of the matching '}' or None if no match is found (unbalanced).
         """
-        if text[start_brace_idx] != '{':
-            raise ValueError("start_brace_idx must point to an opening brace '{'")
+        if start_brace_idx >= len(text) or text[start_brace_idx] != '{':
+            # This can happen if the fragment is not a braced block, but was passed to this helper.
+            # Or if the index is out of bounds.
+            return None
 
         balance = 1
         for i in range(start_brace_idx + 1, len(text)):
@@ -294,8 +295,17 @@ class KeYmaeraXParser:
                 hp_header_start_idx = hp_match.start()
                 open_brace_idx = hp_match.end() - 1 # The '{' is at the end of the HP header match
                 hp_name = hp_match.group('name')
-                raw_meta = hp_match.group('metadata')
-                metadata_dict = self._parse_metadata_string(raw_meta) if raw_meta else {}
+                raw_meta_block = hp_match.group('metadata') # This can be multi-line
+                
+                aggregated_metadata = {}
+                if raw_meta_block:
+                    for line in raw_meta_block.split('\n'):
+                        line = line.strip()
+                        if line.startswith('//') and '@' in line:
+                            parsed_line_metadata = self._parse_metadata_string(line)
+                            aggregated_metadata.update(parsed_line_metadata)
+                metadata_dict = aggregated_metadata
+
                 logging.debug(f"Found HP header for '{hp_name}' at global index {hp_header_start_idx}.")
 
                 # Use the full current string for brace matching
@@ -323,14 +333,19 @@ class KeYmaeraXParser:
                             full_hp_block_end_idx = terminator_idx + 1
 
                     # --- NEW LOGIC FOR LOOP HPs LIKE dwwpdl ---
+                    # First, remove the outermost braces of the HP definition body
+                    # hp_body_raw_within_braces is like "{ ... }*@invariant(...)"
+                    # We need the content inside the outermost braces.
+                    body_content_without_outer_hp_braces = hp_body_raw_within_braces[1:-1].strip()
+
                     loop_match = re.search(
-                        r'\{\s*(.*?)\s*\}\s*\*@invariant\s*\((.*?)\)',
-                        hp_body_raw_within_braces, # Search within the content *including* the outer braces
+                        r'^(.*?)\s*\*@invariant\s*\((.*?)\)$', # Matches the loop body and invariant
+                        body_content_without_outer_hp_braces,
                         re.DOTALL
                     )
 
                     if loop_match:
-                        loop_body_inner_raw = loop_match.group(1).strip()
+                        loop_body_inner_raw = loop_match.group(1).strip() # This should now be "{ { controlFunc; t := 0; } stepFunc; }"
                         loop_invariant_formula = loop_match.group(2).strip()
 
                         hp_node = HybridProgram(hp_name, hp_body_raw_within_braces, metadata=metadata_dict)
@@ -379,9 +394,15 @@ class KeYmaeraXParser:
                 d_name = def_match.group('name')
                 d_params = def_match.group('params')
                 d_val = (def_match.group('value') or "").strip()
-                raw_comments = def_match.group('raw_comments') or ""
+                raw_comments_block = def_match.group('raw_comments') or ""
 
-                m_data = self._parse_metadata_string(raw_comments)
+                aggregated_metadata = {}
+                for line in raw_comments_block.split('\n'):
+                    line = line.strip()
+                    if line.startswith('//') and '@' in line:
+                        parsed_line_metadata = self._parse_metadata_string(line)
+                        aggregated_metadata.update(parsed_line_metadata)
+                m_data = aggregated_metadata
 
                 if d_type == "Bool" and d_val.startswith('(') and d_val.endswith(')'):
                     d_val = d_val[1:-1].strip()
@@ -411,36 +432,47 @@ class KeYmaeraXParser:
             logging.warning(f"Unparsed content remaining in Definitions block: '{remaining_text_after_loop[:200]}...'")
 
 
-    def _parse_metadata_string(self, raw_metadata: Optional[str]) -> dict:
+    def _parse_metadata_string(self, raw_metadata_line: str) -> dict:
         """
-        Converts RL-Annotation lines into a dictionary.
-        Supports: // @category: key1=val1, key2={complex_expr}, key3=[bounds]
+        Converts a single RL-Annotation line into a dictionary.
+        Expected format: // @category: key1=val1, key2={complex_expr}, key3=[bounds]
         """
         metadata = {}
-        if not raw_metadata:
+        if not raw_metadata_line:
             return metadata
 
+        # Remove the leading '//' and strip whitespace
+        line_content = raw_metadata_line.lstrip('/').strip()
+
         # 1. Extract the category (e.g., @const, @var, @progress, @safety)
-        # This looks for the word immediately following the '@' and before the ':'
-        category_match = re.search(r'@(\w+):', raw_metadata)
+        category_match = re.match(r'@(\w+):', line_content)
         if category_match:
             metadata['type'] = category_match.group(1).strip()
+            # Remove the category part from line_content for further processing
+            metadata_content_raw = line_content[category_match.end():].strip()
+        else:
+            # If no category, the whole line (after '//') is treated as key-value pairs
+            metadata_content_raw = line_content.strip()
 
-        # 2. Extract key-value pairs
-        attr_pairs_raw = re.findall(
-            r'(\w+)\s*=\s*'
-            r'(?:(\{.*?\})|'   # Group 1: curly braces
-            r'([.*?])|'   # Group 2: square brackets (escaped)
-            r'(\".*?\")|'   # Group 3: quoted string
-            r'([^,]+))',    # Group 4: anything else (non-comma)
-            raw_metadata,
-            re.DOTALL
-        )
+        if not metadata_content_raw:
+            return metadata
 
-        for match_tuple in attr_pairs_raw:
-            key = match_tuple[0] # The actual key
-            # Find the first non-empty value from the capturing groups (index 1, 2, 3, or 4)
-            value_raw = next((v for v in match_tuple[1:] if v), '').strip()
+        # 2. Split the remaining content by comma, respecting braces
+        key_value_pairs_raw = self.split_by_operator_outside_braces(metadata_content_raw, ',')
+
+        for pair_str in key_value_pairs_raw:
+            pair_str = pair_str.strip()
+            if not pair_str:
+                continue
+
+            # Split each pair into key and value
+            parts = pair_str.split('=', 1)
+            if len(parts) != 2:
+                logging.warning(f"Malformed metadata key-value pair: '{pair_str}'. Skipping.")
+                continue
+
+            key = parts[0].strip()
+            value_raw = parts[1].strip()
 
             # Remove surrounding delimiters for the final dict value
             if (value_raw.startswith('{') and value_raw.endswith('}')) or \
@@ -452,9 +484,9 @@ class KeYmaeraXParser:
 
             # Handle on_success/on_failure values with optional status
             if key in ['on_success', 'on_failure']:
-                parts = clean_val.split(':', 1) # Split only on the first colon
+                parts = clean_val.split(':', 1)
                 action = parts[0].strip()
-                status = 'none' # Default status if not specified
+                status = 'none'
                 if len(parts) > 1:
                     status_part = parts[1].strip()
                     if status_part.startswith('status='):
@@ -529,8 +561,15 @@ class KeYmaeraXParser:
             if var_match:
                 var_type = var_match.group('type')
                 name = var_match.group('name')
-                raw_comments = var_match.group('raw_comments') or ""
-                metadata = self._parse_metadata_string(raw_comments)
+                raw_comments_block = var_match.group('raw_comments') or ""
+                
+                aggregated_metadata = {}
+                for line in raw_comments_block.split('\n'):
+                    line = line.strip()
+                    if line.startswith('//') and '@' in line:
+                        parsed_line_metadata = self._parse_metadata_string(line)
+                        aggregated_metadata.update(parsed_line_metadata)
+                metadata = aggregated_metadata
 
                 vars_node.add_child(Variable(name, var_type, metadata=metadata))
                 logging.debug(f"Added Variable: Type='{var_type}', Name='{name}', Metadata={metadata}")
@@ -549,66 +588,76 @@ class KeYmaeraXParser:
         if not fragment:
             return ASTNode("EmptyFragment")
 
+        # Test statement: ?formula
         if fragment.startswith('?'):
-            return TestStatement(fragment[1:].strip())
-        elif ":=" in fragment:
+            return TestStatement(fragment[1:].strip()) # Store formula without '?'
+        
+        # Assignment statement: var := expr
+        assignment_match = re.match(r'^\s*(\w+)\s*:=\s*(.*)$', fragment, re.DOTALL)
+        if assignment_match:
             return AssignmentStatement(fragment)
-        elif re.match(r'^\w+$', fragment): # Simple identifier, likely an HP call
+        
+        # HP Call or simple identifier
+        if re.match(r'^\s*\w+\s*$', fragment):
             return HPCall(fragment)
-        else:
-            logging.warning(f"Unrecognized program fragment (atomic base case): '{fragment}'. Treating as RawStatement.")
-            return ASTNode("RawStatement", value=fragment)
+        
+        # Fallback for anything else
+        logging.warning(f"Unrecognized program fragment (atomic base case): '{fragment}'. Treating as RawStatement.")
+        return ASTNode("RawStatement", value=fragment)
 
 
     def _parse_program_fragment(self, program_fragment_string: str) -> ASTNode:
         """
         Parses a program fragment into an ASTNode representing its structure.
         Handles if/else, choice (++) and sequence (;) operators by precedence.
-        This function now handles sequence parsing iteratively at the top level
-        to prevent RecursionError for long sequences of atomic statements.
         """
         fragment = program_fragment_string.strip()
         if not fragment:
             return ASTNode("EmptyFragment")
 
+        # Normalize all whitespace to single spaces for consistent regex matching
+        fragment = re.sub(r'\s+', ' ', fragment).strip()
+        logging.debug(f"[_parse_program_fragment] Input fragment (normalized): '{fragment}'")
+
         # 1. Handle top-level braces: If the entire fragment is enclosed in braces,
         # strip them and recursively parse the inner content.
         if fragment.startswith('{'):
             matching_brace_idx = self._find_matching_brace_span(fragment, 0)
-            if matching_brace_idx == len(fragment) - 1:
+            if matching_brace_idx == len(fragment) - 1: # Check if the braces enclose the *entire* fragment
                 inner_content = fragment[1:-1].strip()
+                logging.debug(f"[_parse_program_fragment] Stripped outer braces, recursing with: '{inner_content}'")
                 return self._parse_program_fragment(inner_content)
-            # If braces are not balanced or don't enclose the whole thing, proceed.
+            # If braces are not balanced or don't enclose the whole thing, proceed to sequence parsing.
 
         # 2. Handle If-Else statements (highest precedence for compound statements)
         if fragment.startswith("if"):
-            cond_match = re.match(r'if\s*\((.*?)\)\s*\{', fragment, re.DOTALL)
+            cond_match = re.match(r'if \((.*?)\) \{', fragment, re.DOTALL)
             if cond_match:
                 condition = cond_match.group(1).strip()
                 then_block_start = cond_match.end() - 1
                 then_block_end = self._find_matching_brace_span(fragment, then_block_start)
                 if then_block_end is None:
-                    logging.warning(f"Unbalanced braces in 'then' block of if statement: '{fragment}'")
+                    logging.warning(f"[_parse_program_fragment] Unbalanced braces in 'then' block of if statement: '{fragment}'")
                     return ASTNode("ErrorFragment", value=fragment)
 
                 then_content_raw = fragment[then_block_start + 1 : then_block_end].strip()
-                then_node = self._parse_program_fragment(then_content_raw) # Recursive call for then block
+                then_node = self._parse_program_fragment(then_content_raw)
 
                 else_node = None
                 remaining_after_then = fragment[then_block_end + 1:].strip()
                 if remaining_after_then.startswith("else"):
-                    else_keyword_end_match = re.match(r'else\s*(\{.*\}|.*)', remaining_after_then, re.DOTALL)
-                    if else_keyword_end_match:
-                        else_content_full = else_keyword_end_match.group(1).strip()
+                    else_block_match = re.match(r'else (\{.*\}|.*)', remaining_after_then, re.DOTALL)
+                    if else_block_match:
+                        else_content_full = else_block_match.group(1).strip()
                         if else_content_full.startswith('{'):
                             else_block_start = remaining_after_then.find('{')
                             else_block_end = self._find_matching_brace_span(remaining_after_then, else_block_start)
                             if else_block_end is None:
-                                logging.warning(f"Unbalanced braces in 'else' block of if statement: '{fragment}'")
+                                logging.warning(f"[_parse_program_fragment] Unbalanced braces in 'else' block of if statement: '{fragment}'")
                                 return ASTNode("ErrorFragment", value=fragment)
                             else_content_raw = remaining_after_then[else_block_start + 1 : else_block_end].strip()
-                            else_node = self._parse_program_fragment(else_content_raw) # Recursive call for else block
-                        else: # 'else' followed by a single statement (or a sequence without explicit braces)
+                            else_node = self._parse_program_fragment(else_content_raw)
+                        else:
                             else_node = self._parse_program_fragment(else_content_full)
 
                 if_else_ast_node = IfElseStatement(condition)
@@ -621,51 +670,101 @@ class KeYmaeraXParser:
         choice_parts = self.split_by_operator_outside_braces(fragment, '++')
         if len(choice_parts) > 1:
             choice_ast_node = ChoiceStatement()
+            logging.debug(f"[_parse_program_fragment] Found choice operator, splitting into: {choice_parts}")
             for part in choice_parts:
                 if part.strip():
-                    choice_ast_node.add_child(self._parse_program_fragment(part)) # Recursive call for each choice branch
+                    choice_ast_node.add_child(self._parse_program_fragment(part))
             return choice_ast_node
 
-        # 4. Handle Sequence or single Atomic statement
-        # If it's not an if/else, a top-level choice, or a fully enclosed braced block,
-        # it must be a sequence of statements (separated by ';') or a single atomic statement.
-        statements = self.split_by_operator_outside_braces(fragment, ';')
-        non_empty_statements = [s.strip() for s in statements if s.strip()]
+        # 4. Handle Sequences (explicit ';' or implicit whitespace) and Atomic statements.
+        current_pos = 0
+        fragment_len = len(fragment)
+        statements_found: List[ASTNode] = []
 
-        if not non_empty_statements:
-            return ASTNode("EmptyFragment")
+        while current_pos < fragment_len:
+            logging.debug(f"[_parse_program_fragment] Loop iteration. current_pos: {current_pos}, remaining: '{fragment[current_pos:]}'")
+            # Skip whitespace
+            while current_pos < fragment_len and fragment[current_pos].isspace():
+                current_pos += 1
+            if current_pos >= fragment_len:
+                break
+            logging.debug(f"[_parse_program_fragment] After whitespace skip. current_pos: {current_pos}, remaining: '{fragment[current_pos:]}'")
 
-        # If there's only one non-empty statement, it means the fragment itself was a single unit.
-        # Since top-level if/else, choice, and fully enclosed braced blocks are handled above,
-        # if we reach here with a single statement, it must be atomic.
-        if len(non_empty_statements) == 1:
-            return self._parse_atomic_statement(non_empty_statements[0])
-        
-        # If there are multiple non-empty statements, it's a true sequence.
-        sequence_ast_node = SequenceStatement()
-        for stmt_value in non_empty_statements:
-            if stmt_value.strip():
-                temp_stmt_value = stmt_value.strip()
-                
-                # Determine if the current statement within the sequence is itself a compound structure.
-                is_compound_nested = False
-                
-                # Check for nested if-else
-                if temp_stmt_value.startswith('if '):
-                    is_compound_nested = True
-                # Check for nested choice (using split_by_operator_outside_braces for robustness)
-                elif len(self.split_by_operator_outside_braces(temp_stmt_value, '++')) > 1:
-                    is_compound_nested = True
-                # Check for nested braced block (e.g., `{x:=1; y:=2}` within a sequence `a:=0; {x:=1; y:=2}; b:=3;`)
-                elif temp_stmt_value.startswith('{') and self._find_matching_brace_span(temp_stmt_value, 0) == len(temp_stmt_value) - 1:
-                    is_compound_nested = True
-                
-                if is_compound_nested:
-                    # If it's a nested compound statement, recurse with _parse_program_fragment.
-                    sequence_ast_node.add_child(self._parse_program_fragment(stmt_value))
+            # Try to match a complete statement unit
+            matched_stmt_str = None
+            
+            # Priority 1: Braced Block { ... }
+            if fragment[current_pos] == '{':
+                logging.debug(f"[_parse_program_fragment] Found opening brace at {current_pos}. Calling _find_matching_brace_span.")
+                closing_brace_idx = self._find_matching_brace_span(fragment, current_pos)
+                if closing_brace_idx is not None:
+                    # Extract the content *inside* the matched braces for recursive parsing
+                    inner_braced_content = fragment[current_pos + 1 : closing_brace_idx].strip()
+                    logging.debug(f"[_parse_program_fragment] Matched balanced braced block. Inner content: '{inner_braced_content}'. Recursing.")
+                    statements_found.append(self._parse_program_fragment(inner_braced_content))
+                    current_pos = closing_brace_idx + 1
+                    continue # Move to next iteration of while loop
                 else:
-                    # Otherwise, it's an atomic statement, parse it directly.
-                    sequence_ast_node.add_child(self._parse_atomic_statement(stmt_value))
+                    # This means an opening brace was found, but no matching closing brace within the *remaining* fragment.
+                    # This is an unbalanced brace situation for a sub-block.
+                    logging.warning(f"[_parse_program_fragment] Unbalanced opening brace at index {current_pos} in fragment: '{fragment}'. Treating as raw token.")
+                    # Fall through to treat '{' as a raw token if unbalanced (handled by the fallback below)
+            
+            # Priority 2: Assignment, Test, HPCall (atomic statements)
+            # These can be implicitly sequenced by whitespace or explicitly by semicolon.
+            
+            # Try to match Assignment
+            assign_match = re.match(r'^(\w+)\s*:=\s*(.*?)(?=\s*(?:;|\+\+|if|\{|$))', fragment[current_pos:], re.DOTALL)
+            if assign_match:
+                matched_stmt_str = fragment[current_pos : current_pos + assign_match.end()]
+                statements_found.append(self._parse_atomic_statement(matched_stmt_str))
+                current_pos += assign_match.end()
+                continue
+
+            # Try to match Test
+            test_match = re.match(r'^\?(.+?)(?=\s*(?:;|\+\+|if|\{|$))', fragment[current_pos:], re.DOTALL)
+            if test_match:
+                matched_stmt_str = fragment[current_pos : current_pos + test_match.end()]
+                statements_found.append(self._parse_atomic_statement(matched_stmt_str))
+                current_pos += test_match.end()
+                continue
+
+            # Try to match HPCall (single word)
+            hp_call_match = re.match(r'^(\w+)(?=\s*(?:;|\+\+|if|\{|$))', fragment[current_pos:])
+            if hp_call_match:
+                matched_stmt_str = fragment[current_pos : current_pos + hp_call_match.end()]
+                statements_found.append(self._parse_atomic_statement(matched_stmt_str))
+                current_pos += hp_call_match.end()
+                continue
+            
+            # Handle explicit semicolon as a separator for sequence.
+            # If we reach here and find a semicolon, it means the previous content was implicitly sequenced.
+            # The current semicolon just separates.
+            if fragment[current_pos] == ';':
+                current_pos += 1
+                continue # Just consume the semicolon and continue looking for the next statement
+
+            # Fallback: Unrecognized token. Consume it as a raw statement.
+            if matched_stmt_str is None: # Only if none of the above specific matches worked
+                next_token_match = re.match(r'^\s*(\S+)', fragment[current_pos:])
+                if next_token_match:
+                    token = next_token_match.group(1).strip()
+                    statements_found.append(self._parse_atomic_statement(token)) # Treat as atomic, will become RawStatement
+                    current_pos += next_token_match.end()
+                    logging.warning(f"[_parse_program_fragment] Unrecognized fragment during sequence parsing, consuming as token: '{token}' in fragment: '{fragment}' at index {current_pos - len(token)}")
+                else:
+                    logging.error(f"[_parse_program_fragment] Infinite loop prevention: Could not parse fragment, consuming single character: '{fragment[current_pos]}' in fragment: '{fragment}' at index {current_pos}")
+                    statements_found.append(self._parse_atomic_statement(fragment[current_pos]))
+                    current_pos += 1
+
+        if not statements_found:
+            return ASTNode("EmptyFragment")
+        if len(statements_found) == 1:
+            return statements_found[0]
+        
+        sequence_ast_node = SequenceStatement()
+        for stmt_node in statements_found:
+            sequence_ast_node.add_child(stmt_node)
         return sequence_ast_node
 
 
@@ -707,7 +806,7 @@ class KeYmaeraXParser:
                 liveness_part_raw = safety_and_liveness_parts[1].strip()
 
                 # Parse Safety Postcondition: [HP;](Q_safety)
-                safety_match = re.match(r'\[\s*(\w+)\s*;\s*\]\s*\((.*)\)', safety_part_raw, re.DOTALL)
+                safety_match = re.match(r'\[\s*(\w+)\s*;\s*\]\s*\((.*)\)', safety_part_raw, re.DOTALL) # Fixed regex for []
                 if safety_match:
                     hp_name_safety = safety_match.group(1).strip()
                     safety_formula = safety_match.group(2).strip()
@@ -761,7 +860,6 @@ def convert_keymaerax_ast_to_intermediate_pyast(kx_ast_root: ASTNode) -> GymEnvi
     definitions_config = DefinitionsConfig()
     variables_config = VariablesConfig()
 
-    # --- MODIFICATION START ---
     # Initialize ProblemConfig without safety_postcondition and liveness_postcondition
     problem_config = ProblemConfig(
         precondition=PreconditionConfig(formula=""),
@@ -770,7 +868,6 @@ def convert_keymaerax_ast_to_intermediate_pyast(kx_ast_root: ASTNode) -> GymEnvi
     # These attributes will be set later in the function if found in the AST
     problem_config.safety_postcondition = None
     problem_config.liveness_postcondition = None
-    # --- MODIFICATION END ---
 
     # Pass them to GymEnvironmentConfig constructor
     gym_config = GymEnvironmentConfig(
@@ -790,7 +887,7 @@ def convert_keymaerax_ast_to_intermediate_pyast(kx_ast_root: ASTNode) -> GymEnvi
             # Access metadata directly from the ASTNode instance
             metadata = def_node_kx.metadata
 
-            if def_node_kx.node_type == "Definition" and hasattr(def_node_kx, 'definition_type'):
+            if def_node_kx.node_type == "DEF" and hasattr(def_node_kx, 'definition_type'): # Changed from "Definition" to "DEF" to match ASTNode type in Definition class
                 parameters = []
                 params_node = next((c for c in def_node_kx.children if c.node_type == "Parameters"), None)
                 if params_node and params_node.value:
@@ -898,7 +995,7 @@ def convert_keymaerax_ast_to_intermediate_pyast(kx_ast_root: ASTNode) -> GymEnvi
         logging.debug("Found ProgramVariablesBlock in KeYmaeraX AST for conversion.")
 
         for var_node_kx in vars_block_kx.children:
-            if var_node_kx.node_type == "Variable":
+            if var_node_kx.node_type == "VAR": # Changed from "Variable" to "VAR" to match ASTNode type in Variable class
                 # Get metadata from the Kx AST node
                 var_metadata = var_node_kx.metadata # Access metadata directly from the ASTNode instance
 
@@ -907,7 +1004,7 @@ def convert_keymaerax_ast_to_intermediate_pyast(kx_ast_root: ASTNode) -> GymEnvi
                 if 'bound' in var_metadata:
                     bound_str = var_metadata['bound']
                     # Use a more robust regex for parsing bounds like [0:100]
-                    bound_match = re.match(r'(-?\d+(\.\d+)?):(-?\d+(\.\d+)?)', bound_str)
+                    bound_match = re.match(r'[(-?\d+(\.\d+)?):(-?\d+(\.\d+)?)]', bound_str) # Added brackets to regex
                     if bound_match:
                         lower_bound = bound_match.group(1)
                         upper_bound = bound_match.group(3)
@@ -956,14 +1053,16 @@ def convert_keymaerax_ast_to_intermediate_pyast(kx_ast_root: ASTNode) -> GymEnvi
                     formula=formula_node.value,
                     hp_name=hp_call_node.value # Store the HP name for reference
                 )
-                logging.debug(f"Set liveness postcondition: HP='{hp_call_node.value}', Formula='{liveness_formula[:50]}...'")
+                logging.debug(f"Set liveness postcondition: HP='{hp_call_node.value}', Formula='{formula_node.value[:50]}...'")
+
 
         # The LoopExecutionConfig for the problem should now refer to the dwwpdl HP definition.
         # Find the dwwpdl HP definition in the KeYmaeraX AST to get its parsed loop body and invariant.
         dwwpdl_hp_def = None
         if defs_block_kx:
             for hp_def in defs_block_kx.children: # Iterate through raw Kx AST nodes
-                if hp_def.node_type == "HP" and hp_def.name == "dwwpdl":
+                # Corrected check: HybridProgram instances have node_type "DEF" and definition_type "HP"
+                if hp_def.node_type == "DEF" and hp_def.definition_type == "HP" and hp_def.name == "dwwpdl":
                     dwwpdl_hp_def = hp_def
                     break
 
@@ -1054,6 +1153,7 @@ def _parse_kx_hp_program_fragment_to_action_config(kx_node: ASTNode, choice_leve
 
     elif kx_node.node_type == "AssignmentStatement":
         # Handle both deterministic and non-deterministic assignments
+        # The AssignmentStatement AST node stores the full string like "var := expr"
         if kx_node.value.endswith(":= *"):
             var_name = kx_node.value.split(':=')[0].strip()
             return NondeterministicAssignmentActionConfig(variable=var_name)
@@ -1062,7 +1162,7 @@ def _parse_kx_hp_program_fragment_to_action_config(kx_node: ASTNode, choice_leve
             return DeterministicAssignmentActionConfig(variable=var_name.strip(), value=value.strip())
 
     elif kx_node.node_type == "TestStatement":
-        return ActionConstraintConfig(formula=kx_node.value)
+        return ActionConstraintConfig(formula=kx_node.value) # kx_node.value already stripped of '?'
 
     elif kx_node.node_type == "HPCall":
         return CallHybridProgramConfig(hp_name=kx_node.value)
@@ -1071,6 +1171,7 @@ def _parse_kx_hp_program_fragment_to_action_config(kx_node: ASTNode, choice_leve
         logging.warning(f"Converting RawStatement '{kx_node.value}' to a generic sequence action. This might indicate incomplete parsing.")
         # This is a fallback, ideally all statements should be parsed into specific types.
         # For a raw statement, we'll represent it as an assignment to a placeholder for now.
+        # This should ideally not be hit with the improved _parse_atomic_statement
         return SequenceActionConfig(actions=[DeterministicAssignmentActionConfig(variable="raw_statement_placeholder", value=f"'{kx_node.value}'")])
 
     logging.warning(f"Unhandled or empty kx_node type '{kx_node.node_type}' in _parse_kx_hp_program_fragment_to_action_config. Returning empty SequenceActionConfig.")
