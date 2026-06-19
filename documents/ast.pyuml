@@ -1,0 +1,62 @@
+@startuml
+skinparam handwritten true
+skinparam classAttributeIconSize 0
+skinparam defaultFontName "Arial"
+skinparam noteBackgroundColor #lightyellow
+skinparam noteBorderColor #darkgoldenrod
+
+top to bottom direction 
+
+abstract class ASTNode {
+  + node_type: str
+  + value: Any
+  + metadata: Optional[Dict]
+  --
+  + add_child(child: ASTNode) : void
+}
+
+class Definition {
+  + name: str
+  + definition_type: str
+  + definition_value: Any
+  + comment: Optional[str]
+}
+
+class HybridProgram {
+  + body: str
+}
+
+class Variable {
+  + name: str
+  + var_type: str
+  + comment: Optional[str]
+}
+
+class ProblemStatement {
+  + formula: str
+}
+
+' Inheritance Relationships '
+ASTNode <|-- Definition
+Definition <|-- HybridProgram
+ASTNode <|-- Variable
+ASTNode <|-- ProblemStatement
+
+' Composition Relationship: An ASTNode can have multiple ASTNode children '
+ASTNode "1" *-- "0..*" ASTNode : children >
+
+' Notes to clarify how base class attributes are used/mapped '
+
+note "The 'name' attribute of Definition\nis stored in ASTNode.value." as DefinitionValueNote
+Definition .. DefinitionValueNote
+
+note "The 'name' attribute (inherited from Definition)\nis stored in ASTNode.value.\nThe 'body' attribute of HybridProgram\nis stored in Definition.definition_value." as HybridProgramValueNote
+HybridProgram .. HybridProgramValueNote
+
+note "The 'name' attribute of Variable\nis stored in ASTNode.value." as VariableValueNote
+Variable .. VariableValueNote
+
+note "The 'formula' attribute of ProblemStatement\nis stored in ASTNode.value." as ProblemStatementValueNote
+ProblemStatement .. ProblemStatementValueNote
+
+@enduml

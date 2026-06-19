@@ -1,0 +1,236 @@
+@startuml
+
+skinparam classAttributeIconSize 0
+hide empty members
+' Changed overall direction to top to bottom to potentially reduce horizontal clutter
+top to bottom direction
+
+' Abstract Base Node
+abstract class ASTConfigNode {
+    + _repr_indent(level: int): str
+    + _get_serialization_params(): Dict[str, Any]
+}
+
+package "Gym Environment" {
+    ' Main Environment Configuration
+    class GymEnvironmentConfig {
+        + env_name: str
+        + definitions: DefinitionsConfig
+        + variables: VariablesConfig
+        + problem: ProblemConfig
+    }
+}
+
+package "Definitions" {
+    ' Definitions Block
+    class DefinitionsConfig {
+        + constants: List<ConstantDefinitionConfig>
+        + functions: List<FunctionDefinitionConfig>
+        + predicates: List<PredicateDefinitionConfig>
+        + hybrid_programs: List<HybridProgramConfig>
+    }
+
+    class ConstantDefinitionConfig {
+        + name: str
+        + type: str
+        + value: Optional[str]
+        + metadata: Dict
+    }
+
+    class FunctionDefinitionConfig {
+        + name: str
+        + return_type: str
+        + parameters: List<Tuple[str, str]>
+        + body: str
+        + metadata: Dict
+    }
+
+    class PredicateDefinitionConfig {
+        + name: str
+        + parameters: List<Tuple[str, str]>
+        + body: str
+        + metadata: Dict
+        --
+        - _get_formatted_body_display(level: int): str
+    }
+
+    ' Hybrid Program related classes
+    class HybridProgramConfig {
+        + name: str
+        + raw_body_snippet: str
+        + metadata: Dict[str, Any]
+        + loop_execution_config: Optional[LoopExecutionConfig]
+    }
+
+    class LoopExecutionConfig {
+        + loop_invariant_formula: Optional[str]
+        + iterations: str
+        + loop_body: SequenceActionConfig
+    }
+
+    class ControlFuncConfig {
+        + action_space_config: Optional[ActionConfig]
+        --
+        - _get_formatted_action_space_body(): str
+    }
+
+    class ODEConfig {
+        + variable: str
+        + equation: str
+    }
+
+    class EvolutionDomainConfig {
+        + constraints: List<str>
+    }
+
+    class StepFuncConfig {
+        + odes: List<ODEConfig>
+        + evolution_domain: Optional[EvolutionDomainConfig]
+        + duration: Optional[str]
+    }
+}
+
+package "Variables" {
+    ' Variables Block
+    class VariablesConfig {
+        + state_variables: List<VariableDeclarationConfig>
+        + auxiliary_variables: List<VariableDeclarationConfig>
+    }
+
+    class VariableDeclarationConfig {
+        + name: str
+        + type: str
+        + lower_bound: Optional[float]
+        + upper_bound: Optional[float]
+    }
+}
+
+package "Problem Statement" {
+    ' Problem Statement Configuration
+    class PreconditionConfig {
+        + formula: str
+    }
+
+    class PostconditionConfig {
+        + formula: str
+        + modality: Optional[str]
+        + hp_name: Optional[str]
+    }
+
+    class ProblemConfig {
+        + precondition: PreconditionConfig
+        + postconditions: List<PostconditionConfig>
+    }
+
+    class HybridProgramStepConfig {
+        + hp_name: str
+        + invariant_formula: Optional[str]
+        --
+        - _get_formatted_invariant_display(level: int): str
+    }
+}
+
+package "Action Space" {
+    ' Action Space Configuration
+    abstract class ActionConfig {
+        + {abstract} to_string_representation(): str
+    }
+
+    class ChoiceActionConfig {
+        + level_name: str
+        + choices: List<ActionConfig>
+    }
+
+    class SequenceActionConfig {
+        + actions: List<ActionConfig>
+    }
+
+    class DeterministicAssignmentActionConfig {
+        + variable: str
+        + value: str
+    }
+
+    class NondeterministicAssignmentActionConfig {
+        + variable: str
+    }
+
+    class ActionConstraintConfig {
+        + formula: str
+    }
+
+    class CallHybridProgramConfig {
+        + hp_name: str
+    }
+}
+
+
+' Inheritance Relationships - Grouping them might help PlantUML's layout
+' Grouping by package first, then within
+ASTConfigNode <|-- GymEnvironmentConfig
+ASTConfigNode <|-- DefinitionsConfig
+ASTConfigNode <|-- VariablesConfig
+ASTConfigNode <|-- ProblemConfig
+
+ASTConfigNode <|-- ConstantDefinitionConfig
+ASTConfigNode <|-- FunctionDefinitionConfig
+ASTConfigNode <|-- PredicateDefinitionConfig
+ASTConfigNode <|-- HybridProgramConfig
+ASTConfigNode <|-- LoopExecutionConfig
+ASTConfigNode <|-- ControlFuncConfig
+ASTConfigNode <|-- ODEConfig
+ASTConfigNode <|-- EvolutionDomainConfig
+ASTConfigNode <|-- StepFuncConfig
+
+ASTConfigNode <|-- VariableDeclarationConfig
+
+ASTConfigNode <|-- PreconditionConfig
+ASTConfigNode <|-- PostconditionConfig
+ASTConfigNode <|-- HybridProgramStepConfig
+
+ASTConfigNode <|-- ActionConfig
+ASTConfigNode <|-- ChoiceActionConfig
+ASTConfigNode <|-- SequenceActionConfig
+ASTConfigNode <|-- DeterministicAssignmentActionConfig
+ASTConfigNode <|-- NondeterministicAssignmentActionConfig
+ASTConfigNode <|-- ActionConstraintConfig
+ASTConfigNode <|-- CallHybridProgramConfig
+
+
+HybridProgramConfig <|-- ControlFuncConfig
+HybridProgramConfig <|-- StepFuncConfig
+
+ActionConfig <|-- ChoiceActionConfig
+ActionConfig <|-- SequenceActionConfig
+ActionConfig <|-- DeterministicAssignmentActionConfig
+ActionConfig <|-- NondeterministicAssignmentActionConfig
+ActionConfig <|-- ActionConstraintConfig
+ActionConfig <|-- CallHybridProgramConfig
+
+
+' Composition/Aggregation Relationships
+GymEnvironmentConfig "1" *-- "1" DefinitionsConfig : contains
+GymEnvironmentConfig "1" *-- "1" VariablesConfig : contains
+GymEnvironmentConfig "1" *-- "1" ProblemConfig : contains
+
+DefinitionsConfig "1" *-- "0..*" ConstantDefinitionConfig : contains
+DefinitionsConfig "1" *-- "0..*" FunctionDefinitionConfig : contains
+DefinitionsConfig "1" *-- "0..*" PredicateDefinitionConfig : contains
+DefinitionsConfig "1" *-- "0..*" HybridProgramConfig : contains
+
+HybridProgramConfig "1" o-- "0..1" LoopExecutionConfig : has
+LoopExecutionConfig "1" *-- "1" SequenceActionConfig : loop_body
+
+ControlFuncConfig "1" o-- "0..1" ActionConfig : action_space_config
+StepFuncConfig "1" *-- "0..*" ODEConfig : odes
+StepFuncConfig "1" o-- "0..1" EvolutionDomainConfig : evolution_domain
+
+VariablesConfig "1" *-- "0..*" VariableDeclarationConfig : state_variables
+VariablesConfig "1" *-- "0..*" VariableDeclarationConfig : auxiliary_variables
+
+ProblemConfig "1" *-- "1" PreconditionConfig : precondition
+ProblemConfig "1" *-- "0..*" PostconditionConfig : postconditions
+
+ChoiceActionConfig "1" *-- "0..*" ActionConfig : choices
+SequenceActionConfig "1" *-- "0..*" ActionConfig : actions
+
+@enduml
