@@ -1,0 +1,93 @@
+@startuml
+title KeYmaera X Expression AST - Class Diagram
+skinparam classAttributeIconSize 0
+skinparam monochrome true
+skinparam packageStyle rectangle
+
+package "External Dependencies" {
+    class "pyparsing.ParseResults" as ParseResults
+    class "z3" as Z3Lib
+}
+
+abstract class ExpressionASTNode {
+    + {abstract} to_python(context: Dict): str
+    + {abstract} to_z3(z3_context: Dict): Any
+}
+
+class ExpressionNumber {
+    + value: Union[int, float]
+    + __init__(tokens_or_value)
+    + to_python(context): str
+    + to_z3(z3_context): z3.IntVal | z3.RealVal
+}
+
+class ExpressionBoolean {
+    + value: bool
+    + __init__(tokens_or_value)
+    + to_python(context): str
+    + to_z3(z3_context): z3.BoolVal
+}
+
+class ExpressionIdentifier {
+    + name: str
+    + __init__(tokens_or_value)
+    + to_python(context): str
+    + to_z3(z3_context): z3.Expr
+}
+
+class ExpressionFunctionCall {
+    + name: str
+    + args: List[ExpressionASTNode]
+    + __init__(name, args)
+    + to_python(context): str
+    + to_z3(z3_context): z3.Expr
+}
+
+class ExpressionUnaryOp {
+    + op: str
+    + operand: ExpressionASTNode
+    + __init__(op_str, operand_node)
+    + to_python(context): str
+    + to_z3(z3_context): z3.Expr
+}
+
+class ExpressionBinaryOp {
+    + op: str
+    + left: ExpressionASTNode
+    + right: ExpressionASTNode
+    + __init__(left_node, op_str, right_node)
+    + to_python(context): str
+    + to_z3(z3_context): z3.Expr
+}
+
+' Inheritance
+ExpressionASTNode <|-- ExpressionNumber
+ExpressionASTNode <|-- ExpressionBoolean
+ExpressionASTNode <|-- ExpressionIdentifier
+ExpressionASTNode <|-- ExpressionFunctionCall
+ExpressionASTNode <|-- ExpressionUnaryOp
+ExpressionASTNode <|-- ExpressionBinaryOp
+
+' Composition / Recursive Relationships
+ExpressionFunctionCall "1" *-- "0..*" ExpressionASTNode : args
+ExpressionUnaryOp "1" *-- "1" ExpressionASTNode : operand
+ExpressionBinaryOp "1" *-- "2" ExpressionASTNode : left / right
+
+note top of ExpressionASTNode
+  Base class for KeYmaera X 
+  expression representation.
+end note
+
+note right of ExpressionBinaryOp::to_z3
+  Handles: =, !=, <, >, <=, >=, 
+  &, |, ->, +, -, *, /, ^
+  (Includes approx equality logic)
+end note
+
+note as HelperFunction
+  **_node_to_kx_internal(node)**
+  Utility function to convert 
+  nodes back to KeYmaera X strings.
+end note
+
+@enduml

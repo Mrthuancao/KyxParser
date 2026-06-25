@@ -1,0 +1,43 @@
+@startuml
+title KeYmaera X Expression AST - Containment Structure
+skinparam classAttributeIconSize 0
+skinparam monochrome true
+
+abstract class ExpressionASTNode
+
+package "Container Nodes" {
+    class ExpressionFunctionCall {
+        - args: List[ExpressionASTNode]
+    }
+
+    class ExpressionUnaryOp {
+        - operand: ExpressionASTNode
+    }
+
+    class ExpressionBinaryOp {
+        - left: ExpressionASTNode
+        - right: ExpressionASTNode
+    }
+}
+
+package "Leaf Nodes" {
+    class ExpressionNumber
+    class ExpressionBoolean
+    class ExpressionIdentifier
+}
+
+' Containment / Composition Relationships
+ExpressionFunctionCall "1" *-- "0..*" ExpressionASTNode : "args"
+ExpressionUnaryOp "1" *-- "1" ExpressionASTNode : "operand"
+ExpressionBinaryOp "1" *-- "2" ExpressionASTNode : "left / right"
+
+note bottom of "Container Nodes"
+  These nodes define the 
+  recursive tree structure.
+end note
+
+note bottom of "Leaf Nodes"
+  These nodes terminate 
+  the recursion.
+end note
+@enduml

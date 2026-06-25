@@ -1,0 +1,105 @@
+@startuml
+title AST Class Hierarchy (KeYmaera X)
+skinparam classAttributeIconSize 0
+hide empty members
+
+left to right direction
+
+abstract class ASTConfigNode
+
+package "Structural Nodes" {
+    ASTConfigNode <|-- GymEnvironmentConfig
+    ASTConfigNode <|-- DefinitionsConfig
+    ASTConfigNode <|-- VariablesConfig
+    ASTConfigNode <|-- ProblemConfig
+}
+
+package "Definition Nodes" {
+    ASTConfigNode <|-- ConstantDefinitionConfig
+    ASTConfigNode <|-- PredicateDefinitionConfig
+    ASTConfigNode <|-- FunctionDefinitionConfig
+    ASTConfigNode <|-- HybridProgramDefinitionConfig
+
+    HybridProgramDefinitionConfig <|-- ControlFuncConfig
+    HybridProgramDefinitionConfig <|-- StepFuncConfig
+    HybridProgramDefinitionConfig <|-- PreconditionConfig
+    HybridProgramDefinitionConfig <|-- ProgramBodyConfig
+}
+
+package "Variable & Type Nodes" {
+    ASTConfigNode <|-- VariableDeclarationConfig
+    ASTConfigNode <|-- IdentifierConfig
+    ASTConfigNode <|-- TypeConfig
+    TypeConfig <|-- RealTypeConfig
+    TypeConfig <|-- BoolTypeConfig
+}
+
+package "Expression Nodes (Formulas & Math)" {
+    abstract class AbstractExpressionConfig
+    ASTConfigNode <|-- AbstractExpressionConfig
+
+    abstract class LiteralConfig
+    AbstractExpressionConfig <|-- LiteralConfig
+    LiteralConfig <|-- RealLiteralConfig
+    LiteralConfig <|-- IntegerLiteralConfig
+
+
+    
+    LiteralConfig <|-- BooleanLiteralConfig
+
+    AbstractExpressionConfig <|-- VariableReferenceConfig
+    AbstractExpressionConfig <|-- FunctionCallConfig
+    AbstractExpressionConfig <|-- ParenthesizedExpressionConfig
+
+    abstract class UnaryOperatorConfig
+    AbstractExpressionConfig <|-- UnaryOperatorConfig
+    UnaryOperatorConfig <|-- UnaryMinusOperatorConfig
+    UnaryOperatorConfig <|-- NotOperatorConfig
+
+    abstract class BinaryOperatorConfig
+    AbstractExpressionConfig <|-- BinaryOperatorConfig
+    BinaryOperatorConfig <|-- AdditionOperatorConfig
+    BinaryOperatorConfig <|-- SubtractionOperatorConfig
+    BinaryOperatorConfig <|-- MultiplicationOperatorConfig
+    BinaryOperatorConfig <|-- DivisionOperatorConfig
+    BinaryOperatorConfig <|-- ExponentiationOperatorConfig
+    
+    BinaryOperatorConfig <|-- EqualityOperatorConfig 
+    BinaryOperatorConfig <|-- InequalityOperatorConfig 
+    BinaryOperatorConfig <|-- LessThanOperatorConfig 
+    BinaryOperatorConfig <|-- GreaterThanOperatorConfig 
+    BinaryOperatorConfig <|-- LessThanEqualOperatorConfig 
+    BinaryOperatorConfig <|-- GreaterThanEqualOperatorConfig 
+    BinaryOperatorConfig <|-- AndOperatorConfig 
+    BinaryOperatorConfig <|-- OrOperatorConfig 
+    BinaryOperatorConfig <|-- ImplicationOperatorConfig 
+    BinaryOperatorConfig <|-- EquivalenceOperatorConfig 
+
+    ' Modal Operators as Expressions
+    abstract class AbstractModalOperatorConfig
+    AbstractExpressionConfig <|-- AbstractModalOperatorConfig
+    AbstractModalOperatorConfig <|-- BoxModalOperatorConfig : "[HP] expr"
+    AbstractModalOperatorConfig <|-- DiamondModalOperatorConfig : "<HP> expr"
+}
+
+package "HP Statement Nodes (Programs)" {
+    abstract class AbstractHPStatementConfig
+    ASTConfigNode <|-- AbstractHPStatementConfig
+
+    AbstractHPStatementConfig <|-- AssignmentConfig : ":="
+    AbstractHPStatementConfig <|-- NondeterministicAssignmentConfig : ":= *"
+    AbstractHPStatementConfig <|-- GuardConfig : "?"
+    AbstractHPStatementConfig <|-- GuardedChoiceBlockConfig
+    AbstractHPStatementConfig <|-- NondeterministicChoiceOperatorConfig : "++"
+    AbstractHPStatementConfig <|-- SequentialCompositionOperatorConfig : ";"
+    AbstractHPStatementConfig <|-- HPBlockConfig
+    AbstractHPStatementConfig <|-- LoopConfig : "*"
+    AbstractHPStatementConfig <|-- DifferentialEquationBlockConfig : "{x' = ...}"
+    AbstractHPStatementConfig <|-- InvariantConfig
+    AbstractHPStatementConfig <|-- CallHPConfig
+}
+
+package "Problem Statement Nodes" {
+    ASTConfigNode <|-- ProblemAssertionConfig
+}
+@enduml

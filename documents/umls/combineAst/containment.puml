@@ -1,0 +1,62 @@
+@startuml
+title AST Class Hierarchy (Refined for KeYmaera X)
+skinparam classAttributeIconSize 0
+hide empty members
+
+abstract class ASTConfigNode {
+    +List<AnnotationConfig> annotations
+}
+
+package "Structural Nodes" {
+    ASTConfigNode <|-- GymEnvironmentConfig
+    ASTConfigNode <|-- DefinitionsConfig
+    ASTConfigNode <|-- VariablesConfig
+    ASTConfigNode <|-- ProblemConfig
+    ASTConfigNode <|-- AnnotationConfig : "@var, @safety, @progress"
+}
+
+package "Definition Nodes" {
+    ASTConfigNode <|-- ConstantDefinitionConfig
+    ASTConfigNode <|-- PredicateDefinitionConfig
+    ASTConfigNode <|-- FunctionDefinitionConfig
+    ASTConfigNode <|-- HybridProgramDefinitionConfig
+}
+
+package "Expression Nodes" {
+    abstract class AbstractExpressionConfig
+    ASTConfigNode <|-- AbstractExpressionConfig
+
+    AbstractExpressionConfig <|-- LiteralConfig
+    AbstractExpressionConfig <|-- VariableReferenceConfig
+    AbstractExpressionConfig <|-- FunctionCallConfig
+    
+    abstract class BinaryOperatorConfig
+    AbstractExpressionConfig <|-- BinaryOperatorConfig
+    ' Includes +, -, *, /, ^, &, |, ->, <->
+    
+    abstract class AbstractModalOperatorConfig
+    AbstractExpressionConfig <|-- AbstractModalOperatorConfig
+    AbstractModalOperatorConfig <|-- BoxModalOperatorConfig : "[HP] φ"
+    AbstractModalOperatorConfig <|-- DiamondModalOperatorConfig : "<HP> φ"
+}
+
+package "HP Statement Nodes" {
+    abstract class AbstractHPStatementConfig
+    ASTConfigNode <|-- AbstractHPStatementConfig
+
+    AbstractHPStatementConfig <|-- AssignmentConfig
+    AbstractHPStatementConfig <|-- DiscreteAssignmentConfig : ":="
+    AbstractHPStatementConfig <|-- NondeterministicAssignmentConfig : ":= *"
+    
+    AbstractHPStatementConfig <|-- GuardConfig : "?"
+    AbstractHPStatementConfig <|-- NondeterministicChoiceConfig : "++"
+    AbstractHPStatementConfig <|-- SequentialCompositionConfig : ";"
+    
+    AbstractHPStatementConfig <|-- LoopConfig : "* @invariant"
+    AbstractHPStatementConfig <|-- ODEBlockConfig : "{x'=e & Q}"
+    
+    ' This handles the @invariant inside ODEs or Loops
+    ASTConfigNode <|-- InvariantConfig
+}
+
+@enduml

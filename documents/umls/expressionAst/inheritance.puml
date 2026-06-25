@@ -1,0 +1,51 @@
+@startuml
+title KeYmaera X Expression AST - Inheritance Hierarchy
+skinparam classAttributeIconSize 0
+skinparam monochrome true
+
+abstract class ExpressionASTNode {
+    + {abstract} to_python(context: Dict): str
+    + {abstract} to_z3(z3_context: Dict): Any
+}
+
+class ExpressionNumber {
+    + value: Union[int, float]
+}
+
+class ExpressionBoolean {
+    + value: bool
+}
+
+class ExpressionIdentifier {
+    + name: str
+}
+
+class ExpressionFunctionCall {
+    + name: str
+    + args: List[ExpressionASTNode]
+}
+
+class ExpressionUnaryOp {
+    + op: str
+    + operand: ExpressionASTNode
+}
+
+class ExpressionBinaryOp {
+    + op: str
+    + left: ExpressionASTNode
+    + right: ExpressionASTNode
+}
+
+' Inheritance Relationships
+ExpressionASTNode <|-- ExpressionNumber
+ExpressionASTNode <|-- ExpressionBoolean
+ExpressionASTNode <|-- ExpressionIdentifier
+ExpressionASTNode <|-- ExpressionFunctionCall
+ExpressionASTNode <|-- ExpressionUnaryOp
+ExpressionASTNode <|-- ExpressionBinaryOp
+
+note right of ExpressionASTNode
+  All nodes must implement 
+  Python and Z3 conversion.
+end note
+@enduml

@@ -1,0 +1,61 @@
+@startuml
+title Gym Environment Configuration - Containment Hierarchy
+skinparam classAttributeIconSize 0
+hide empty members
+left to right direction
+
+package "Environment Root" {
+    class GymEnvironmentConfig
+}
+
+package "Definitions" {
+    class DefinitionsConfig
+    class ConstantDefinitionConfig
+    class PredicateDefinitionConfig
+    class HybridProgramConfig
+    class ControlFuncConfig
+    class StepFuncConfig
+    class ODEConfig
+    class EvolutionDomainConfig
+}
+
+package "Variables" {
+    class VariablesConfig
+    class VariableDeclarationConfig
+}
+
+package "Problem" {
+    class ProblemConfig
+    class PreconditionConfig
+}
+
+package "Actions" {
+    abstract class ActionConfig
+    class ChoiceActionConfig
+    class SequenceActionConfig
+}
+
+' Composition Relationships
+GymEnvironmentConfig *-- DefinitionsConfig
+GymEnvironmentConfig *-- VariablesConfig
+GymEnvironmentConfig *-- ProblemConfig
+
+DefinitionsConfig *-- ConstantDefinitionConfig
+DefinitionsConfig *-- PredicateDefinitionConfig
+DefinitionsConfig *-- HybridProgramConfig
+
+HybridProgramConfig <|-- ControlFuncConfig
+HybridProgramConfig <|-- StepFuncConfig
+
+ControlFuncConfig o-- ActionConfig
+StepFuncConfig *-- ODEConfig
+StepFuncConfig o-- EvolutionDomainConfig
+
+VariablesConfig *-- VariableDeclarationConfig : state
+VariablesConfig *-- VariableDeclarationConfig : auxiliary
+
+ProblemConfig *-- PreconditionConfig
+
+ChoiceActionConfig *-- ActionConfig
+SequenceActionConfig *-- ActionConfig
+@enduml

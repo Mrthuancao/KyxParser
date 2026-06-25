@@ -66,16 +66,16 @@ Definitions
     // and using curly braces {} for action grouping to be compatible with the parser.
     HP controlFunc ::= {
         // Choice 1: If in the goal area, decide to brake
-        ? (xr > waypointStartDist(xg)); { ar := -b; }
+        { ? (xr > waypointStartDist(xg));  ar := -b; } 
         ++
         // Choice 2: If in the goal area AND already stopped, decide to stay stopped
-        ? (xr > waypointStartDist(xg) & vr = 0); { ar := 0; }
+        { ? (xr > waypointStartDist(xg) & vr = 0);  ar := 0; }
         ++
         // Choice 3: If outside the goal area AND can accelerate, decide to accelerate
-        ? (xr <= waypointStartDist(xg) & (xr + stopDist(vr) + accComp(vr) < waypointEndDist(xg) & vr+A*ep <= Vmax)); { ar := A; }
+        { ? (xr <= waypointStartDist(xg) & (xr + stopDist(vr) + accComp(vr) < waypointEndDist(xg) & vr+A*ep <= Vmax));  ar := A; }
         ++
         // Choice 4: If outside the goal area AND cannot accelerate (must coast), decide to coast
-        ? (xr <= waypointStartDist(xg) & !(xr + stopDist(vr) + accComp(vr) < waypointEndDist(xg) & vr+A*ep <= Vmax)); { ar := 0; }
+        { ? (xr <= waypointStartDist(xg) & !(xr + stopDist(vr) + accComp(vr) < waypointEndDist(xg) & vr+A*ep <= Vmax));  ar := 0; }
     };
 
     // Renamed 'dyn' to 'stepFunc' as per documentation.

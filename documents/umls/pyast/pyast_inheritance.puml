@@ -1,0 +1,42 @@
+@startuml
+title AST Class Hierarchy
+skinparam classAttributeIconSize 0
+hide empty members
+
+left to right direction
+
+abstract class ASTConfigNode
+
+package "Structural Nodes" {
+    ASTConfigNode <|-- GymEnvironmentConfig
+    ASTConfigNode <|-- DefinitionsConfig
+    ASTConfigNode <|-- VariablesConfig
+    ASTConfigNode <|-- ProblemConfig
+}
+
+package "Definition Nodes" {
+    ASTConfigNode <|-- ConstantDefinitionConfig
+    ASTConfigNode <|-- PredicateDefinitionConfig
+    ASTConfigNode <|-- HybridProgramConfig
+    HybridProgramConfig <|-- ControlFuncConfig
+    HybridProgramConfig <|-- StepFuncConfig
+    HybridProgramConfig <|-- PreconditionConfig
+    HybridProgramConfig <|-- ProgramBodyCofig
+}
+
+package "Action Nodes" {
+    ASTConfigNode <|-- ActionConfig
+    ActionConfig <|-- ChoiceActionConfig
+    ActionConfig <|-- SequenceActionConfig
+    ActionConfig <|-- DeterministicAssignmentActionConfig
+    ActionConfig <|-- NondeterministicAssignmentActionConfig
+    ActionConfig <|-- ActionConstraintConfig
+    ActionConfig <|-- CallHybridProgramConfig
+}
+
+package "Leaf/Support Nodes" {
+    ASTConfigNode <|-- VariableDeclarationConfig
+    ASTConfigNode <|-- ODEConfig
+    ASTConfigNode <|-- EvolutionDomainConfig
+}
+@enduml

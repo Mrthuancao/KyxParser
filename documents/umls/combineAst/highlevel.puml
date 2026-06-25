@@ -1,0 +1,69 @@
+@startuml
+title KeYmaera X AST Overview (Including Modalities)
+skinparam classAttributeIconSize 0
+hide empty members
+skinparam packageStyle rectangle
+
+rectangle "AST Root" as ASTConfigNode
+
+package "Structural Components" {
+    rectangle "Gym Environment" as GymEnvC
+    rectangle "Definitions" as DefsC
+    rectangle "Variables" as VarsC
+    rectangle "Problem" as ProbC
+}
+
+package "Core Language Constructs" {
+    rectangle "Expressions" as ExprsC {
+        rectangle "Modalities" as ModalsC << [α]φ , <α>φ >>
+        rectangle "Logic/Arithmetic" as PureExprC
+    }
+    
+    rectangle "HP Statements" as HPStmtsC {
+        note bottom: e.g. {x'=v}, a:=b, P;Q, P*
+    }
+    
+    rectangle "Declarations & Types" as DeclTypesC
+}
+
+' --- Structural Links ---
+ASTConfigNode --> GymEnvC
+ASTConfigNode --> DefsC
+ASTConfigNode --> VarsC
+ASTConfigNode --> ProbC
+
+GymEnvC *-- DefsC
+GymEnvC *-- VarsC
+GymEnvC *-- ProbC
+
+' --- Definitions & Variables ---
+DefsC *-- DeclTypesC : "defines"
+DefsC *-- ExprsC : "uses in formulas"
+DefsC *-- HPStmtsC : "uses in HPs"
+VarsC *-- DeclTypesC : "declares"
+
+' --- The Problem (Theorem) Structure ---
+ProbC *-- ExprsC : "assertion (formula)"
+note right on link
+  Typically a Modality:
+  Pre -> [Prog]Post
+end note
+
+' --- Expression Internal Structure ---
+PureExprC *-- PureExprC : "recursive (op, left, right)"
+PureExprC *-- DeclTypesC : "references vars/funcs"
+
+' --- The Modality Bridge ---
+ModalsC -up-|> PureExprC : "is a type of"
+ModalsC *-- HPStmtsC : "contains program α"
+ModalsC *-- ExprsC : "contains post-condition φ"
+
+' --- HP Statement Internal Structure ---
+HPStmtsC *-- HPStmtsC : "recursive composition (;, ++, *)"
+HPStmtsC *-- ExprsC : "guards (?p) / assignments (x:=e)"
+HPStmtsC *-- DeclTypesC : "references HPs/vars"
+
+' --- Declarations ---
+DeclTypesC *-- DeclTypesC : "Type uses Identifier"
+
+@enduml
