@@ -14,19 +14,25 @@ The hierarchy is rooted in `ASTConfigNode` and organized into six functional pac
 ### 2. Node Package Specifications
 
 #### A. Structural & Definition Nodes
+
 These nodes represent the high-level organization of a KeYmaera X model.
 *   **`GymEnvironmentConfig`**: The root node containing the environment name and links to definitions, variables, and the problem statement.
 *   **`DefinitionConfig`**: A container for constants, functions, and predicates.
-*   **`HybridProgramDefinitionConfig`**: Specifically handles the `HP` blocks.
+<!-- *   **`HybridProgramDefinitionConfig`**: Specifically handles the `HP` blocks.
     *   `ControlFuncConfig`: Maps to the discrete/continuous action selection logic.
-    *   `StepFuncConfig`: Maps to the continuous ODE system.
+    *   `StepFuncConfig`: Maps to the continuous ODE system. -->
+    VariableConfig
+    ProgramConfig
 
 #### B. Variable & Type Nodes
 Handles the declaration of the state space.
 *   **`VariableDeclarationConfig`**: Captures the name and type (Real/Bool). In the synthesis phase, these are used to define the `gym.spaces.Box` dimensions.
-*   **`IdentifierConfig`**: Used for cross-referencing variables within expressions to ensure type safety.
+<!-- *   **`IdentifierConfig`**: Used for cross-referencing variables within expressions to ensure type safety. -->
 
 #### C. Expression Nodes (The Math Engine)
+
+Need to be redesigned
+
 This is the most granular part of the new AST, allowing the generator to translate math into Python/NumPy lambdas.
 *   **`LiteralConfig`**: Represents hardcoded values (e.g., `0.5`, `10`, `True`).
 *   **`FunctionCallConfig`**: Enables the reuse of defined logic (e.g., calling `stopDist(v)` inside a safety invariant).
@@ -38,13 +44,16 @@ This is the most granular part of the new AST, allowing the generator to transla
 #### D. HP Statement Nodes (The Execution Logic)
 These nodes define how the system state changes over time.
 *   **`AssignmentConfig` ($:=$)**: Deterministic state updates.
-*   **`NondeterministicAssignmentConfig` ($:= *$)**: Represents an environment or agent choice. This is the primary trigger for creating an **Action Space**.
+*   **`NondeterministicAssignmentConfig` ($:= *$)**: Represents an environment or agent choice. This is the primary trigger for creating an **Action Space**.  
 *   **`GuardConfig` ($?$)**: Conditional execution. In RL, these are converted into "Action Masks" or "Validity Checks."
 *   **`DifferentialEquationBlockConfig`**: Contains a list of `ODEConfig` objects (e.g., $x' = f(x)$) and an evolution domain (e.g., $v \geq 0$).
 
 ---
 
 ### 3. Mapping Logic to RL Components
+
+This part need to be move to the next section and elaborate more
+
 Using the provided `IJRR17` example, the AST facilitates the following automated mapping:
 
 | KeYmaera X Construct | AST Node Type | RL Implementation |
@@ -59,7 +68,7 @@ Using the provided `IJRR17` example, the AST facilitates the following automated
 ---
 
 ### 4. Metadata Enrichment
-The AST is designed to parse comments as metadata to guide the RL synthesis. For example, the node for `isSafe` would contain a `Metadata` object:
+The AST is designed to parse reward logic and variable information metadata embedded as comments to guide the RL synthesis. For example, the node for `isSafe` would contain a `Metadata` object:
 ```json
 {
   "type": "safety",
@@ -70,11 +79,15 @@ The AST is designed to parse comments as metadata to guide the RL synthesis. For
 ```
 This allows the **Expression Nodes** to not only represent the boolean truth of the safety statement but also the "distance to violation" used for dense reward signals.
 
+
+Add another example for variable
+And explain the meaning behind each attribute of the meta data
+
 ---
 
-### 5. Implementation Strategy (Visitor Pattern)
+<!-- ### 5. Implementation Strategy (Visitor Pattern)
 To process this AST, the framework utilizes a **Recursive Visitor Pattern**:
 1.  **`LogicToPythonVisitor`**: Traverses `AbstractExpressionConfig` to generate string-based Python expressions for NumPy.
 2.  **`ActionSpaceVisitor`**: Traverses the `controlFunc` to count non-deterministic branches and assignments to determine the `gym.ActionSpace`.
 3.  **`ODEVisitor`**: Extracts equations from `DifferentialEquationBlockConfig` to build the derivative function for the numerical solver.
-4.  **`SMTVisitor`**: Translates `assumptions` into SMT-LIB format for initial state sampling.
+4.  **`SMTVisitor`**: Translates `assumptions` into SMT-LIB format for initial state sampling. -->

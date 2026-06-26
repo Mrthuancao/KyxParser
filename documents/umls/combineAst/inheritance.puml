@@ -28,10 +28,6 @@ package "Definition Nodes" {
 
 package "Variable & Type Nodes" {
     ASTConfigNode <|-- VariableDeclarationConfig
-    ASTConfigNode <|-- IdentifierConfig
-    ASTConfigNode <|-- TypeConfig
-    TypeConfig <|-- RealTypeConfig
-    TypeConfig <|-- BoolTypeConfig
 }
 
 package "Expression Nodes (Formulas & Math)" {

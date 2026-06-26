@@ -9,8 +9,8 @@ The approach follows a **Model-Driven Engineering (MDE)** pattern. It begins wit
 
 ### 2. Translation of Hybrid Dynamics (The Physics Engine)
 The continuous portion of the KeYmaera X model (the Hybrid Program) is converted into a numerical simulation:
-*   **ODE Extraction:** The generator identifies the differential equations (e.g., $x' = v, v' = a$) and the evolution domain constraints (e.g., $v \geq 0$).
-*   **Dynamic Compilation:** These equations are transformed into a Python-executable format. At runtime, the environment uses high-precision numerical integrators (like `solve_ivp`) to propagate the state.
+*   **ODE Extraction:** The generator identifies the differential equations (e.g., $x' = v, v' = a$) and the evolution domain constraints (e.g., $v \geq 0$). Note: How does the generator do this
+*   **Dynamic Compilation:** These equations are transformed into a Python-executable format. At runtime, the environment uses high-precision numerical integrators (like `solve_ivp`) to propagate the state. Note: Why does this need dynamic complilation can it just be a function
 *   **Event-Triggered Termination:** Evolution domains are converted into "ODE Events." If an agent’s action would cause the system to violate a physical boundary (like velocity dropping below zero), the integrator stops exactly at the boundary, mimicking the "guard" behavior in formal logic.
 
 ### 3. Synthesis of the Action and State Spaces
@@ -19,19 +19,27 @@ The generator automates the definition of the MDP (Markov Decision Process) inte
 *   **Action Space Branching:** The generator analyzes the "Control" part of the hybrid program. If the model uses non-deterministic choices (the `++` operator), the generator synthesizes a `Discrete` action space where each index corresponds to a logical branch. If the model uses assignments, it creates a `Box` space for continuous control inputs.
 *   **Logic-to-Lambda Conversion:** Symbolic expressions (e.g., $v^2 / (2b)$) are parsed and converted into Python `lambda` functions. This allows the environment to evaluate complex mathematical guards in real-time during the step function.
 
+Note: I need to revisit this in the generator
+
 ### 4. Formal Specification as Reward and Monitor
 A key innovation of this approach is the **Automatic Reward Shaping** derived from proof obligations:
 *   **Safety Monitors (Invariants):** The "Loop Invariant" of the formal proof is used as a continuous safety monitor. The generator wraps the `step()` function with checks that evaluate these invariants. If an action leads to a state where the invariant is false, the environment applies a "Safety Penalty" and terminates the episode.
 *   **Goal Alignment (Postconditions):** The "Ensure" predicates (the desired outcomes of the proof) are mapped to the termination logic. The environment distinguishes between "Success" (satisfying the postcondition) and "Failure" (violating an invariant), providing a clear signal for the RL agent.
 *   **Metadata-Driven Rewards:** The system parses metadata tags within the KeYmaera X model to assign specific numerical weights to different predicates, allowing the formal modeler to "hint" at the importance of certain safety or progress conditions.
 
+Note: Need to recheck this, is ensure got hard coded as a reserved keyword and loop variant?
+
 ### 5. SMT-Backed Environment Resetting
 To solve the "Initial State Problem" in RL, the generator utilizes the model's **Preconditions**:
 *   **Constraint Satisfaction:** The environment includes a "Constrained Initial State Buffer" (CISB). 
 *   **Z3 Integration:** During the generation phase, the system prepares the preconditions for an SMT solver (Z3). When the environment is initialized, it uses Z3 to find a diverse set of starting points $(x_0, v_0, \dots)$ that satisfy all initial assumptions of the proof. This ensures the agent is only ever trained on valid, physically meaningful scenarios.
 
+Note: Not CISB, it just a normal buffer containing samples, gathered at the environment construction process, satisfying the precondition, that is found by randomizing sample in the bounding box in the metadata of each variable, targeted with soft constrainst to make the sample generation less preditable. the solver used for this is z3, which is predictive without randomizing soft contrainst
+
 ### 6. Automated Code Serialization
 Finally, the generator uses a **Recursive Serializer** to embed a "snapshot" of the original AST directly into the Python file. This allows the environment to be "self-aware"—it carries its own formal specification with it. This enables advanced features like runtime debugging where the environment can print exactly which logical conjunct failed during a specific simulation step.
+
+Note: I dont understand this part
 
 ---
 
