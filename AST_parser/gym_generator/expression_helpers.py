@@ -1,4 +1,3 @@
-# expression_helpers.py
 import re
 from typing import List, Optional, Tuple, Union, Dict, Any
 import pyparsing as pp
@@ -124,102 +123,137 @@ _infix_grammar = pp.infixNotation(_atomic_expr,
 kx_expr = (_kx_expr_forward << _infix_grammar)
 
 # --- Expansion Logic ---
-
 def expand_formula(node_or_str: Union[ExpressionASTNode, str], definitions: Any = None) -> Union[ExpressionASTNode, str]:
     """
-    Recursively expands a formula.
+    Recursively expands a formula, including user-defined functions and predicates.
+    The top-level function handles string input/output, while an internal recursive
+    helper handles AST node transformations.
     """
     is_input_string = isinstance(node_or_str, str)
 
     # 1. Initial Parse: Always work with a Node internally
     if is_input_string:
         try:
-            # Clean string of newlines/excess whitespace which trips up parseAll=True
             clean_str = " ".join(node_or_str.split())
             parsed = kx_expr.parseString(clean_str, parseAll=True)
             current_node = _ensure_ast_node(parsed)
         except Exception as e:
-            # If it's not a valid expression, return as is
+            # If it's not a valid expression, return as is (string)
+            # This path means the input string was unparsable.
             return node_or_str
     else:
         current_node = node_or_str
 
-    # 2. Expansion Logic
-    result_node = current_node
+    # 2. Internal recursive expansion function
+    def _expand_node_recursive(node: ExpressionASTNode, definitions: Any) -> ExpressionASTNode:
+        """
+        Recursively expands an AST node. This function always takes and returns an AST node.
+        It iteratively applies expansions until no more changes occur for the current node.
+        """
+        while True:
+            prev_node_kx_str = _node_to_kx(node) # Store string representation to detect changes
 
-    if definitions and isinstance(current_node, ExpressionFunctionCall):
-        # The name could be an ExpressionIdentifier or a string if init was passed a string
-        pred_name = current_node.name.name if isinstance(current_node.name, ExpressionIdentifier) else str(current_node.name)
+            # Handle Function/Predicate Calls
+            if definitions and isinstance(node, ExpressionFunctionCall):
+                pred_func_name = node.name.name if isinstance(node.name, ExpressionIdentifier) else str(node.name)
+                args = node.args
+                
+                expanded_in_this_pass = False
 
-        # Check predicates first
-        for pred_def in getattr(definitions, 'predicates', []):
-            if pred_def.name == pred_name:
-                body_str = pred_def.body
-                args = current_node.args
+                # Try to expand as a PREDICATE first
+                # Note: The provided AST nodes don't have a separate ExpressionPredicateCall,
+                # so it's treated as a FunctionCall. The logic below correctly handles both.
+                for pred_def in getattr(definitions, 'predicates', []):
+                    if pred_def.name == pred_func_name:
+                        body_str = pred_def.body
+                        for i, param_tuple in enumerate(pred_def.parameters): # param_tuple is ('Real', 'xr')
+                            if i < len(args):
+                                # CORRECTED: Get parameter name from index 1 of the tuple
+                                param_name = param_tuple[1] 
+                                arg_kx_str = _node_to_kx(args[i])
+                                pattern = rf'\b{re.escape(param_name)}\b'
+                                body_str = re.sub(pattern, arg_kx_str, body_str)
+                        
+                        try:
+                            # Parse the body string and recursively expand it
+                            parsed_body = kx_expr.parseString(body_str, parseAll=True)
+                            node = _expand_node_recursive(_ensure_ast_node(parsed_body), definitions)
+                            expanded_in_this_pass = True
+                        except Exception:
+                            # If body_str is unparsable, keep the original node.
+                            pass
+                        break # Predicate found and processed
 
-                # Replace parameters in the body string
-                for i, param_obj in enumerate(pred_def.parameters):
-                    if i < len(args):
-                        param_name = param_obj[0] if isinstance(param_obj, (tuple, list)) else str(param_obj)
-                        # Convert argument node to KX string for regex replacement
-                        arg_kx_str = _node_to_kx(args[i])
-                        pattern = rf'\b{re.escape(param_name)}\b'
-                        body_str = re.sub(pattern, arg_kx_str, body_str)
+                if not expanded_in_this_pass: # If not a predicate, try functions
+                    for func_def in getattr(definitions, 'functions', []):
+                        if func_def.name == pred_func_name:
+                            body_str = func_def.body
+                            for i, param_tuple in enumerate(func_def.parameters): # param_tuple is ('Real', 'v')
+                                if i < len(args):
+                                    # CORRECTED: Get parameter name from index 1 of the tuple
+                                    param_name = param_tuple[1] 
+                                    arg_kx_str = _node_to_kx(args[i])
+                                    pattern = rf'\b{re.escape(param_name)}\b'
+                                    body_str = re.sub(pattern, arg_kx_str, body_str)
+                            
+                            try:
+                                # Parse the body string and recursively expand it
+                                parsed_body = kx_expr.parseString(body_str, parseAll=True)
+                                node = _expand_node_recursive(_ensure_ast_node(parsed_body), definitions)
+                                expanded_in_this_pass = True
+                            except Exception:
+                                # If body_str is unparsable, keep the original node.
+                                pass
+                            break # Function found and processed
+                
+                if expanded_in_this_pass:
+                    # If a function/predicate was expanded, continue the while loop
+                    # to re-evaluate the new 'node' for further expansions.
+                    continue 
+            
+            # If no function/predicate call was expanded (or it's not a function call),
+            # then recursively expand its children for binary and unary operations.
+            if isinstance(node, ExpressionBinaryOp):
+                node.left = _expand_node_recursive(node.left, definitions)
+                node.right = _expand_node_recursive(node.right, definitions)
 
-                # Recursively expand the newly built body string
-                expanded_body = expand_formula(body_str, definitions)
-                # Ensure the result is a node for the rest of this function
-                if isinstance(expanded_body, str):
-                    parsed_body = kx_expr.parseString(expanded_body, parseAll=True)
-                    result_node = _ensure_ast_node(parsed_body)
-                else:
-                    result_node = expanded_body
-                break
-        # If not a predicate, check functions (functions are not expanded for Z3 in current design)
-        # This part of expansion is primarily for predicates.
+                # Apply logical equivalences for implication
+                if node.op in ['->', '→']:
+                    negated_left = ExpressionUnaryOp('!', node.left)
+                    node = ExpressionBinaryOp(negated_left, '|', node.right)
 
-    elif isinstance(current_node, ExpressionBinaryOp):
-        left_expanded = expand_formula(current_node.left, definitions)
-        # Ensure the result is an AST node for subsequent operations
-        if isinstance(left_expanded, str):
-            left_expanded = _ensure_ast_node(kx_expr.parseString(left_expanded, parseAll=True))
+            elif isinstance(node, ExpressionUnaryOp):
+                node.operand = _expand_node_recursive(node.operand, definitions)
 
-        right_expanded = expand_formula(current_node.right, definitions)
-        if isinstance(right_expanded, str):
-            right_expanded = _ensure_ast_node(kx_expr.parseString(right_expanded, parseAll=True))
+                # Apply logical equivalences for negation
+                if node.op == '!':
+                    # Double Negation: !!A -> A
+                    if isinstance(node.operand, ExpressionUnaryOp) and node.operand.op == '!':
+                        node = node.operand.operand
+                    # De Morgan's: !(A & B) -> !A | !B
+                    elif isinstance(node.operand, ExpressionBinaryOp):
+                        if node.operand.op in ['&', '∧']:
+                            node = ExpressionBinaryOp(ExpressionUnaryOp('!', node.operand.left), '|', ExpressionUnaryOp('!', node.operand.right))
+                        elif node.operand.op in ['|', '∨']:
+                            node = ExpressionBinaryOp(ExpressionUnaryOp('!', node.operand.left), '&', ExpressionUnaryOp('!', node.operand.right))
+                        # For other binary ops, keep as is
+            
+            # Check if any expansion or transformation occurred in this iteration.
+            # If the string representation hasn't changed, we're done with this node.
+            if _node_to_kx(node) == prev_node_kx_str:
+                break 
+            # Else, continue the while loop to check for further expansions (e.g., De Morgan's could reveal another !!)
 
-        if current_node.op in ['->', '→']:
-            negated_left = ExpressionUnaryOp('!', left_expanded)
-            result_node = ExpressionBinaryOp(negated_left, '|', right_expanded)
-        else:
-            result_node = ExpressionBinaryOp(left_expanded, current_node.op, right_expanded)
+        return node # Return the fully expanded AST node
 
-    elif isinstance(current_node, ExpressionUnaryOp):
-        operand_expanded = expand_formula(current_node.operand, definitions)
-        if isinstance(operand_expanded, str):
-            operand_expanded = _ensure_ast_node(kx_expr.parseString(operand_expanded, parseAll=True))
-
-        if current_node.op == '!':
-            # Double Negation: !!A -> A
-            if isinstance(operand_expanded, ExpressionUnaryOp) and operand_expanded.op == '!':
-                result_node = operand_expanded.operand
-            # De Morgan's: !(A & B) -> !A | !B
-            elif isinstance(operand_expanded, ExpressionBinaryOp):
-                if operand_expanded.op in ['&', '∧']:
-                    result_node = ExpressionBinaryOp(ExpressionUnaryOp('!', operand_expanded.left), '|', ExpressionUnaryOp('!', operand_expanded.right))
-                elif operand_expanded.op in ['|', '∨']:
-                    result_node = ExpressionBinaryOp(ExpressionUnaryOp('!', operand_expanded.left), '&', ExpressionUnaryOp('!', operand_expanded.right))
-                else:
-                    result_node = ExpressionUnaryOp(current_node.op, operand_expanded)
-            else:
-                result_node = ExpressionUnaryOp(current_node.op, operand_expanded)
-        else:
-            result_node = ExpressionUnaryOp(current_node.op, operand_expanded)
+    # Call the internal recursive expander
+    final_expanded_node = _expand_node_recursive(current_node, definitions)
 
     # 3. Final Output: Match the input type
     if is_input_string:
-        return _node_to_kx(result_node)
-    return result_node
+        return _node_to_kx(final_expanded_node)
+    return final_expanded_node
+
 
 
 def format_kx_expr_for_python_lambda_body_generator(
@@ -270,8 +304,9 @@ def format_kx_expr_for_z3_formula_generator(
     # 1. Expand KeYmaera X predicates (and potentially functions if desired) at the string level.
     # This is important because Z3 does not automatically understand KeYmaera X's predicate definitions.
     # The `expand_formula` function is already equipped to do this.
+    print(f"DEBUG_CISB: Expanding KeYmaera X expression for Z3 conversion: {expr_cleaned}")
     expanded_kx_expr = expand_formula(expr_cleaned, definitions)
-
+    print(f"DEBUG_CISB: Expanded KeYmaera X expression: {expanded_kx_expr}")
     # Ensure expanded_kx_expr is a string, then parse it into an AST
     if not isinstance(expanded_kx_expr, str):
         # If expand_formula returned an AST node, convert it back to string for consistent parsing

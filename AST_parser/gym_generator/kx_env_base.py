@@ -1,3 +1,4 @@
+# gym_generator/kx_env_base.py (Your base environment file)
 import gymnasium as gym
 import numpy as np
 import math
@@ -6,7 +7,7 @@ import re
 import z3
 import matplotlib.pyplot as plt
 import pandas as pd
-from typing import List, Dict, Any, Optional, Tuple, Union, Callable # Ensure Callable is imported
+from typing import List, Dict, Any, Optional, Tuple, Union, Callable
 from abc import ABC, abstractmethod
 
 # NEW: Import expression_helpers for AST-based Z3 conversion
@@ -46,6 +47,9 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
             DeterministicAssignmentActionConfig, NondeterministicAssignmentActionConfig,
             ActionConstraintConfig, CallHybridProgramConfig
         )
+        # Also need expression_helpers for parsing constant values if they are expressions
+        from gym_generator.expression_helpers import kx_expr
+        from gym_generator.expression_ast_nodes import ExpressionASTNode # For _ensure_ast_node type hint
 
         ast_classes_for_eval = {
             cls.__name__: cls for cls in [
@@ -64,6 +68,20 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
 
         try:
             self.config: GymEnvironmentConfig = eval(config_serialized_str, {'__builtins__': None}, ast_classes_for_eval)
+            if self.debug_mode:
+                print(f"DEBUG_INIT: Deserialization successful.")
+                print(f"DEBUG_INIT: Type of self.config: {type(self.config)}")
+                print(f"DEBUG_INIT: self.config.problem: {self.config.problem}")
+                if self.config.problem:
+                    print(f"DEBUG_INIT: Type of self.config.problem: {type(self.config.problem)}")
+                    print(f"DEBUG_INIT: self.config.problem.loop_execution: {self.config.problem.loop_execution}")
+                    if self.config.problem.loop_execution:
+                        print(f"DEBUG_INIT: Type of self.config.problem.loop_execution: {type(self.config.problem.loop_execution)}")
+                        print(f"DEBUG_INIT: self.config.problem.loop_execution.loop_invariant_formula: {self.config.problem.loop_execution.loop_invariant_formula}")
+                    else:
+                        print(f"DEBUG_INIT: self.config.problem.loop_execution is None.")
+                else:
+                    print(f"DEBUG_INIT: self.config.problem is None.")
         except Exception as e:
             raise ValueError(f"Failed to deserialize GymEnvironmentConfig: {e}")
 
@@ -148,6 +166,7 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
                 replacement = f"self.predicates['{ident_name}']"
 
             if replacement:
+                # Use word boundaries to avoid replacing parts of other names (e.g., 'x' in 'xr')
                 processed_expr = re.sub(r'\b' + re.escape(ident_name) + r'\b', replacement, processed_expr)
 
         expr_py_transformed = processed_expr
@@ -157,22 +176,24 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
             if not sub_expr:
                 return ""
 
+            # Handle parentheses first
             if sub_expr.startswith('(') and sub_expr.endswith(')'):
                 balance = 0
                 is_fully_enclosed = True
-                for i in range(len(sub_expr) - 1):
+                for i in range(len(sub_expr) - 1): # Check all but the last char
                     char = sub_expr[i]
                     if char == '(': balance += 1
                     elif char == ')': balance -= 1
-                    if balance == 0:
+                    if balance == 0: # Found a matching parenthesis before the end
                         is_fully_enclosed = False
                         break
                 if is_fully_enclosed:
                     return _parse_expression_recursive_runtime(sub_expr[1:-1])
 
+            # Find lowest precedence logical operator (IMPLIES) - right-associative
             balance = 0
             implication_idx = -1
-            for i in range(len(sub_expr) - 2, -1, -1):
+            for i in range(len(sub_expr) - 2, -1, -1): # Iterate right-to-left
                 char_pair = sub_expr[i:i+2]
                 if char_pair == '->' and balance == 0:
                     implication_idx = i
@@ -185,9 +206,10 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
                 right = _parse_expression_recursive_runtime(sub_expr[implication_idx+2:].strip())
                 return f"((not ({left})) or ({right}))"
 
+            # Find next lowest precedence logical operator (OR) - left-associative
             balance = 0
             disjunction_idx = -1
-            for i in range(len(sub_expr)):
+            for i in range(len(sub_expr)): # Iterate left-to-right
                 if sub_expr[i] == '|' and balance == 0:
                     disjunction_idx = i
                     break
@@ -199,9 +221,10 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
                 right = _parse_expression_recursive_runtime(sub_expr[disjunction_idx+1:].strip())
                 return f"({left}) or ({right})"
 
+            # Find next lowest precedence logical operator (AND) - left-associative
             balance = 0
             conjunction_idx = -1
-            for i in range(len(sub_expr)):
+            for i in range(len(sub_expr)): # Iterate left-to-right
                 if sub_expr[i] == '&' and balance == 0:
                     conjunction_idx = i
                     break
@@ -213,10 +236,12 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
                 right = _parse_expression_recursive_runtime(sub_expr[conjunction_idx+1:].strip())
                 return f"({left}) and ({right})"
 
+            # Handle NOT operator (unary, highest logical precedence)
             if sub_expr.startswith('!'):
                 operand = _parse_expression_recursive_runtime(sub_expr[1:].strip())
                 return f"(not ({operand}))"
 
+            # If no logical operators, handle relational operators
             relational_ops = [('!=', '!='), ('<=', '<='), ('>=', '>='), ('<', '<'), ('>', '>'), ('=', '_approx_eq')]
 
             balance = 0
@@ -224,24 +249,30 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
             rel_op_found_py = None
             rel_op_idx = -1
 
+            # Iterate to find the first relational operator (left-to-right)
             for i in range(len(sub_expr)):
                 char = sub_expr[i]
                 if char == '(': balance += 1
                 elif char == ')': balance -= 1
                 elif balance == 0:
-                    for kx_op, py_op_format in relational_ops:
-                        if len(kx_op) > 1 and sub_expr[i:i+len(kx_op)] == kx_op:
+                    # Check multi-character operators first to avoid partial matches
+                    for kx_op, py_op_format in [('!=', '!='), ('<=', '<='), ('>=', '>=')]:
+                        if sub_expr[i:i+len(kx_op)] == kx_op:
                             rel_op_found_kx = kx_op
                             rel_op_found_py = py_op_format
                             rel_op_idx = i
                             break
                     if rel_op_found_kx: break
 
-                    for kx_op, py_op_format in relational_ops:
-                        if len(kx_op) == 1 and sub_expr[i] == kx_op:
-                            if kx_op == '=' and ((i > 0 and sub_expr[i-1] in '<>=!') or \
-                                            (i < len(sub_expr) - 1 and sub_expr[i+1] == '=')):
-                                continue
+                    # Check single-character operators and '=' carefully
+                    for kx_op, py_op_format in [('<', '<'), ('>', '>'), ('=', '_approx_eq')]:
+                        if sub_expr[i] == kx_op:
+                            # Ensure it's not part of a multi-char operator (e.g., '<' in '<=')
+                            if (kx_op == '<' and i + 1 < len(sub_expr) and sub_expr[i+1] == '=') or \
+                               (kx_op == '>' and i + 1 < len(sub_expr) and sub_expr[i+1] == '=') or \
+                               (kx_op == '=' and ((i > 0 and sub_expr[i-1] in '<>=!') or \
+                                                 (i < len(sub_expr) - 1 and sub_expr[i+1] == '='))):
+                                continue # Skip if it's part of <=, >=, !=, or ==
                             rel_op_found_kx = kx_op
                             rel_op_found_py = py_op_format
                             rel_op_idx = i
@@ -256,9 +287,10 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
                 else:
                     return f"({left}) {rel_op_found_py} ({right})"
 
+            # If no operators, it's a literal or identifier or function call
             return sub_expr
 
-        expr_py_final = _parse_expression_recursive_runtime(expr_py_transformed.replace('^', '**').replace('abs(', 'np.abs('))
+        expr_py_final = _parse_expression_recursive_runtime(processed_expr.replace('^', '**').replace('abs(', 'np.abs('))
 
         try:
             eval_globals_for_eval = {'np': np, 'math': math, '_approx_eq': self._approx_eq, 'self': self, 'safe_div': safe_div}
@@ -398,7 +430,8 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
         if isinstance(action_config, ChoiceActionConfig):
             choice_key = f"choice_{action_config.level_name}"
             if choice_key not in agent_action:
-                print(f"DEBUG_ACTION: Error: Choice key '{choice_key}' missing from agent action.")
+                if self.debug_mode:
+                    print(f"DEBUG_ACTION: Error: Choice key '{choice_key}' missing from agent action.")
                 reward -= 200.0
                 terminated = True
                 applied_successfully = False
@@ -406,7 +439,8 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
 
             choice_idx = agent_action[choice_key]
             if not (0 <= choice_idx < len(action_config.choices)):
-                print(f"DEBUG_ACTION: Error: Invalid choice index {choice_idx} for '{choice_key}'.")
+                if self.debug_mode:
+                    print(f"DEBUG_ACTION: Error: Invalid choice index {choice_idx} for '{choice_key}'.")
                 reward -= 200.0
                 terminated = True
                 applied_successfully = False
@@ -441,7 +475,8 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
                     print(f"DEBUG_ACTION: Assigning {action_config.variable} = {assigned_value:.6f} (from '{action_config.value}')")
                 self.state[action_config.variable] = assigned_value
             except Exception as e:
-                print(f"DEBUG_ACTION: Error evaluating deterministic assignment for {action_config.variable}='{action_config.value}': {e}")
+                if self.debug_mode:
+                    print(f"DEBUG_ACTION: Error evaluating deterministic assignment for {action_config.variable}='{action_config.value}': {e}")
                 reward -= 100.0
                 terminated = True
                 applied_successfully = False
@@ -454,7 +489,8 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
                 if self.debug_mode:
                     print(f"DEBUG_ACTION: Nondeterministic assignment for {action_config.variable} = {agent_action[assign_key]:.6f}")
             else:
-                print(f"DEBUG_ACTION: Warning: Nondeterministic assignment for '{action_config.variable}' (key '{assign_key}') not found in agent action. Defaulting to current value.")
+                if self.debug_mode:
+                    print(f"DEBUG_ACTION: Warning: Nondeterministic assignment for '{action_config.variable}' (key '{assign_key}') not found in agent action. Defaulting to current value.")
                 reward -= 50.0
             return reward, terminated, applied_successfully
 
@@ -499,13 +535,15 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
             return reward, terminated, applied_successfully
 
         elif isinstance(action_config, CallHybridProgramConfig):
-            print(f"DEBUG_ACTION: Warning: CallHybridProgramConfig '{action_config.hp_name}' encountered in _execute_action_config. Not fully supported yet.")
+            if self.debug_mode:
+                print(f"DEBUG_ACTION: Warning: CallHybridProgramConfig '{action_config.hp_name}' encountered in _execute_action_config. Not fully supported yet.")
             reward -= 50.0
             applied_successfully = False
             return reward, terminated, applied_successfully
 
         else:
-            print(f"DEBUG_ACTION: Error: Unknown action config type: {type(action_config)}")
+            if self.debug_mode:
+                print(f"DEBUG_ACTION: Error: Unknown action config type: {type(action_config)}")
             reward -= 200.0
             terminated = True
             applied_successfully = False
@@ -515,6 +553,14 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
         """
         Applies the agent's chosen action by traversing the control function's AST.
         """
+        # Assuming _control_func_action_config is set elsewhere, e.g., in the concrete environment class
+        # For this base class, it's not defined, but the method signature implies it will be used.
+        # If this method is called, _control_func_action_config must be defined in the derived class.
+        if not hasattr(self, '_control_func_action_config'):
+            if self.debug_mode:
+                print("DEBUG_CONTROL: _control_func_action_config not defined. Cannot apply control action.")
+            return -200.0, True, False # Indicate failure
+
         reward, terminated, applied_successfully = self._execute_action_config(self._control_func_action_config, action)
         if self.debug_mode:
             print(f"DEBUG_CONTROL: _apply_control_action final result: reward={reward:.2f}, terminated={terminated}, applied_successfully={applied_successfully}")
@@ -537,6 +583,39 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
             self.debug_mode
         )
 
+    # Helper function to convert AST node to KeYmaera X string, needed for constant evaluation
+    def _node_to_kx(self, node: 'ExpressionASTNode') -> str:
+        """Converts an AST node back to a KeYmaera X string representation."""
+        from kyx_parser.AST_parser.expression_ast_nodes import (
+            ExpressionFunctionCall, ExpressionIdentifier,
+            ExpressionBinaryOp, ExpressionUnaryOp, ExpressionLiteral
+        )
+        if isinstance(node, ExpressionIdentifier):
+            return node.name
+        elif isinstance(node, ExpressionLiteral):
+            return str(node.value)
+        elif isinstance(node, ExpressionBinaryOp):
+            return f"({self._node_to_kx(node.left)} {node.op} {self._node_to_kx(node.right)})"
+        elif isinstance(node, ExpressionUnaryOp):
+            return f"({node.op}{self._node_to_kx(node.operand)})"
+        elif isinstance(node, ExpressionFunctionCall):
+            args_str = ", ".join([self._node_to_kx(arg) for arg in node.args])
+            return f"{self._node_to_kx(node.name)}({args_str})"
+        else:
+            if self.debug_mode:
+                print(f"DEBUG_NODE_TO_KX: Warning: Unhandled AST node type in _node_to_kx: {type(node)}")
+            return str(node)
+
+    # Helper function to ensure AST node, needed for constant evaluation
+    def _ensure_ast_node(self, parsed_result: Any) -> Optional['ExpressionASTNode']:
+        """Ensures the result is an AST node, handling pyparsing.ParseResults."""
+        from pyparsing import ParseResults
+        from kyx_parser.AST_parser.expression_ast_nodes import ExpressionASTNode
+        if isinstance(parsed_parsed_result, ParseResults):
+            return parsed_result[0] if parsed_result else None
+        return parsed_result if isinstance(parsed_result, ExpressionASTNode) else None
+
+
     def _populate_cisb_diverse_z3(self):
         """
         Populates the Contrastive Initial State Buffer (CISB) with diverse initial states
@@ -549,7 +628,7 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
         attempts = 0
 
         z3_symbols = {}
-        fixed_constants_map = {}
+        fixed_constants_map = {} # Stores constants that have a fixed numerical value or evaluated expression value
 
         # Initialize sample_ranges for state variables (if not already set)
         for var_decl in self._variables_config.state_variables:
@@ -568,17 +647,19 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
                 z3_symbols[const_decl.name] = z3.Real(const_decl.name)
                 if 'bound' in const_decl.metadata:
                     bound_str = const_decl.metadata['bound']
-                    # FIX: Removed literal square brackets from regex pattern
-                    match = re.match(r'(-?\d+(\.\d+)?):(-?\d+(\.\d+)?)', bound_str)
+                    # Corrected regex to parse bounds string (e.g., "0.1:0.5" or "[0.1:0.5]")
+                    bound_part = bound_str.split(';')[0].strip()
+                    # The new regex handles optional leading/trailing whitespace, optional square brackets.
+                    match = re.match(r'^\s*[?\s*(-?\d+(?:\.\d+)?)\s*:\s*(-?\d+(?:\.\d+)?)\s*]?\s*$', bound_part)
                     if match:
                         low = float(match.group(1))
-                        high = float(match.group(3))
+                        high = float(match.group(2))
                         self.sample_ranges[const_decl.name] = (low, high)
                         if self.debug_mode:
                             print(f"DEBUG_CISB: Applied bound for constant '{const_decl.name}': [{low}, {high}]")
                     else:
                         if self.debug_mode:
-                            print(f"DEBUG_CISB: Warning: Could not parse bound string '{bound_str}' for constant '{const_decl.name}'. Using default range.")
+                            print(f"DEBUG_CISB: Warning: Could not parse bound string '{bound_str}' for constant '{const_decl.name}'. Using default range (-100.0, 100.0).")
                         if const_decl.name not in self.sample_ranges:
                             self.sample_ranges[const_decl.name] = (-100.0, 100.0)
                 else:
@@ -590,6 +671,8 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
         opt.set(timeout=10000)
 
         precondition_kx = self._problem_config.precondition.formula
+        if self.debug_mode:
+            print(f"DEBUG_CISB: Precondition formula for CISB population: {precondition_kx}")
         try:
             z3_precondition_formula = self._kx_expr_to_z3_formula(precondition_kx, z3_symbols, fixed_constants_map)
             opt.add(z3_precondition_formula)
@@ -608,7 +691,9 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
 
             soft_constraints_added = False
             for var_name, z3_var in z3_symbols.items():
-                if var_name in ['v', 't']: # 'v' is often 0 in initial state, 't' is always 0.
+                # Avoid adding soft constraints for variables that are already fixed by `fixed_constants_map`
+                # or for 't' which is typically 0.0 in initial states.
+                if var_name in fixed_constants_map or var_name == 't':
                     continue
 
                 low, high = self.sample_ranges.get(var_name, (-100.0, 100.0))
@@ -622,23 +707,95 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
             if not soft_constraints_added:
                 # If no soft constraints were added (e.g., all variables have fixed values or single-point ranges),
                 # we still need to try and find a solution.
-                pass
+                if self.debug_mode:
+                    print("DEBUG_CISB: No soft constraints added, attempting to find a basic solution.")
 
             check_result = opt.check()
 
             if check_result == z3.sat:
                 model = opt.model()
+                if model is None:
+                    if self.debug_mode:
+                        print("DEBUG_CISB: Z3 model is None despite SAT result. Skipping this attempt.")
+                    opt.pop()
+                    continue
+
                 solved_values = {}
+                
+                # Temporarily store evaluated Z3 variables
+                evaluated_z3_vars = {}
                 for k, v in z3_symbols.items():
                     evaluated_val = model.evaluate(v, model_completion=True)
-                    if evaluated_val is not None:
+                    if evaluated_val is None:
+                        if self.debug_mode:
+                            print(f"DEBUG_CISB: Variable '{k}' not assigned a value by Z3 model. Skipping for this sample.")
+                        continue
+
+                    # Robust conversion from Z3 value to Python float
+                    try:
                         if hasattr(evaluated_val, 'as_fraction'):
-                            solved_values[k] = float(evaluated_val.as_fraction())
+                            # Handles rational numbers like 1/2
+                            evaluated_z3_vars[k] = float(evaluated_val.as_fraction())
                         elif hasattr(evaluated_val, 'as_long'):
-                            solved_values[k] = float(evaluated_val.as_long())
+                            # Handles integer numbers
+                            evaluated_z3_vars[k] = float(evaluated_val.as_long())
+                        elif hasattr(evaluated_val, 'as_decimal'):
+                            # Handles real numbers with a decimal representation
+                            decimal_str = evaluated_val.as_decimal(20) # Use a high precision
+                            evaluated_z3_vars[k] = float(decimal_str)
                         else:
-                            solved_values[k] = float(str(evaluated_val))
-                solved_values.update(fixed_constants_map)
+                            # Fallback to string conversion, handling '?' if present
+                            s_val = str(evaluated_val)
+                            if '?' in s_val:
+                                numeric_part = s_val.split('?')[0]
+                                evaluated_z3_vars[k] = float(numeric_part)
+                            else:
+                                evaluated_z3_vars[k] = float(s_val)
+                    except (z3.Z3Exception, ValueError) as e:
+                        if self.debug_mode:
+                            print(f"DEBUG_CISB: Error converting Z3 value '{evaluated_val}' for key '{k}' to float: {e}. Skipping this sample.")
+                        continue # Skip this sample
+                
+                # Now, populate solved_values, prioritizing evaluated_z3_vars for Z3-bound variables
+                # and fixed_constants_map for explicitly fixed constants.
+                solved_values.update(evaluated_z3_vars)
+                solved_values.update(fixed_constants_map) # Fixed constants override if there's overlap (e.g. if 'A' is both a Z3 var and in fixed_constants_map)
+
+                # Now, evaluate constants that have a 'value' expression (e.g., minV = A*ep)
+                # These must be evaluated using the values *just obtained* from the model or fixed_constants_map.
+                for const_def in self._definitions_config.constants:
+                    if const_def.value is not None and not re.fullmatch(r'^-?\d+(\.\d+)?$', const_def.value):
+                        # This is a constant whose value is an expression
+                        try:
+                            # Create a temporary environment context for evaluation
+                            temp_state = self.state.copy()
+                            temp_constants = self.constants.copy()
+                            
+                            # Update temporary state/constants with current solved_values for evaluation
+                            for k, v in solved_values.items():
+                                if k in temp_state:
+                                    temp_state[k] = v
+                                elif k in temp_constants:
+                                    temp_constants[k] = v
+
+                            # Temporarily set the environment's state and constants
+                            original_state = self.state
+                            original_constants = self.constants
+                            self.state = temp_state
+                            self.constants = temp_constants
+
+                            evaluated_const_val = float(self._evaluate_expression(const_def.value))
+                            solved_values[const_def.name] = evaluated_const_val
+
+                            # Restore original state and constants
+                            self.state = original_state
+                            self.constants = original_constants
+
+                        except Exception as e:
+                            if self.debug_mode:
+                                print(f"DEBUG_CISB: Error evaluating constant '{const_def.name}' with expression '{const_def.value}': {e}. Skipping this sample.")
+                            opt.pop()
+                            continue # Skip this sample
 
                 # Normalize dx, dy if they represent a direction vector
                 if 'dx' in solved_values and 'dy' in solved_values:
@@ -653,6 +810,18 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
                         solved_values['dx'] = 1.0
                         solved_values['dy'] = 0.0
 
+                # Ensure all state variables are present in solved_values
+                all_state_vars_present = True
+                for var_def in self._variables_config.state_variables:
+                    if var_def.name not in solved_values:
+                        if self.debug_mode:
+                            print(f"DEBUG_CISB: Required state variable '{var_def.name}' not found in solved_values for this sample. Skipping.")
+                        all_state_vars_present = False
+                        break
+                if not all_state_vars_present:
+                    opt.pop()
+                    continue
+
                 self._cisb.append(solved_values)
                 current_cisb_count += 1
                 if self.debug_mode and current_cisb_count % 100 == 0:
@@ -662,7 +831,8 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
                 for var_name, z3_var in z3_symbols.items():
                     val = solved_values.get(var_name)
                     if val is not None:
-                        diversity_epsilon = 0.1 # Small epsilon to ensure diversity
+                        diversity_epsilon = 0.01 # Small epsilon to ensure diversity, can be tuned
+                        # Block the exact solution found for this variable
                         blocking_conditions.append(
                             z3.Or(z3_var < val - diversity_epsilon, z3_var > val + diversity_epsilon)
                         )
@@ -673,21 +843,25 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
                 opt.pop() # Pop the soft constraints and blocking clause for the next attempt
 
             elif check_result == z3.unsat:
-                print(f"DEBUG_CISB: Z3 UNSAT during CISB population attempt {attempts}. No more diverse solutions found within current constraints.")
+                if self.debug_mode:
+                    print(f"DEBUG_CISB: Z3 UNSAT during CISB population attempt {attempts}. No more diverse solutions found within current constraints.")
                 opt.pop()
                 break
             else: # z3.unknown
-                print(f"DEBUG_CISB: Z3 UNKNOWN during CISB population attempt {attempts}. Retrying with new soft constraints.")
+                if self.debug_mode:
+                    print(f"DEBUG_CISB: Z3 UNKNOWN during CISB population attempt {attempts}. Retrying with new soft constraints.")
                 opt.pop()
 
         if current_cisb_count < self._cisb_size:
-            print(f"DEBUG_CISB: Warning: Could not populate {current_cisb_count} states for CISB after {attempts} attempts.")
+            if self.debug_mode:
+                print(f"DEBUG_CISB: Warning: Could not populate {current_cisb_count} states for CISB after {attempts} attempts.")
         else:
             if self.debug_mode:
                 print(f"DEBUG_CISB: CISB population complete with {current_cisb_count} states.")
 
         unique_samples = set()
         for sample in self._cisb:
+            # Create a tuple of sorted (key, rounded_value) pairs for uniqueness check
             rounded_sample = tuple(sorted([(k, round(v, 6)) for k, v in sample.items()]))
             unique_samples.add(rounded_sample)
 
@@ -708,7 +882,7 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
             print("Please check precondition and sampling ranges for satisfiability.")
 
         # NEW: Call the diversity analysis function after CISB population
-        if self.debug_mode or True: # Only run analysis in debug mode
+        if self.debug_mode: # Only run analysis if debug_mode is True
             # Create a wrapper for _evaluate_expression that temporarily updates state/constants
             def cisb_entry_evaluate_expression_wrapper(expr_str: str, cisb_entry_context: Dict[str, Any]) -> Any:
                 """
@@ -791,7 +965,8 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
         self.last_failing_precondition_formula = None
 
         if not self._cisb:
-            print("DEBUG_RESET: Error: CISB is empty. Generating a single initial state using Z3 as fallback.")
+            if self.debug_mode:
+                print("DEBUG_RESET: Error: CISB is empty. Generating a single initial state using Z3 as fallback.")
             final_initial_state = {
                 'x': 0.0, 'y': 0.0, 'v': 0.0, 'a': 0.0, 'dx': 1.0, 'dy': 0.0,
                 'w': 0.0, 'r': 1.0, 'xo': 5.0, 'yo': 0.0, 't': 0.0,
@@ -808,7 +983,7 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
                 self.constants[var_name] = value
 
         if self.debug_mode:
-            print(f"DEBUG_RESET: Initial state: x={self.state.get('x',0):.6f}, y={self.state.get('y',0):.6f}, v={self.state.get('v',0):.6f}, a={self.state.get('a',0):.6f}, w={self.state.get('w',0):.6f}, ep={self.constants.get('ep',0):.6f}")
+            print(f"DEBUG_RESET: Initial state: xr={self.state.get('xr',0):.6f}, vr={self.state.get('vr',0):.6f}, ar={self.state.get('ar',0):.6f}, xg={self.state.get('xg',0):.6f}, t={self.state.get('t',0):.6f}, T={self.state.get('T',0):.6f}, ep={self.constants.get('ep',0):.6f}")
             print(f"DEBUG_RESET: Initial constants: A={self.constants.get('A',0):.6f}, b={self.constants.get('b',0):.6f}, ep={self.constants.get('ep',0):.6f}")
 
         self._add_state_to_history()
@@ -821,19 +996,33 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
     def step(self, action):
         pass
 
-    def render(self, mode="human", variables_to_plot: Optional[List[str]] = None):
+    def render(self, mode="human", plot_config: Optional[Union[List[str], Dict[str, str]]] = None):
+        """
+        Renders the environment.
+        - mode="human": Renders to the screen (not implemented for this base class).
+        - mode="plot_data": Returns the raw state history for external plotting.
+        - mode="matplotlib": Generates and displays matplotlib plots of the state history.
+          `plot_config` can be:
+          - A list of strings: ['var1', 'var2'] - plots these variables using their DataFrame column names as labels.
+          - A dictionary: {'Plot Label 1': 'df_col_name1', 'Plot Label 2': 'df_col_name2'} - plots df_col_name1 with 'Plot Label 1'.
+          If `plot_config` is None, all numerical columns in the DataFrame (except 'episode_time') will be plotted.
+        """
         if mode == "human":
             pass
         elif mode == "plot_data":
             return self.state_history
         elif mode == "matplotlib":
-            self._plot_state_history(variables_to_plot, history_data=self.last_episode_history)
+            self._plot_state_history(plot_config=plot_config, history_data=self.last_episode_history)
             return None
         return None
 
-    def _plot_state_history(self, variables_to_plot: Optional[List[str]] = None, history_data: Optional[List[Dict[str, Any]]] = None):
+    def _plot_state_history(self, plot_config: Optional[Union[List[str], Dict[str, str]]] = None, history_data: Optional[List[Dict[str, Any]]] = None):
         """
         Generates and displays a matplotlib plot of the state history.
+        `plot_config` can be:
+        - A list of strings: ['var1', 'var2'] - plots these variables using their DataFrame column names as labels.
+        - A dictionary: {'Plot Label 1': 'df_col_name1', 'Plot Label 2': 'df_col_name2'} - plots df_col_name1 with 'Plot Label 1'.
+        If `plot_config` is None, all numerical columns in the DataFrame (except 'episode_time') will be plotted.
         """
         data_to_plot = history_data if history_data is not None else self.state_history
 
@@ -842,32 +1031,54 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
                 print("DEBUG_PLOT: No state history available to plot.")
             return
 
-        if self.debug_mode:
-            print(f"DEBUG_PLOT: state_history length: {len(data_to_plot)}")
         df = pd.DataFrame(data_to_plot)
         if self.debug_mode:
             print(f"DEBUG_PLOT: DataFrame shape: {df.shape}")
             print(f"DEBUG_PLOT: DataFrame head:\n{df.head()}")
             print(f"DEBUG_PLOT: DataFrame tail:\n{df.tail()}")
+            print(f"DEBUG_PLOT: DataFrame columns: {df.columns.tolist()}")
+
 
         x_axis_key = 'episode_time'
-
         if x_axis_key not in df.columns:
             print(f"DEBUG_PLOT: Error: Time key '{x_axis_key}' not found in state history for plotting. This indicates an issue with state history recording.")
             return
 
-        if variables_to_plot is None:
-            default_plot_vars = ['x', 'y', 'v', 'a', 'w']
-            variables_to_plot = [col for col in default_plot_vars if col in df.columns]
-        else:
-            variables_to_plot = [v for v in variables_to_plot if v in df.columns]
+        variables_to_plot_map: Dict[str, str] = {} # {plot_label: df_column_name}
 
-        if not variables_to_plot:
+        if plot_config is None:
+            # Default behavior: plot all numerical columns except the x_axis_key
+            for col_name in df.columns:
+                if col_name != x_axis_key and pd.api.types.is_numeric_dtype(df[col_name]):
+                    variables_to_plot_map[col_name] = col_name # Use df name as label
+            if self.debug_mode and not variables_to_plot_map:
+                print("DEBUG_PLOT: No numerical columns found in DataFrame for default plotting.")
+
+        elif isinstance(plot_config, list):
+            for var_name in plot_config:
+                if var_name in df.columns:
+                    variables_to_plot_map[var_name] = var_name
+                else:
+                    if self.debug_mode:
+                        print(f"DEBUG_PLOT: Warning: Variable '{var_name}' requested for plotting but not found in DataFrame columns: {df.columns.tolist()}.")
+        elif isinstance(plot_config, dict):
+            for plot_label, df_col_name in plot_config.items():
+                if df_col_name in df.columns:
+                    variables_to_plot_map[plot_label] = df_col_name
+                else:
+                    if self.debug_mode:
+                        print(f"DEBUG_PLOT: Warning: DataFrame column '{df_col_name}' (for plot label '{plot_label}') not found in DataFrame columns: {df.columns.tolist()}.")
+        else:
             if self.debug_mode:
-                print(f"DEBUG_PLOT: No variables selected for plotting or found in DataFrame.")
+                print(f"DEBUG_PLOT: Invalid plot_config type: {type(plot_config)}. Expected list or dict.")
             return
 
-        num_vars = len(variables_to_plot)
+        if not variables_to_plot_map:
+            if self.debug_mode:
+                print(f"DEBUG_PLOT: No valid variables to plot after processing plot_config.")
+            return
+
+        num_vars = len(variables_to_plot_map)
         cols = 2
         rows = (num_vars + cols - 1) // cols
 
@@ -878,12 +1089,13 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
 
         min_y_range_absolute = 0.05
 
-        for i, var in enumerate(variables_to_plot):
+        # Iterate through the map to plot
+        for i, (plot_label, df_col_name) in enumerate(variables_to_plot_map.items()):
             ax = axes[i]
-            ax.plot(df[x_axis_key], df[var], label=var)
+            ax.plot(df[x_axis_key], df[df_col_name], label=plot_label)
             ax.set_xlabel(f"Time ({x_axis_key})")
-            ax.set_ylabel(var)
-            ax.set_title(f"Evolution of {var}")
+            ax.set_ylabel(plot_label) # Use the plot_label here
+            ax.set_title(f"Evolution of {plot_label}") # Use the plot_label here
             ax.grid(True, linestyle='--', alpha=0.7)
             ax.legend()
 
@@ -894,13 +1106,13 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
             else:
                 ax.set_xlim(0, max_time)
 
-            min_val = df[var].min()
-            max_val = df[var].max()
+            min_val = df[df_col_name].min()
+            max_val = df[df_col_name].max()
 
             data_range = max_val - min_val
 
             if self.debug_mode:
-                print(f"DEBUG_PLOT: Plotting {var}: min_val={min_val:.6f}, max_val={max_val:.6f}, data_range={data_range:.6f}")
+                print(f"DEBUG_PLOT: Plotting {plot_label} (from DataFrame column '{df_col_name}'): min_val={min_val:.6f}, max_val={max_val:.6f}, data_range={data_range:.6f}")
 
             if data_range < min_y_range_absolute:
                 avg_val = (min_val + max_val) / 2
@@ -917,6 +1129,7 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
                 if self.debug_mode:
                     print(f"  DEBUG_PLOT: Applied buffered y-lim: [{lower_bound:.6f}, {upper_bound:.6f}] (range {upper_bound - lower_bound:.6f})")
 
+        # Hide any unused subplots
         for j in range(i + 1, len(axes)):
             fig.delaxes(axes[j])
 

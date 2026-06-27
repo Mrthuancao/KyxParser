@@ -1,4 +1,3 @@
-# pyast_config.py
 import logging
 from typing import List, Dict, Any, Optional, Union, Tuple, Callable
 from dataclasses import dataclass, field # Import dataclass and field
@@ -480,22 +479,27 @@ class PostconditionConfig(ASTConfigNode): # Make PostconditionConfig a dataclass
 
 class ProblemConfig(ASTConfigNode):
     def __init__(self, precondition: Optional[PreconditionConfig] = None,
-                 postconditions: List[PostconditionConfig] = field(default_factory=list)): # Changed to list of postconditions
+                 loop_execution: Optional['LoopExecutionConfig'] = None, # ADDED THIS LINE
+                 postconditions: Optional[List['PostconditionConfig']] = None): # MODIFIED THIS LINE
         self.precondition = precondition if precondition is not None else PreconditionConfig(formula="")
-        self.postconditions = postconditions # This will be a list
+        self.loop_execution = loop_execution # ADDED THIS LINE
+        self.postconditions = postconditions if postconditions is not None else [] # MODIFIED THIS LINE
 
     def _repr_indent(self, level=0):
         indent = "  " * level
         pre_str = self.precondition._repr_indent(level + 1)
+        loop_exec_str = self.loop_execution._repr_indent(level + 1) if self.loop_execution else f"{indent}  (No Loop Execution)" # ADDED THIS LINE
         post_list_str = "\n".join([p._repr_indent(level + 1) for p in self.postconditions])
         
         return (f"{indent}[ProblemConfig]\n"
                 f"{pre_str}\n"
+                f"{loop_exec_str}\n" # ADDED THIS LINE
                 f"{post_list_str or f'{indent}  (No Postconditions)'}")
 
     def _get_serialization_params(self) -> Dict[str, Any]:
         return {
             "precondition": self.precondition,
+            "loop_execution": self.loop_execution, # ADDED THIS LINE
             "postconditions": self.postconditions,
         }
 
