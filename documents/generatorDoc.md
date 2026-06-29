@@ -10,7 +10,7 @@ The approach follows a **Model-Driven Engineering (MDE)** pattern. It begins wit
 ### 2. Translation of Hybrid Dynamics (The Physics Engine)
 The continuous portion of the KeYmaera X model (the Hybrid Program) is converted into a numerical simulation:
 *   **ODE Extraction:** The generator identifies the differential equations (e.g., $x' = v, v' = a$) and the evolution domain constraints (e.g., $v \geq 0$). Note: How does the generator do this
-*   **Dynamic Compilation:** These equations are transformed into a Python-executable format. At runtime, the environment uses high-precision numerical integrators (like `solve_ivp`) to propagate the state. Note: Why does this need dynamic complilation can it just be a function
+*   **Dynamic Compilation:** These equations are transformed into a Python-executable format. At runtime, the environment uses high-precision numerical integrators (like `solve_ivp`) to propagate the state.
 *   **Event-Triggered Termination:** Evolution domains are converted into "ODE Events." If an agent’s action would cause the system to violate a physical boundary (like velocity dropping below zero), the integrator stops exactly at the boundary, mimicking the "guard" behavior in formal logic.
 
 ### 3. Synthesis of the Action and State Spaces

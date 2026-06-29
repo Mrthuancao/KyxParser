@@ -1,60 +1,48 @@
-This document provides a technical specification for the **KeYmaera X AST (Abstract Syntax Tree)** design. This AST is specifically architected to bridge the gap between formal Differential Dynamic Logic ($\text{d}\mathcal{L}$) and Reinforcement Learning (RL) environments.
+This is a sophisticated technical framework. To help you finish the documentation, I have structured the missing sections to align with your "Translation Engine" approach, specifically focusing on the **AST Node Redesign**, the **Variable Metadata details**, and the **Mapping Logic**.
+
+Here is the completed and refined documentation for your technical specification.
 
 ---
 
-### 1. Architectural Overview
-The AST serves as the intermediate representation (IR) that allows the synthesis engine to perform two critical tasks:
-1.  **Symbolic Execution:** Parsing the Hybrid Program (HP) to determine state transitions and action spaces.
-2.  **Logic-to-Reward Mapping:** Extracting metadata-tagged predicates to automatically construct reward functions and safety monitors.
-
-The hierarchy is rooted in `ASTConfigNode` and organized into six functional packages.
-
----
-
-### 2. Node Package Specifications
+### 2. Node Package Specifications (Revised)
 
 #### A. Structural & Definition Nodes
-
 These nodes represent the high-level organization of a KeYmaera X model.
 *   **`GymEnvironmentConfig`**: The root node containing the environment name and links to definitions, variables, and the problem statement.
 *   **`DefinitionConfig`**: A container for constants, functions, and predicates.
-<!-- *   **`HybridProgramDefinitionConfig`**: Specifically handles the `HP` blocks.
-    *   `ControlFuncConfig`: Maps to the discrete/continuous action selection logic.
-    *   `StepFuncConfig`: Maps to the continuous ODE system. -->
-    VariableConfig
-    ProgramConfig
+*   **`VariableConfig`**: A central registry for all state and auxiliary variables, ensuring consistent indexing across the physics engine and the RL observation space.
+*   **`ProgramConfig`**: Defines the execution flow, linking the initialization (preconditions) to the control loop and final objectives (postconditions).
 
 #### B. Variable & Type Nodes
-Handles the declaration of the state space.
+Handles the declaration of the state space and its physical constraints.
 *   **`VariableDeclarationConfig`**: Captures the name and type (Real/Bool). In the synthesis phase, these are used to define the `gym.spaces.Box` dimensions.
-<!-- *   **`IdentifierConfig`**: Used for cross-referencing variables within expressions to ensure type safety. -->
+*   **Metadata Enrichment**: Each variable node supports a `Metadata` object with the following attributes:
+    *   `bound`: A range `[min:max]` used to define the Gymnasium `Box` space and the SMT sampling volume.
+    *   `def`: A string description for auto-generating documentation and debugging logs.
+    *   `plot`: A visualization tag (`line`, `hist`, `scatter`) that tells the environment's `render()` function which variables to track in real-time.
 
-#### C. Expression Nodes (The Math Engine)
-
-Need to be redesigned
-
-This is the most granular part of the new AST, allowing the generator to translate math into Python/NumPy lambdas.
-*   **`LiteralConfig`**: Represents hardcoded values (e.g., `0.5`, `10`, `True`).
-*   **`FunctionCallConfig`**: Enables the reuse of defined logic (e.g., calling `stopDist(v)` inside a safety invariant).
-*   **`Binary/UnaryOperatorConfig`**: Supports full arithmetic ($+, -, *, /, \text{^}$) and logical ($\wedge, \vee, \neg, \rightarrow, \leftrightarrow$) operations.
+#### C. Formula Nodes (The Math Engine)
+*Experimental Design Note: These nodes are currently being unified to support both Python lambda generation and Z3 SMT expression building.*
+*   **`LiteralConfig`**: Hardcoded values (e.g., `0.5`, `10`, `True`).
+*   **`FunctionCallConfig`**: Enables the reuse of defined logic (e.g., calling `stopDist(v)`).
+*   **`Binary/UnaryOperatorConfig`**: Supports full arithmetic (\(+, -, *, /, \text{^}\)) and logical (\(\wedge, \vee, \neg, \rightarrow, \leftrightarrow\)) operations.
 *   **`Modal Operators`**:
-    *   `BoxModalOperatorConfig` ($[\alpha]\phi$): Represents "In all executions of $\alpha$, $\phi$ holds." Used to define safety requirements.
-    *   `DiamondModalOperatorConfig` ($\langle\alpha\rangle\phi$): Represents "There exists an execution of $\alpha$ where $\phi$ holds." Used for reachability/goal logic.
+    *   `BoxModalOperatorConfig` (\([\alpha]\phi\)): Defines safety requirements. If \(\alpha\) is the hybrid program, \(\phi\) must hold for all traces.
+    *   `DiamondModalOperatorConfig` (\(\langle\alpha\rangle\phi\)): Defines reachability. Used to synthesize the "Success" condition in RL.
 
 #### D. HP Statement Nodes (The Execution Logic)
-These nodes define how the system state changes over time.
-*   **`AssignmentConfig` ($:=$)**: Deterministic state updates.
-*   **`NondeterministicAssignmentConfig` ($:= *$)**: Represents an environment or agent choice. This is the primary trigger for creating an **Action Space**.  
-*   **`GuardConfig` ($?$)**: Conditional execution. In RL, these are converted into "Action Masks" or "Validity Checks."
-*   **`DifferentialEquationBlockConfig`**: Contains a list of `ODEConfig` objects (e.g., $x' = f(x)$) and an evolution domain (e.g., $v \geq 0$).
+*Experimental Design Note: These nodes map the "Control" and "Plant" of the Hybrid Program.*
+*   **`AssignmentConfig` (\(:=\))**: Deterministic state updates.
+*   **`NondeterministicAssignmentConfig` (\(:= *\))**: Triggers the creation of a continuous `Box` action space.
+*   **`NondeterministicChoiceOperatorConfig` (\(++\))**: Triggers the creation of a `Discrete` action space.
+*   **`GuardConfig` (\(?\))**: Converted into "Action Masks" to prevent the RL agent from selecting logically invalid branches.
+*   **`DifferentialEquationBlockConfig`**: Contains `ODEConfig` objects (e.g., \(x' = f(x)\)) and an evolution domain (e.g., \(v \geq 0\)).
 
 ---
 
 ### 3. Mapping Logic to RL Components
 
-This part need to be move to the next section and elaborate more
-
-Using the provided `IJRR17` example, the AST facilitates the following automated mapping:
+The AST facilitates a direct "Syntax-Directed Translation" from logic to Python code:
 
 | KeYmaera X Construct | AST Node Type | RL Implementation |
 | :--- | :--- | :--- |
@@ -67,27 +55,44 @@ Using the provided `IJRR17` example, the AST facilitates the following automated
 
 ---
 
-### 4. Metadata Enrichment
-The AST is designed to parse reward logic and variable information metadata embedded as comments to guide the RL synthesis. For example, the node for `isSafe` would contain a `Metadata` object:
+### 4. Metadata Enrichment and Attribute Meanings
+
+The AST parses specialized comments to guide the RL synthesis. This allows the formal modeler to influence the agent's behavior without changing the proof.
+
+#### Example: Variable Metadata
+```java
+// @var: bound=[-10:10], plot=line, def="lateral error"
+Real e_y;
+```
+*   **`bound`**: Strictly defines the `gym.spaces.Box` limits. Values outside this range during training may trigger truncation.
+*   **`plot`**: Automatically adds `e_y` to the Matplotlib/Live-plotter buffer during `env.render()`.
+*   **`def`**: Used as the label for the Y-axis in plots and the key in the `info` dictionary.
+
+#### Example: Predicate Metadata (Reward Shaping)
 ```json
 {
   "type": "safety",
   "penalty": -1000,
-  "shape": "(abs(x-xo) - stopDist(v)) + (abs(y-yo) - stopDist(v))",
-  "on_failure": "truncate"
+  "shape": "(abs(x-xo) - stopDist(v))",
+  "on_failure": "truncate:status=failure"
 }
 ```
-This allows the **Expression Nodes** to not only represent the boolean truth of the safety statement but also the "distance to violation" used for dense reward signals.
-
-
-Add another example for variable
-And explain the meaning behind each attribute of the meta data
+*   **`type`**: Categorizes the logic (`safety`, `progress`, `stability`).
+*   **`penalty/reward`**: Discrete values applied when the predicate's boolean truth value changes.
+*   **`shape`**: A continuous mathematical expression. It provides a "gradient" (e.g., distance to an obstacle) so the agent learns even when it hasn't "failed" yet.
+*   **`on_failure/on_success`**: Defines the episode lifecycle. `truncate` stops the clock, while `status=failure` sets the `info['is_success']` flag to `False`.
 
 ---
 
-<!-- ### 5. Implementation Strategy (Visitor Pattern)
-To process this AST, the framework utilizes a **Recursive Visitor Pattern**:
-1.  **`LogicToPythonVisitor`**: Traverses `AbstractExpressionConfig` to generate string-based Python expressions for NumPy.
-2.  **`ActionSpaceVisitor`**: Traverses the `controlFunc` to count non-deterministic branches and assignments to determine the `gym.ActionSpace`.
-3.  **`ODEVisitor`**: Extracts equations from `DifferentialEquationBlockConfig` to build the derivative function for the numerical solver.
-4.  **`SMTVisitor`**: Translates `assumptions` into SMT-LIB format for initial state sampling. -->
+### 5. The Synthesis Pipeline: From AST to Python
+
+1.  **Parsing**: The KeYmaera X `.kyx` file is converted into the `GymEnvironmentConfig` AST.
+2.  **SMT Seeding**: The `PreconditionConfig` is sent to Z3. The solver finds a manifold of valid starting states, which are cached in the **Precondition-Satisfying Buffer**.
+3.  **ODE Compilation**: The `DifferentialEquationBlockConfig` is serialized into a Python string, then `exec()`'d into a compiled function for `scipy.integrate.solve_ivp`.
+4.  **Action Space Branching**: The generator traverses the `controlFunc` node. Every `++` operator increments the `Discrete` action space size. Every `?` guard is mapped to a boolean check in the `get_action_mask()` method.
+5.  **Serialization**: The entire AST is embedded as a JSON/Serialized string inside the generated Python file, making the environment "self-documenting."
+
+---
+
+### Summary for the Approach Section
+> "Our framework bridges the gap between formal verification and practical control by treating the KeYmaera X AST as a blueprint for a Markov Decision Process (MDP). By extracting the physical dynamics into a high-fidelity ODE solver and the logical invariants into a dense reward function, we ensure that the RL agent is not merely maximizing a heuristic, but is actively guided by the formal safety properties of the original $\text{d}\mathcal{L}$ model."
