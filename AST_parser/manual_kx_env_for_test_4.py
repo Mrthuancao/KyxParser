@@ -49,6 +49,7 @@ class GeneratedKXEnv(_KeYmaeraXEnvBase):
     metadata = {"render_modes": ["human", "plot_data", "matplotlib"], "render_fps": 30}
 
     def __init__(self, render_mode=None, cisb_size: int = 500, cisb_populate_attempts: int = 500, seed: Optional[int] = None, debug_mode: bool = False):
+        # Call base class constructor. It no longer calls _populate_cisb_diverse_z3 internally.
         super().__init__(config_serialized_str='''GymEnvironmentConfig(
             env_name='IJRR17_Theorem_14__Reach_waypoint_with_deadline',
             definitions=DefinitionsConfig(
@@ -56,7 +57,7 @@ class GeneratedKXEnv(_KeYmaeraXEnvBase):
                     ConstantDefinitionConfig(
                         name='ep',
                         type='Real',
-                        value=None,
+                        value=None, # Still None in config, but we'll fix it below
                         metadata={
                             'type': 'const',
                             'bound': '0.1:0.5',
@@ -66,7 +67,7 @@ class GeneratedKXEnv(_KeYmaeraXEnvBase):
                     ConstantDefinitionConfig(
                         name='b',
                         type='Real',
-                        value=None,
+                        value=None, # Still None in config, but we'll fix it below
                         metadata={
                             'type': 'const',
                             'bound': '0.5:5.0',
@@ -76,7 +77,7 @@ class GeneratedKXEnv(_KeYmaeraXEnvBase):
                     ConstantDefinitionConfig(
                         name='A',
                         type='Real',
-                        value=None,
+                        value=None, # Still None in config, but we'll fix it below
                         metadata={
                             'type': 'const',
                             'bound': '1.0:10.0',
@@ -89,7 +90,7 @@ class GeneratedKXEnv(_KeYmaeraXEnvBase):
                         value=None,
                         metadata={
                             'type': 'const',
-                            'bound': '1.0:10.0',
+                            'bound': '1.0:1000.0', # <--- INCREASED UPPER BOUND FOR GDelta
                             'def': 'goal area size'
                         }
                     ),
@@ -415,14 +416,17 @@ class GeneratedKXEnv(_KeYmaeraXEnvBase):
             )
         )''', render_mode=render_mode, cisb_size=cisb_size, cisb_populate_attempts=cisb_populate_attempts, seed=seed, debug_mode=debug_mode)
 
-        # Initialize constants (placeholders, will be filled by reset or CISB)
-        self.constants['ep'] = 0.0
-        self.constants['b'] = 0.0
-        self.constants['A'] = 0.0
-        self.constants['GDelta'] = 0.0
-        self.constants['Vmax'] = 0.0
+        # Set fixed constant values *after* super().__init__ has initialized self.constants
+        # but *before* functions/predicates are defined and CISB is populated.
+        # The placeholders from super().__init__ are now correctly overwritten.
+        self.constants['ep'] = 1.0 # Fixed value
+        self.constants['b'] = 0.5  # Fixed value
+        self.constants['A'] = 1.0  # Fixed value
+        # If 'W' was a constant, you would set it here too: self.constants['W'] = 1.0
+        # GDelta and Vmax will still be sampled by CISB within their bounds
+        # because they are not explicitly set here, and their ConstantDefinitionConfig has value=None.
 
-        # Initialize functions using lambdas
+        # Initialize functions using lambdas. These will now use the fixed values for A, b, ep.
         self.functions['waypointStartDist'] = lambda xg: ((xg) - (self.constants['GDelta']))
         self.functions['waypointEndDist'] = lambda xg: ((xg) + (self.constants['GDelta']))
         self.functions['minV'] = lambda: ((self.constants['A']) * (self.constants['ep'])) # No params, but callable
@@ -432,7 +436,7 @@ class GeneratedKXEnv(_KeYmaeraXEnvBase):
         self.functions['stopDist'] = lambda v: ((((v) ** (2))) / ((2) * (self.constants['b'])))
         self.functions['accComp'] = lambda v: (((((safe_div(self.constants['A'], self.constants['b'])) + (1))) * ((((safe_div(self.constants['A'], 2)) * (((self.constants['ep']) ** (2)))) + ((self.constants['ep']) * (v))))))
 
-        # Initialize predicates using lambdas
+        # Initialize predicates using lambdas. These will now use the fixed values for A, b, ep.
         self.predicates['bounds'] = lambda: (((((self.constants['A']) > (0))) and (((self.constants['b']) > (0)))) and (((self.constants['ep']) > (0)))) and (((self.constants['Vmax']) >= ((2) * (self.constants['A']) * (self.constants['ep']))) and (((self.constants['GDelta']) > (((self.constants['Vmax']) * (self.constants['ep'])) + (((self.constants['Vmax']) ** (2)) / ((2) * (self.constants['b'])))))))
         self.predicates['initialState'] = lambda xr, vr, xg, T: (((self._approx_eq(vr, 0)) and ((xr) < (self.functions['waypointStartDist'](xg)))) and ((T) > (((self.constants['ep']) + (self.functions['maxTravelTime'](((xg) - (xr))))  + (self.constants['ep']) + (self.functions['stopTime'](self.constants['Vmax']))))))
         self.predicates['assumptions'] = lambda xr, vr, xg, T: ((self.predicates['bounds']()) and (self.predicates['initialState'](xr, vr, xg, T)))
@@ -548,20 +552,21 @@ ode_events = [
         self._ode_func_compiled = self._compile_ode_func(_ode_func_str_local)
         self._ode_events_compiled = self._compile_ode_events(_ode_events_str_local)
 
-        self.sample_ranges = {
-                    'xr': (0.0, 100.0),
-                    'vr': (0.0, 20.0),
-                    'ar': (-10.0, 10.0),
-                    'xg': (0.0, 100.0),
-                    't': (0.0, 1.0),
-                    'T': (0.0, 1000.0),
-                    'ep': (0.1, 0.5),
-                    'b': (0.5, 5.0),
-                    'A': (1.0, 10.0),
-                    'GDelta': (1.0, 10.0),
-                    'Vmax': (5.0, 30.0),
-                }
+        # Removed the explicit self.sample_ranges dictionary assignment.
+        # The base class _KeYmaeraXEnvBase will populate this correctly
+        # from state variable declarations and constant metadata.
+        # self.sample_ranges = {
+        #             'xr': (0.0, 100.0),
+        #             'vr': (0.0, 20.0),
+        #             'ar': (-10.0, 10.0),
+        #             'xg': (0.0, 100.0),
+        #             't': (0.0, 1.0),
+        #             'T': (0.0, 1000.0),
+        #             'GDelta': (1.0, 50.0),
+        #             'Vmax': (5.0, 30.0),
+        #         }
 
+        # Now call _populate_cisb_diverse_z3 after constants are set and functions/predicates are defined
         self._populate_cisb_diverse_z3()
 
         # Remove _force_acceleration_action as it was specific to the previous environment

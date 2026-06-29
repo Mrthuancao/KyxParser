@@ -1,4 +1,3 @@
-# gym_generator/kx_env_base.py (Your base environment file)
 import gymnasium as gym
 import numpy as np
 import math
@@ -94,7 +93,7 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
         # 2. Initialize Constants (placeholders, actual values set by generated class or CISB)
         self.constants: Dict[str, float] = {}
         for c in self._definitions_config.constants:
-            self.constants[c.name] = 0.0 # Placeholder
+            self.constants[c.name] = 0.0 # Placeholder. Will be overwritten by fixed values in child class, or sampled by CISB.
 
         # 3. Initialize Functions and Predicates (placeholders, actual lambdas set by generated class)
         self.functions: Dict[str, Any] = {}
@@ -122,8 +121,9 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
         self._cisb_populate_attempts = cisb_populate_attempts
         self.sample_ranges: Dict[str, Tuple[float, float]] = {}
         
-        # This call will now use the corrected regex
-        self._populate_cisb_diverse_z3() 
+        # This call is now moved to the child class (GeneratedKXEnv)
+        # after it has a chance to set its fixed constants.
+        # REMOVED: self._populate_cisb_diverse_z3()
 
     def _evaluate_expression(self, expr_str: str, local_vars: Optional[Dict[str, Any]] = None, is_constraint: bool = False) -> Any:
         """
@@ -180,7 +180,8 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
             if sub_expr.startswith('(') and sub_expr.endswith(')'):
                 balance = 0
                 is_fully_enclosed = True
-                for i in range(len(sub_expr) - 1): # Check all but the last char
+                # Check all but the last char to see if it's fully enclosed
+                for i in range(len(sub_expr) - 1):
                     char = sub_expr[i]
                     if char == '(': balance += 1
                     elif char == ')': balance -= 1
@@ -611,7 +612,7 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
         """Ensures the result is an AST node, handling pyparsing.ParseResults."""
         from pyparsing import ParseResults
         from kyx_parser.AST_parser.expression_ast_nodes import ExpressionASTNode
-        if isinstance(parsed_parsed_result, ParseResults):
+        if isinstance(parsed_result, ParseResults): # Corrected from parsed_parsed_result
             return parsed_result[0] if parsed_result else None
         return parsed_result if isinstance(parsed_result, ExpressionASTNode) else None
 
@@ -637,11 +638,20 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
             if var_decl.name not in self.sample_ranges:
                 self.sample_ranges[var_decl.name] = (-100.0, 100.0)
 
-        # Process constants, applying bounds from metadata
+        # Process constants
         for const_decl in self._definitions_config.constants:
-            if const_decl.value is not None and re.fullmatch(r'^-?\d+(\.\d+)?$', const_decl.value):
-                # If constant has a fixed numerical value, treat it as such
+            # NEW: Check if constant is already fixed in self.constants (set by the generated env's __init__)
+            # We check for `is not None` and `!= 0.0` to avoid treating the initial placeholder 0.0 as a fixed value.
+            # This check is crucial here because self.constants can be pre-populated by the child class.
+            if const_decl.name in self.constants and self.constants[const_decl.name] is not None and self.constants[const_decl.name] != 0.0:
+                fixed_constants_map[const_decl.name] = self.constants[const_decl.name]
+                if self.debug_mode:
+                    print(f"DEBUG_CISB: Constant '{const_decl.name}' is pre-set in self.constants to {self.constants[const_decl.name]}. Treating as fixed.")
+            elif const_decl.value is not None and re.fullmatch(r'^-?\d+(?:\.\d+)?$', const_decl.value):
+                # If constant has a fixed numerical value from config, treat it as such
                 fixed_constants_map[const_decl.name] = float(const_decl.value)
+                if self.debug_mode:
+                    print(f"DEBUG_CISB: Constant '{const_decl.name}' has fixed value '{const_decl.value}' from config. Treating as fixed.")
             else:
                 # Otherwise, treat it as a variable for Z3 and apply bounds from metadata if available
                 z3_symbols[const_decl.name] = z3.Real(const_decl.name)
@@ -649,8 +659,8 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
                     bound_str = const_decl.metadata['bound']
                     # Corrected regex to parse bounds string (e.g., "0.1:0.5" or "[0.1:0.5]")
                     bound_part = bound_str.split(';')[0].strip()
-                    # The new regex handles optional leading/trailing whitespace, optional square brackets.
-                    match = re.match(r'^\s*[?\s*(-?\d+(?:\.\d+)?)\s*:\s*(-?\d+(?:\.\d+)?)\s*]?\s*$', bound_part)
+                    # Updated regex to correctly capture numbers within optional square brackets
+                    match = re.match(r'^\s*\[?\s*(-?\d+(?:\.\d+)?)\s*:\s*(-?\d+(?:\.\d+)?)\s*\]?\s*$', bound_part)
                     if match:
                         low = float(match.group(1))
                         high = float(match.group(2))
@@ -764,7 +774,7 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
                 # Now, evaluate constants that have a 'value' expression (e.g., minV = A*ep)
                 # These must be evaluated using the values *just obtained* from the model or fixed_constants_map.
                 for const_def in self._definitions_config.constants:
-                    if const_def.value is not None and not re.fullmatch(r'^-?\d+(\.\d+)?$', const_def.value):
+                    if const_def.value is not None and not re.fullmatch(r'^-?\d+(?:\.\d+)?$', const_def.value):
                         # This is a constant whose value is an expression
                         try:
                             # Create a temporary environment context for evaluation
@@ -967,10 +977,12 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
         if not self._cisb:
             if self.debug_mode:
                 print("DEBUG_RESET: Error: CISB is empty. Generating a single initial state using Z3 as fallback.")
+            # These fallback values should ideally match the fixed constants set in GeneratedKXEnv
             final_initial_state = {
                 'x': 0.0, 'y': 0.0, 'v': 0.0, 'a': 0.0, 'dx': 1.0, 'dy': 0.0,
                 'w': 0.0, 'r': 1.0, 'xo': 5.0, 'yo': 0.0, 't': 0.0,
-                'ep': 1.0, 'b': 1.0, 'A': 1.0, 'W': 1.0
+                'ep': 1.0, 'b': 0.5, 'A': 1.0, # Updated to match fixed constants in GeneratedKXEnv
+                'GDelta': 5.0, 'Vmax': 15.0 # Example values for sampled constants
             }
         else:
             chosen_initial_state_entry = self.np_random.choice(self._cisb)
