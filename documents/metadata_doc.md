@@ -3,9 +3,7 @@
 ## 1. Overview
 The **RL-Annotation Syntax** is a comment-based Domain-Specific Language (DSL) designed to bridge KeYmaera X formal Differential Dynamic Logic (\(dL\)) models with Gymnasium Reinforcement Learning environments. By annotating definitions with category-specific tags like `@safety`, `@progress`, `@stability`, `@const`, or `@var`, developers can define complex reward structures, termination logic, and episode status directly within their formal models, without altering the underlying proof logic.
 
-The transpiler parses these annotations, attaches them to the corresponding Abstract Syntax Tree (AST) nodes, and maps them to the `step()` and `reset()` functions of a Gymnasium environment, facilitating a seamless transition from formal verification to RL training.
-
-Note: I think this should be traversed
+The transpiler parses these annotations and attaches them as metadata to the corresponding Abstract Syntax Tree (AST) nodes. This structured configuration is then interpreted by the Gymnasium environment wrapper, which evaluates the annotated logic during the step() and reset() cycles to calculate rewards and state transitions..
 
 ## 2. General Syntax
 Annotations must be placed on the line immediately preceding a `Bool`, `Real`, or `HP` definition.
@@ -141,6 +139,21 @@ Used for `Real` or `Bool` variables that define the state space of the environme
     // @var: bound=[0:100], def="robot position: x"
     Real x;
     ```
+
+### 4.2. Plotting and Diagnostics
+To facilitate training diagnosis, `@const` and `@var` support a `plot` attribute. This tells the transpiler/logger which variables to track and how to visualize them.
+
+*   **`plot=[type]`**: Specifies the visualization style for this variable.
+    *   `line`: Standard time-series plot (Value vs. Step).
+    *   `hist`: Distribution of the variable's values across the episode.
+    *   `scatter`: Used when tracking relationships between variables.
+    *   `none` (default): Variable is not plotted.
+
+**Example:**
+```java
+// @var: bound=[-10:10], plot=line, def="lateral error"
+Real e_y;
+```
 
 ---
 

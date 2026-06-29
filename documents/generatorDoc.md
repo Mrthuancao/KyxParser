@@ -29,17 +29,19 @@ A key innovation of this approach is the **Automatic Reward Shaping** derived fr
 
 Note: Need to recheck this, is ensure got hard coded as a reserved keyword and loop variant?
 
-### 5. SMT-Backed Environment Resetting
-To solve the "Initial State Problem" in RL, the generator utilizes the model's **Preconditions**:
-*   **Constraint Satisfaction:** The environment includes a "Constrained Initial State Buffer" (CISB). 
-*   **Z3 Integration:** During the generation phase, the system prepares the preconditions for an SMT solver (Z3). When the environment is initialized, it uses Z3 to find a diverse set of starting points $(x_0, v_0, \dots)$ that satisfy all initial assumptions of the proof. This ensures the agent is only ever trained on valid, physically meaningful scenarios.
+### 5. SMT-Seeded Initial State Sampling
+To ensure the Reinforcement Learning agent is trained only on states that are logically and physically valid according to the formal proof, the generator automates the initialization process using the model's **Preconditions**:
 
-Note: Not CISB, it just a normal buffer containing samples, gathered at the environment construction process, satisfying the precondition, that is found by randomizing sample in the bounding box in the metadata of each variable, targeted with soft constrainst to make the sample generation less preditable. the solver used for this is z3, which is predictive without randomizing soft contrainst
+*   **Precondition-Satisfying Buffer:** During the environment's construction phase, a buffer of valid initial states is pre-populated. This prevents the "cold start" problem where an agent might otherwise begin in an unreachable or logically impossible state.
+*   **Stochastic SMT Solving (Z3):** Since standard SMT solvers like Z3 are deterministic and typically return the "simplest" solution, the generator employs a **Soft-Constraint Targeting** strategy to ensure diversity:
+    1.  **Bounding Box Extraction:** The generator reads metadata from the KeYmaera X model to define a sampling "bounding box" for each variable.
+    2.  **Randomized Targets:** For each buffer entry, a random target point is generated within these bounds.
+    3.  **Z3 Optimization:** The system constructs a Z3 `Optimize` query that combines the formal **Preconditions** (as hard constraints) with a **Soft Constraint** that pulls the solution toward the random target point.
+*   **Logical Consistency:** This process ensures that every starting point $(x_0, v_0, \dots)$ is not only diverse but is guaranteed to satisfy the complex logical assumptions of the proof. By populating this buffer at construction time, the environment provides high-speed resets during training without the overhead of calling the SMT solver in every episode.
 
 ### 6. Automated Code Serialization
 Finally, the generator uses a **Recursive Serializer** to embed a "snapshot" of the original AST directly into the Python file. This allows the environment to be "self-aware"—it carries its own formal specification with it. This enables advanced features like runtime debugging where the environment can print exactly which logical conjunct failed during a specific simulation step.
 
-Note: I dont understand this part
 
 ---
 
