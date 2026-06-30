@@ -48,7 +48,7 @@ from pyast_config import (
 class GeneratedKXEnv(_KeYmaeraXEnvBase):
     metadata = {"render_modes": ["human", "plot_data", "matplotlib"], "render_fps": 30}
 
-    def __init__(self, render_mode=None, cisb_size: int = 500, cisb_populate_attempts: int = 500, seed: Optional[int] = None, debug_mode: bool = False):
+    def __init__(self, render_mode=None, cisb_size: int = 1000, cisb_populate_attempts: int = 2000, seed: Optional[int] = None, debug_mode: bool = False):
         # Call base class constructor. It no longer calls _populate_cisb_diverse_z3 internally.
         super().__init__(config_serialized_str='''GymEnvironmentConfig(
             env_name='IJRR17_Theorem_14__Reach_waypoint_with_deadline',
