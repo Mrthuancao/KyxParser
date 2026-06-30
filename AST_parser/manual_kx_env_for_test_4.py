@@ -54,205 +54,47 @@ class GeneratedKXEnv(_KeYmaeraXEnvBase):
             env_name='IJRR17_Theorem_14__Reach_waypoint_with_deadline',
             definitions=DefinitionsConfig(
                 constants=[
-                    ConstantDefinitionConfig(
-                        name='ep',
-                        type='Real',
-                        value=None, # Still None in config, but we'll fix it below
-                        metadata={
-                            'type': 'const',
-                            'bound': '0.1:0.5',
-                            'def': 'time limit for control decisions'
-                        }
-                    ),
-                    ConstantDefinitionConfig(
-                        name='b',
-                        type='Real',
-                        value=None, # Still None in config, but we'll fix it below
-                        metadata={
-                            'type': 'const',
-                            'bound': '0.5:5.0',
-                            'def': 'minimum braking capability of the robot'
-                        }
-                    ),
-                    ConstantDefinitionConfig(
-                        name='A',
-                        type='Real',
-                        value=None, # Still None in config, but we'll fix it below
-                        metadata={
-                            'type': 'const',
-                            'bound': '1.0:10.0',
-                            'def': 'maximum acceleration'
-                        }
-                    ),
-                    ConstantDefinitionConfig(
-                        name='GDelta',
-                        type='Real',
-                        value=None,
-                        metadata={
-                            'type': 'const',
-                            'bound': '1.0:1000.0', # <--- INCREASED UPPER BOUND FOR GDelta
-                            'def': 'goal area size'
-                        }
-                    ),
-                    ConstantDefinitionConfig(
-                        name='Vmax',
-                        type='Real',
-                        value=None,
-                        metadata={
-                            'type': 'const',
-                            'bound': '5.0:30.0',
-                            'def': 'maximum robot velocity'
-                        }
-                    )
+                    ConstantDefinitionConfig(name='ep', type='Real', value=None, metadata={'type': 'const', 'bound': '0.1:0.5'}),
+                    ConstantDefinitionConfig(name='b', type='Real', value=None, metadata={'type': 'const', 'bound': '0.5:5.0'}),
+                    ConstantDefinitionConfig(name='A', type='Real', value=None, metadata={'type': 'const', 'bound': '1.0:10.0'}),
+                    ConstantDefinitionConfig(name='GDelta', type='Real', value=None, metadata={'type': 'const', 'bound': '1.0:1000.0'}),
+                    ConstantDefinitionConfig(name='Vmax', type='Real', value=None, metadata={'type': 'const', 'bound': '5.0:30.0'})
                 ],
                 functions=[
-                    FunctionDefinitionConfig(
-                        name='waypointStartDist',
-                        return_type='Real',
-                        parameters=[
-                            ('Real', 'xg')
-                        ],
-                        body='xg-GDelta',
-                        metadata={}
-                    ),
-                    FunctionDefinitionConfig(
-                        name='waypointEndDist',
-                        return_type='Real',
-                        parameters=[
-                            ('Real', 'xg')
-                        ],
-                        body='xg+GDelta',
-                        metadata={}
-                    ),
-                    FunctionDefinitionConfig(
-                        name='minV',
-                        return_type='Real',
-                        parameters=[],
-                        body='A*ep',
-                        metadata={}
-                    ),
-                    FunctionDefinitionConfig(
-                        name='maxTravelTime',
-                        return_type='Real',
-                        parameters=[
-                            ('Real', 'g')
-                        ],
-                        body='waypointStartDist(g)/minV()', # Call minV as a function
-                        metadata={}
-                    ),
-                    FunctionDefinitionConfig(
-                        name='stopTime',
-                        return_type='Real',
-                        parameters=[
-                            ('Real', 'v')
-                        ],
-                        body='v/b',
-                        metadata={}
-                    ),
-                    FunctionDefinitionConfig(
-                        name='speedUpTime',
-                        return_type='Real',
-                        parameters=[
-                            ('Real', 'v')
-                        ],
-                        body='ep-v/A',
-                        metadata={}
-                    ),
-                    FunctionDefinitionConfig(
-                        name='stopDist',
-                        return_type='Real',
-                        parameters=[
-                            ('Real', 'v')
-                        ],
-                        body='v^2/(2*b)',
-                        metadata={}
-                    ),
-                    FunctionDefinitionConfig(
-                        name='accComp',
-                        return_type='Real',
-                        parameters=[
-                            ('Real', 'v')
-                        ],
-                        body='((A/b + 1)*(A/2*ep^2 + ep*v))',
-                        metadata={}
-                    )
+                    FunctionDefinitionConfig(name='waypointStartDist', return_type='Real', parameters=[('Real', 'xg')], body='xg-GDelta'),
+                    FunctionDefinitionConfig(name='waypointEndDist', return_type='Real', parameters=[('Real', 'xg')], body='xg+GDelta'),
+                    FunctionDefinitionConfig(name='minV', return_type='Real', parameters=[], body='A*ep'),
+                    FunctionDefinitionConfig(name='maxTravelTime', return_type='Real', parameters=[('Real', 'g')], body='waypointStartDist(g)/minV()'),
+                    FunctionDefinitionConfig(name='stopTime', return_type='Real', parameters=[('Real', 'v')], body='v/b'),
+                    FunctionDefinitionConfig(name='speedUpTime', return_type='Real', parameters=[('Real', 'v')], body='ep-v/A'),
+                    FunctionDefinitionConfig(name='stopDist', return_type='Real', parameters=[('Real', 'v')], body='v^2/(2*b)'),
+                    FunctionDefinitionConfig(name='accComp', return_type='Real', parameters=[('Real', 'v')], body='((A/b + 1)*(A/2*ep^2 + ep*v))')
                 ],
                 predicates=[
-                    PredicateDefinitionConfig(
-                        name='bounds',
-                        parameters=[],
-                        body="""A > 0
-    & b > 0
-    & ep > 0
-    & Vmax >= 2*A*ep
-    & GDelta > Vmax*ep + Vmax^2/(2*b)""",
-                        metadata={}
-                    ),
-                    PredicateDefinitionConfig(
-                        name='initialState',
-                        parameters=[
-                            ('Real', 'xr'),
-                            ('Real', 'vr'),
-                            ('Real', 'xg'),
-                            ('Real', 'T')
-                        ],
-                        body="""vr = 0
-    & xr < waypointStartDist(xg)
-    & T > ep + maxTravelTime(xg-xr) + ep + stopTime(Vmax)""",
-                        metadata={}
-                    ),
-                    PredicateDefinitionConfig(
-                        name='assumptions',
-                        parameters=[
-                            ('Real', 'xr'),
-                            ('Real', 'vr'),
-                            ('Real', 'xg'),
-                            ('Real', 'T')
-                        ],
-                        body='bounds() & initialState(xr, vr, xg, T)',
-                        metadata={}
-                    ),
+                    PredicateDefinitionConfig(name='bounds', parameters=[], body="A > 0 & b > 0 & ep > 0 & Vmax >= 2*A*ep & GDelta > Vmax*ep + Vmax^2/(2*b)"),
+                    PredicateDefinitionConfig(name='initialState', parameters=[('Real', 'xr'), ('Real', 'vr'), ('Real', 'xg'), ('Real', 'T')], body="vr = 0 & xr < waypointStartDist(xg) & T > ep + maxTravelTime(xg-xr) + ep + stopTime(Vmax)"),
+                    PredicateDefinitionConfig(name='assumptions', parameters=[('Real', 'xr'), ('Real', 'vr'), ('Real', 'xg'), ('Real', 'T')], body='bounds() & initialState(xr, vr, xg, T)'),
                     PredicateDefinitionConfig(
                         name='loopinv',
-                        parameters=[
-                            ('Real', 'xr'),
-                            ('Real', 'vr'),
-                            ('Real', 'xg'),
-                            ('Real', 'T')
-                        ],
-                        body="""0 <= vr & vr <= Vmax & xr + stopDist(vr) < waypointEndDist(xg)
-                & (waypointStartDist(xg) < xr -> (vr = 0 | T >= stopTime(vr)))
-                & (xr <= waypointStartDist(xg) ->
-                    (vr >= minV() & T > maxTravelTime(xg-xr) + ep + stopTime(Vmax))
-                    | (vr <= minV() & T > speedUpTime(vr) + maxTravelTime(xg-xr) + ep + stopTime(Vmax)))""", # Call minV as a function
+                        parameters=[('Real', 'xr'), ('Real', 'vr'), ('Real', 'xg'), ('Real', 'T')],
+                        body="0 <= vr & vr <= Vmax & xr + stopDist(vr) < waypointEndDist(xg) & (waypointStartDist(xg) < xr -> (vr = 0 | T >= stopTime(vr))) & (xr <= waypointStartDist(xg) -> (vr >= minV() & T > maxTravelTime(xg-xr) + ep + stopTime(Vmax)) | (vr <= minV() & T > speedUpTime(vr) + maxTravelTime(xg-xr) + ep + stopTime(Vmax)))",
                         metadata={
                             'type': 'safety',
                             'penalty': '-1000',
-                            'on_failure': {
-                                'action': 'truncate',
-                                'status': 'failure'
-                            }
+                            'shape': '(waypointEndDist(xg) - (xr + stopDist(vr))) / 100.0', # Safety margin reward
+                            'on_failure': {'action': 'truncate', 'status': 'failure'}
                         }
                     ),
                     PredicateDefinitionConfig(
                         name='ensure',
-                        parameters=[
-                            ('Real', 'xr'),
-                            ('Real', 'vr'),
-                            ('Real', 'xg')
-                        ],
+                        parameters=[('Real', 'xr'), ('Real', 'vr'), ('Real', 'xg')],
                         body='waypointStartDist(xg) < xr & vr = 0',
                         metadata={
                             'type': 'progress',
                             'reward': '1000',
-                            'on_success': {
-                                'action': 'terminate',
-                                'status': 'success'
-                            },
-                            'on_failure': {
-                                'action': 'terminate',
-                                'status': 'failure'
-                            }
+                            'shape': '-abs(waypointStartDist(xg) - xr) / 10.0', # Continuous pull to goal
+                            'on_success': {'action': 'terminate', 'status': 'success'},
+                            'on_failure': {'action': 'terminate', 'status': 'failure'}
                         }
                     )
                 ],
@@ -262,157 +104,42 @@ class GeneratedKXEnv(_KeYmaeraXEnvBase):
                         action_space_config=ChoiceActionConfig(
                             level_name='ChoiceLevel_0',
                             choices=[
-                                SequenceActionConfig(
-                                    actions=[
-                                        ActionConstraintConfig(
-                                            formula='xr > waypointStartDist(xg)'
-                                        ),
-                                        DeterministicAssignmentActionConfig(
-                                            variable='ar',
-                                            value='-b'
-                                        )
-                                    ]
-                                ),
-                                SequenceActionConfig(
-                                    actions=[
-                                        ActionConstraintConfig(
-                                            formula='xr > waypointStartDist(xg) & vr = 0'
-                                        ),
-                                        DeterministicAssignmentActionConfig(
-                                            variable='ar',
-                                            value='0'
-                                        )
-                                    ]
-                                ),
-                                SequenceActionConfig(
-                                    actions=[
-                                        ActionConstraintConfig(
-                                            formula='xr <= waypointStartDist(xg) & (xr + stopDist(vr) + accComp(vr) < waypointEndDist(xg) & vr+A*ep <= Vmax)'
-                                        ),
-                                        DeterministicAssignmentActionConfig(
-                                            variable='ar',
-                                            value='A'
-                                        )
-                                    ]
-                                ),
-                                SequenceActionConfig(
-                                    actions=[
-                                        ActionConstraintConfig(
-                                            formula='xr <= waypointStartDist(xg) & !(xr + stopDist(vr) + accComp(vr) < waypointEndDist(xg) & vr+A*ep <= Vmax)'
-                                        ),
-                                        DeterministicAssignmentActionConfig(
-                                            variable='ar',
-                                            value='0'
-                                        )
-                                    ]
-                                )
+                                SequenceActionConfig(actions=[ActionConstraintConfig(formula='xr > waypointStartDist(xg)'), DeterministicAssignmentActionConfig(variable='ar', value='-b')]),
+                                SequenceActionConfig(actions=[ActionConstraintConfig(formula='xr > waypointStartDist(xg) & vr = 0'), DeterministicAssignmentActionConfig(variable='ar', value='0')]),
+                                SequenceActionConfig(actions=[ActionConstraintConfig(formula='xr <= waypointStartDist(xg) & (xr + stopDist(vr) + accComp(vr) < waypointEndDist(xg) & vr+A*ep <= Vmax)'), DeterministicAssignmentActionConfig(variable='ar', value='A')]),
+                                SequenceActionConfig(actions=[ActionConstraintConfig(formula='xr <= waypointStartDist(xg) & !(xr + stopDist(vr) + accComp(vr) < waypointEndDist(xg) & vr+A*ep <= Vmax)'), DeterministicAssignmentActionConfig(variable='ar', value='0')])
                             ]
-                        ),
-                        metadata={}
+                        )
                     ),
                     StepFuncConfig(
                         name='stepFunc',
-                        odes=[
-                            ODEConfig(
-                                variable='xr',
-                                equation='vr'
-                            ),
-                            ODEConfig(
-                                variable='vr',
-                                equation='ar'
-                            ),
-                            ODEConfig(
-                                variable='t',
-                                equation='1'
-                            ),
-                            ODEConfig(
-                                variable='T',
-                                equation='-1'
-                            )
-                        ],
-                        evolution_domain=EvolutionDomainConfig(
-                            constraints=[
-                                't <= ep',
-                                'vr >= 0'
-                            ]
-                        ),
-                        duration=None,
-                        raw_body_snippet="""{xr' = vr, vr' = ar, t' = 1, T'=-1 & t <= ep & vr >= 0}""",
-                        metadata={}
+                        odes=[ODEConfig(variable='xr', equation='vr'), ODEConfig(variable='vr', equation='ar'), ODEConfig(variable='t', equation='1'), ODEConfig(variable='T', equation='-1')],
+                        evolution_domain=EvolutionDomainConfig(constraints=['t <= ep', 'vr >= 0']),
+                        raw_body_snippet="{xr' = vr, vr' = ar, t' = 1, T'=-1 & t <= ep & vr >= 0}"
                     )
                 ]
             ),
             variables=VariablesConfig(
                 state_variables=[
-                    VariableDeclarationConfig(
-                        name='xr',
-                        type='Real',
-                        lower_bound='0',
-                        upper_bound='100'
-                    ),
-                    VariableDeclarationConfig(
-                        name='vr',
-                        type='Real',
-                        lower_bound='0',
-                        upper_bound='20'
-                    ),
-                    VariableDeclarationConfig(
-                        name='ar',
-                        type='Real',
-                        lower_bound='-10',
-                        upper_bound='10'
-                    ),
-                    VariableDeclarationConfig(
-                        name='xg',
-                        type='Real',
-                        lower_bound='0',
-                        upper_bound='100'
-                    ),
-                    VariableDeclarationConfig(
-                        name='t',
-                        type='Real',
-                        lower_bound='0',
-                        upper_bound='1'
-                    ),
-                    VariableDeclarationConfig(
-                        name='T',
-                        type='Real',
-                        lower_bound='0',
-                        upper_bound='1000'
-                    )
-                ],
-                auxiliary_variables=[]
+                    VariableDeclarationConfig(name='xr', type='Real', lower_bound='-200', upper_bound='200'),
+                    VariableDeclarationConfig(name='vr', type='Real', lower_bound='0', upper_bound='30'),
+                    VariableDeclarationConfig(name='ar', type='Real', lower_bound='-10', upper_bound='10'),
+                    VariableDeclarationConfig(name='xg', type='Real', lower_bound='-200', upper_bound='200'),
+                    VariableDeclarationConfig(name='t', type='Real', lower_bound='0', upper_bound='1'),
+                    VariableDeclarationConfig(name='T', type='Real', lower_bound='0', upper_bound='1000')
+                ]
             ),
             problem=ProblemConfig(
-                precondition=PreconditionConfig(
-                    formula='assumptions(xr, vr, xg, T)'
-                ),
+                precondition=PreconditionConfig(formula='assumptions(xr, vr, xg, T)'),
                 loop_execution=LoopExecutionConfig(
                     iterations='inf',
                     loop_invariant_formula='loopinv(xr, vr, xg, T)',
-                    loop_body=SequenceActionConfig(
-                        actions=[
-                            SequenceActionConfig(
-                                actions=[
-                                    CallHybridProgramConfig(
-                                        hp_name='controlFunc'
-                                    ),
-                                    DeterministicAssignmentActionConfig(
-                                        variable='t',
-                                        value='0'
-                                    )
-                                ]
-                            ),
-                            HybridProgramStepConfig(
-                                hp_name='stepFunc',
-                                invariant_formula='t>=0'
-                            )
-                        ]
-                    )
+                    loop_body=SequenceActionConfig(actions=[
+                        SequenceActionConfig(actions=[CallHybridProgramConfig(hp_name='controlFunc'), DeterministicAssignmentActionConfig(variable='t', value='0')]),
+                        HybridProgramStepConfig(hp_name='stepFunc', invariant_formula='t>=0')
+                    ])
                 ),
-                postconditions=[PostconditionConfig(
-                    formula='ensure(xr, vr, xg)'
-                )]
+                postconditions=[PostconditionConfig(formula='ensure(xr, vr, xg)')]
             )
         )''', render_mode=render_mode, cisb_size=cisb_size, cisb_populate_attempts=cisb_populate_attempts, seed=seed, debug_mode=debug_mode)
 
