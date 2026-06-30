@@ -1,4 +1,4 @@
-\section{Approach}
+section{Approach}
 
 % TODO running example to explain our approach
 
@@ -9,7 +9,7 @@
 ## 1. Overview
 The **RL-Annotation Syntax** is a comment-based Domain-Specific Language (DSL) designed to bridge KeYmaera X formal Differential Dynamic Logic (\(dL\)) models with Gymnasium Reinforcement Learning environments. By annotating definitions with category-specific tags like `@safety`, `@progress`, `@stability`, `@const`, or `@var`, developers can define complex reward structures, termination logic, and episode status directly within their formal models, without altering the underlying proof logic.
 
-The transpiler parses these annotations, attaches them to the corresponding Abstract Syntax Tree (AST) nodes, and maps them to the `step()` and `reset()` functions of a Gymnasium environment, facilitating a seamless transition from formal verification to RL training.
+The transpiler parses these annotations and attaches them as metadata to the corresponding Abstract Syntax Tree (AST) nodes. This structured configuration is then interpreted by the Gymnasium environment wrapper, which evaluates the annotated logic during the step() and reset() cycles to calculate rewards and state transitions..
 
 ## 2. General Syntax
 Annotations must be placed on the line immediately preceding a `Bool`, `Real`, or `HP` definition.
@@ -19,7 +19,7 @@ Annotations must be placed on the line immediately preceding a `Bool`, `Real`, o
 // @Category: key1=value1, key2=value2, ...
 Definition name(...) <-> ...
 ```
-Where `Category` is one of `safety`, `progress`, `stability`, `const`, or `var`.
+Where `Category` is one of `safety`, `progress`, `stability`, `const`, or `var` and `Definition` is one of `Bool`, `Real`, or `HP`.
 
 ---
 
@@ -146,6 +146,21 @@ Used for `Real` or `Bool` variables that define the state space of the environme
     Real x;
     ```
 
+### 4.2. Plotting and Diagnostics
+To facilitate training diagnosis, `@const` and `@var` support a `plot` attribute. This tells the transpiler/logger which variables to track and how to visualize them.
+
+*   **`plot=[type]`**: Specifies the visualization style for this variable.
+    *   `line`: Standard time-series plot (Value vs. Step).
+    *   `hist`: Distribution of the variable's values across the episode.
+    *   `scatter`: Used when tracking relationships between variables.
+    *   `none` (default): Variable is not plotted.
+
+**Example:**
+```java
+// @var: bound=[-10:10], plot=line, def="lateral error"
+Real e_y;
+```
+
 ---
 
 ## 5. Comprehensive Example
@@ -219,191 +234,9 @@ Bool ensure(Real x, Real y, Real xo, Real yo) <-> (
   (x - xo)^2 + (y - yo)^2 > 0
 );
 ```
-
 ---
 
-## 6. Transpiler Implementation Notes
-
-The Python transpiler is designed to process these annotations and generate robust Gymnasium environment code.
-
-### 6.1. Pre-processing (Regex Matching)
-The tool scans the KeYmaera X model file for annotation comments. The updated regex logic should identify the category-first tags and extract the associated attributes.
-
-```python
-import re
-
-def parse_annotations(file_content):
-    # Matches @category and the following definition.
-    # Captures the category, the attribute string, and the definition name.
-    pattern = r"// @(safety|progress|stability|const|var): (.*?)\n\s*(?:Bool|Real|HP)\s+(\w+)"
-    matches = re.findall(pattern, file_content)
-    
-    annotations = {}
-    for category, attr_string, def_name in matches:
-        attrs = {}
-        # This regex captures key=value pairs, handling curly braces, square brackets,
-        # and quoted strings for values.
-        attr_pairs_raw = re.findall(
-            r'(\w+)\s*=\s*'
-            r'(?:(\{.*?\})|'   # Group 1: curly braces
-            r'(\[.*?\])|'   # Group 2: square brackets
-            r'(\".*?\")|'   # Group 3: quoted string
-            r'([^,]*))',    # Group 4: anything else (non-comma)
-            attr_string
-        )
-        for match_tuple in attr_pairs_raw:
-            key = match_tuple # The actual key
-            # Find the first non-empty value from the capturing groups
-            value_raw = next((v for v in match_tuple[1:] if v), '').strip()
-            
-            # Remove surrounding delimiters for the final dict value
-            if (value_raw.startswith('{') and value_raw.endswith('}')) or \
-               (value_raw.startswith('[') and value_raw.endswith(']')) or \
-               (value_raw.startswith('"') and value_raw.endswith('"')):
-                attrs[key] = value_raw[1:-1].strip()
-            else:
-                # Handle on_success/on_failure values with optional status
-                if key in ['on_success', 'on_failure']:
-                    parts = value_raw.split(':', 1) # Split only on the first colon
-                    action = parts.strip()
-                    status = 'none' # Default status if not specified
-                    if len(parts) > 1:
-                        status_part = parts.strip()
-                        if status_part.startswith('status='):
-                            status = status_part[len('status='):].strip()
-                    attrs[key] = {'action': action, 'status': status}
-                else:
-                    attrs[key] = value_raw
-        
-        attrs['type'] = category  # Automatically assign type based on the tag used
-        annotations[def_name] = attrs
-            
-    return annotations
-```
-*Note: The regex for parsing `attr_string` is designed to handle nested curly braces to a certain degree, but highly complex nested expressions might require a more sophisticated parser (e.g., a stack-based approach for brace matching).*
-
-### 6.2. AST Linking
-During the traversal of the KeYmaera X Abstract Syntax Tree (AST), when a `FunctionDefinition` node (for `Bool`, `Real`, or `HP` definitions) is encountered, the pre-parsed metadata from the `annotations` dictionary is injected directly into that node's properties. This ensures that each relevant AST node carries its associated RL configuration.
-
-### 6.3. Code Generation (`env.step()`)
-The Python code generator iterates through all annotated AST nodes. For each node, it generates Python code that will be part of the Gymnasium `env.step()` method. This involves:
-*   Evaluating the boolean predicate of the definition to determine `condition_met`.
-*   Evaluating the `shape` expression.
-*   Conditionally evaluating `reward` or `penalty` based on `condition_met`.
-*   Summing these components to compute the `total_reward`.
-*   Applying `on_success` or `on_failure` logic to update `terminated`, `truncated`, and `info['is_success']`.
-
-The generated Python logic for each annotated predicate will resemble the following structure. Note that `is_terminated`, `is_truncated`, and `info_is_success` are typically aggregated across all predicates in a single `step()`.
-
-```python
-def calculate_predicate_reward_and_state(predicate_name, state_variables, current_global_state, annotations):
-    # current_global_state would be a dictionary holding the accumulated
-    # terminated, truncated, and is_success from previous predicates
-    # Initial values for current_global_state might be:
-    # {'terminated': False, 'truncated': False, 'is_success': None}
-    total_reward_for_predicate = 0
-    
-    # Evaluate the predicate's boolean condition
-    # (This part is specific to how your transpiler evaluates KeYmaera X predicates)
-    # Placeholder for actual predicate evaluation
-    condition_met = evaluate_keymaera_predicate(predicate_name, state_variables) 
-
-    # Retrieve annotations for this predicate
-    annotation_data = annotations.get(predicate_name, {})
-
-    # 1. Apply the continuous shape (Always)
-    if 'shape' in annotation_data:
-        shape_expr = annotation_data['shape']
-        total_reward_for_predicate += evaluate_expression(shape_expr, state_variables)
-
-    # 2. Apply discrete logic (reward or penalty) and control attributes
-    if condition_met:
-        if 'reward' in annotation_data:
-            reward_expr = annotation_data['reward']
-            total_reward_for_predicate += evaluate_expression(reward_expr, state_variables)
-        
-        # Apply on_success logic
-        on_success_config = annotation_data.get('on_success', {'action': 'continue', 'status': 'none'})
-        if on_success_config['action'] == 'terminate':
-            current_global_state['terminated'] = True
-        elif on_success_config['action'] == 'truncate':
-            current_global_state['truncated'] = True
-        
-        if on_success_config['status'] == 'success':
-            current_global_state['is_success'] = True
-        elif on_success_config['status'] == 'failure':
-            current_global_state['is_success'] = False
-        # If status is 'none', it doesn't modify current_global_state['is_success']
-    else: # condition_met is False
-        if 'penalty' in annotation_data:
-            penalty_expr = annotation_data['penalty']
-            total_reward_for_predicate += evaluate_expression(penalty_expr, state_variables)
-        
-        # Apply on_failure logic
-        on_failure_config = annotation_data.get('on_failure', {'action': 'continue', 'status': 'none'})
-        if on_failure_config['action'] == 'terminate':
-            current_global_state['terminated'] = True
-        elif on_failure_config['action'] == 'truncate':
-            current_global_state['truncated'] = True
-        
-        if on_failure_config['status'] == 'success':
-            current_global_state['is_success'] = True
-        elif on_failure_config['status'] == 'failure':
-            current_global_state['is_success'] = False
-        # If status is 'none', it doesn't modify current_global_state['is_success']
-    
-    return total_reward_for_predicate, current_global_state
-
-# Placeholder functions for demonstration purposes
-def evaluate_keymaera_predicate(predicate_name, state_variables):
-    # This function would contain the transpiled KeYmaera X predicate logic
-    # For example:
-    if predicate_name == "safeDist":
-        return state_variables['dist_to_obstacle'] > 0
-    elif predicate_name == "atGoal":
-        x, y, gx, gy = state_variables['x'], state_variables['y'], state_variables['gx'], state_variables['gy']
-        return (x-gx)**2 + (y-gy)**2 < 0.1
-    return False # Default
-
-def evaluate_expression(expression_str, state_variables):
-    # This function would safely evaluate the expression string using the state_variables
-    # WARNING: Using eval() directly with untrusted input is a security risk.
-    # A safer approach would be to parse the expression into an AST and evaluate it.
-    try:
-        # For demonstration, we'll use a simplified eval. In a real transpiler,
-        # you'd replace KeYmaera X operators and then evaluate safely.
-        # Example: Replace '^' with '**', '&' with 'and', '|' with 'or'
-        python_expression = expression_str.replace('^', '**').replace('&', 'and').replace('|', 'or')
-        # Handle 'if A then B else C' -> 'B if A else C'
-        if 'if' in python_expression and 'then' in python_expression and 'else' in python_expression:
-            parts = re.match(r'if (.*?) then (.*?) else (.*)', python_expression)
-            if parts:
-                condition, true_val, false_val = parts.groups()
-                python_expression = f"({true_val} if {condition} else {false_val})"
-
-        # Create a dictionary for local variables to pass to eval
-        eval_locals = {k: v for k, v in state_variables.items()}
-        # Add common math functions if needed
-        eval_locals['abs'] = abs 
-        
-        return eval(python_expression, {}, eval_locals)
-    except Exception as e:
-        print(f"Error evaluating expression '{expression_str}': {e}")
-        return 0 # Or handle error appropriately
-
-```
-*The `evaluate_keymaera_predicate` and `evaluate_expression` functions would be generated code that translates KeYmaera X logic into executable Python.*
-
-**Aggregation of `terminated`, `truncated`, and `is_success`:**
-When multiple predicates are evaluated in a single `step()`, the `terminated` and `truncated` flags are typically combined using a logical OR. If *any* predicate sets `terminated` or `truncated` to `True`, the episode ends.
-For `info['is_success']`, the aggregation needs careful consideration:
-*   If any predicate sets `is_success` to `False`, the overall `info['is_success']` for the step should be `False`. This takes precedence (a single failure means overall failure).
-*   Otherwise, if any predicate sets `is_success` to `True`, the overall `info['is_success']` for the step is `True`.
-*   If no predicate explicitly sets `is_success` (i.e., all `status` were `none`), the overall `info['is_success']` might remain `None` or default to `False` (depending on the environment's general policy).
-
----
-
-## 7. Why this System is Superior
+## 6. Why this System is Superior
 
 1.  **Semantic Clarity:** Category-first tags (`@safety`, `@progress`, `@stability`, `@const`, `@var`) provide immediate implicit meaning. The explicit `on_success` and `on_failure` attributes, now with distinct `action` and `status` components, further enhance readability by clearly stating the consequences of a predicate's truth value on both episode flow and overall success.
 2.  **Reward Decomposition Power:** Separating `reward`, `penalty`, and `shape` allows for highly nuanced reward engineering. This directly combats the "sparse reward" problem by providing continuous `shape` signals while retaining discrete `reward` bonuses or `penalty` costs for specific logical outcomes.
@@ -421,86 +254,91 @@ For `info['is_success']`, the aggregation needs careful consideration:
 
 % Talk about the AST
 
-This document provides a technical specification for the **KeYmaera X AST (Abstract Syntax Tree)** design. This AST is specifically architected to bridge the gap between formal Differential Dynamic Logic ($\text{d}\mathcal{L}$) and Reinforcement Learning (RL) environments.
+This is a sophisticated technical framework. To help you finish the documentation, I have structured the missing sections to align with your "Translation Engine" approach, specifically focusing on the **AST Node Redesign**, the **Variable Metadata details**, and the **Mapping Logic**.
+
+Here is the completed and refined documentation for your technical specification.
 
 ---
 
-### 1. Architectural Overview
-The AST serves as the intermediate representation (IR) that allows the synthesis engine to perform two critical tasks:
-1.  **Symbolic Execution:** Parsing the Hybrid Program (HP) to determine state transitions and action spaces.
-2.  **Logic-to-Reward Mapping:** Extracting metadata-tagged predicates to automatically construct reward functions and safety monitors.
-
-The hierarchy is rooted in `ASTConfigNode` and organized into six functional packages.
-
----
-
-### 2. Node Package Specifications
+### 2. Node Package Specifications (Revised)
 
 #### A. Structural & Definition Nodes
 These nodes represent the high-level organization of a KeYmaera X model.
 *   **`GymEnvironmentConfig`**: The root node containing the environment name and links to definitions, variables, and the problem statement.
 *   **`DefinitionConfig`**: A container for constants, functions, and predicates.
-*   **`HybridProgramDefinitionConfig`**: Specifically handles the `HP` blocks.
-    *   `ControlFuncConfig`: Maps to the discrete/continuous action selection logic.
-    *   `StepFuncConfig`: Maps to the continuous ODE system.
+*   **`VariableConfig`**: A central registry for all state and auxiliary variables, ensuring consistent indexing across the physics engine and the RL observation space.
+*   **`ProgramConfig`**: Defines the execution flow, linking the initialization (preconditions) to the control loop and final objectives (postconditions).
 
 #### B. Variable & Type Nodes
-Handles the declaration of the state space.
+Handles the declaration of the state space and its physical constraints.
 *   **`VariableDeclarationConfig`**: Captures the name and type (Real/Bool). In the synthesis phase, these are used to define the `gym.spaces.Box` dimensions.
-*   **`IdentifierConfig`**: Used for cross-referencing variables within expressions to ensure type safety.
+*   **Metadata Enrichment**: Each variable node supports a `Metadata` object with the following attributes:
+    *   `bound`: A range `[min:max]` used to define the Gymnasium `Box` space and the SMT sampling volume.
+    *   `def`: A string description for auto-generating documentation and debugging logs.
+    *   `plot`: A visualization tag (`line`, `hist`, `scatter`) that tells the environment's `render()` function which variables to track in real-time.
 
-#### C. Expression Nodes (The Math Engine)
-This is the most granular part of the new AST, allowing the generator to translate math into Python/NumPy lambdas.
-*   **`LiteralConfig`**: Represents hardcoded values (e.g., `0.5`, `10`, `True`).
-*   **`FunctionCallConfig`**: Enables the reuse of defined logic (e.g., calling `stopDist(v)` inside a safety invariant).
-*   **`Binary/UnaryOperatorConfig`**: Supports full arithmetic ($+, -, *, /, \text{^}$) and logical ($\wedge, \vee, \neg, \rightarrow, \leftrightarrow$) operations.
+#### C. Formula Nodes (The Math Engine)
+*Experimental Design Note: These nodes are currently being unified to support both Python lambda generation and Z3 SMT expression building.*
+*   **`LiteralConfig`**: Hardcoded values (e.g., `0.5`, `10`, `True`).
+*   **`FunctionCallConfig`**: Enables the reuse of defined logic (e.g., calling `stopDist(v)`).
+*   **`Binary/UnaryOperatorConfig`**: Supports full arithmetic (\(+, -, *, /, \text{^}\)) and logical (\(\wedge, \vee, \neg, \rightarrow, \leftrightarrow\)) operations.
 *   **`Modal Operators`**:
-    *   `BoxModalOperatorConfig` ($[\alpha]\phi$): Represents "In all executions of $\alpha$, $\phi$ holds." Used to define safety requirements.
-    *   `DiamondModalOperatorConfig` ($\langle\alpha\rangle\phi$): Represents "There exists an execution of $\alpha$ where $\phi$ holds." Used for reachability/goal logic.
+    *   `BoxModalOperatorConfig` (\([\alpha]\phi\)): Defines safety requirements. If \(\alpha\) is the hybrid program, \(\phi\) must hold for all traces.
+    *   `DiamondModalOperatorConfig` (\(\langle\alpha\rangle\phi\)): Defines reachability. Used to synthesize the "Success" condition in RL.
 
 #### D. HP Statement Nodes (The Execution Logic)
-These nodes define how the system state changes over time.
-*   **`AssignmentConfig` ($:=$)**: Deterministic state updates.
-*   **`NondeterministicAssignmentConfig` ($:= *$)**: Represents an environment or agent choice. This is the primary trigger for creating an **Action Space**.
-*   **`GuardConfig` ($?$)**: Conditional execution. In RL, these are converted into "Action Masks" or "Validity Checks."
-*   **`DifferentialEquationBlockConfig`**: Contains a list of `ODEConfig` objects (e.g., $x' = f(x)$) and an evolution domain (e.g., $v \geq 0$).
+*Experimental Design Note: These nodes map the "Control" and "Plant" of the Hybrid Program.*
+*   **`AssignmentConfig` (\(:=\))**: Deterministic state updates.
+*   **`NondeterministicAssignmentConfig` (\(:= *\))**: Triggers the creation of a continuous `Box` action space.
+*   **`NondeterministicChoiceOperatorConfig` (\(++\))**: Triggers the creation of a `Discrete` action space.
+*   **`GuardConfig` (\(?\))**: Converted into "Action Masks" to prevent the RL agent from selecting logically invalid branches.
+*   **`DifferentialEquationBlockConfig`**: Contains `ODEConfig` objects (e.g., \(x' = f(x)\)) and an evolution domain (e.g., \(v \geq 0\)).
 
 ---
 
-### 3. Mapping Logic to RL Components
-Using the provided `IJRR17` example, the AST facilitates the following automated mapping:
 
-| KeYmaera X Construct | AST Node Type | RL Implementation |
-| :--- | :--- | :--- |
-| `Real x;` | `VariableDeclarationConfig` | `obs_space['x']` |
-| `a := -b ++ {?v=0; a:=0}` | `NondeterministicChoiceOperatorConfig` | `Discrete(3)` Action Space |
-| `isSafe(...)` | `PredicateDefinitionConfig` | Safety Monitor / Termination Logic |
-| `@progress: shape={...}` | `Metadata` in `PredicateDefinition` | Reward Shaping Function |
-| `x' = v, t <= ep` | `DifferentialEquationBlockConfig` | `scipy.integrate.solve_ivp` |
-| `assumptions(...)` | `PreconditionConfig` | `env.reset()` via Z3 SMT Solver |
 
----
+### 4. Metadata Enrichment and Attribute Meanings
 
-### 4. Metadata Enrichment
-The AST is designed to parse comments as metadata to guide the RL synthesis. For example, the node for `isSafe` would contain a `Metadata` object:
+The AST parses specialized comments to guide the RL synthesis. This allows the formal modeler to influence the agent's behavior without changing the proof.
+
+#### Example: Variable Metadata
+```java
+// @var: bound=[-10:10], plot=line, def="lateral error"
+Real e_y;
+```
+*   **`bound`**: Strictly defines the `gym.spaces.Box` limits. Values outside this range during training may trigger truncation.
+*   **`plot`**: Automatically adds `e_y` to the Matplotlib/Live-plotter buffer during `env.render()`.
+*   **`def`**: Used as the label for the Y-axis in plots and the key in the `info` dictionary.
+
+#### Example: Predicate Metadata (Reward Shaping)
 ```json
 {
   "type": "safety",
   "penalty": -1000,
-  "shape": "(abs(x-xo) - stopDist(v)) + (abs(y-yo) - stopDist(v))",
-  "on_failure": "truncate"
+  "shape": "(abs(x-xo) - stopDist(v))",
+  "on_failure": "truncate:status=failure"
 }
 ```
-This allows the **Expression Nodes** to not only represent the boolean truth of the safety statement but also the "distance to violation" used for dense reward signals.
+*   **`type`**: Categorizes the logic (`safety`, `progress`, `stability`).
+*   **`penalty/reward`**: Discrete values applied when the predicate's boolean truth value changes.
+*   **`shape`**: A continuous mathematical expression. It provides a "gradient" (e.g., distance to an obstacle) so the agent learns even when it hasn't "failed" yet.
+*   **`on_failure/on_success`**: Defines the episode lifecycle. `truncate` stops the clock, while `status=failure` sets the `info['is_success']` flag to `False`.
 
 ---
 
-### 5. Implementation Strategy (Visitor Pattern)
-To process this AST, the framework utilizes a **Recursive Visitor Pattern**:
-1.  **`LogicToPythonVisitor`**: Traverses `AbstractExpressionConfig` to generate string-based Python expressions for NumPy.
-2.  **`ActionSpaceVisitor`**: Traverses the `controlFunc` to count non-deterministic branches and assignments to determine the `gym.ActionSpace`.
-3.  **`ODEVisitor`**: Extracts equations from `DifferentialEquationBlockConfig` to build the derivative function for the numerical solver.
-4.  **`SMTVisitor`**: Translates `assumptions` into SMT-LIB format for initial state sampling.
+### 5. The Synthesis Pipeline: From AST to Python
+
+1.  **Parsing**: The KeYmaera X `.kyx` file is converted into the `GymEnvironmentConfig` AST.
+2.  **SMT Seeding**: The `PreconditionConfig` is sent to Z3. The solver finds a manifold of valid starting states, which are cached in the **Precondition-Satisfying Buffer**.
+3.  **ODE Compilation**: The `DifferentialEquationBlockConfig` is serialized into a Python string, then `exec()`'d into a compiled function for `scipy.integrate.solve_ivp`.
+4.  **Action Space Branching**: The generator traverses the `controlFunc` node. Every `++` operator increments the `Discrete` action space size. Every `?` guard is mapped to a boolean check in the `get_action_mask()` method.
+5.  **Serialization**: The entire AST is embedded as a JSON/Serialized string inside the generated Python file, making the environment "self-documenting."
+
+---
+
+### Summary for the Approach Section
+> "Our framework bridges the gap between formal verification and practical control by treating the KeYmaera X AST as a blueprint for a Markov Decision Process (MDP). By extracting the physical dynamics into a high-fidelity ODE solver and the logical invariants into a dense reward function, we ensure that the RL agent is not merely maximizing a heuristic, but is actively guided by the formal safety properties of the original $\text{d}\mathcal{L}$ model."
 
 % Gym function for parsing the AST
 
@@ -515,7 +353,7 @@ The approach follows a **Model-Driven Engineering (MDE)** pattern. It begins wit
 
 ### 2. Translation of Hybrid Dynamics (The Physics Engine)
 The continuous portion of the KeYmaera X model (the Hybrid Program) is converted into a numerical simulation:
-*   **ODE Extraction:** The generator identifies the differential equations (e.g., $x' = v, v' = a$) and the evolution domain constraints (e.g., $v \geq 0$).
+*   **ODE Extraction:** The generator identifies the differential equations (e.g., $x' = v, v' = a$) and the evolution domain constraints (e.g., $v \geq 0$). Note: How does the generator do this
 *   **Dynamic Compilation:** These equations are transformed into a Python-executable format. At runtime, the environment uses high-precision numerical integrators (like `solve_ivp`) to propagate the state.
 *   **Event-Triggered Termination:** Evolution domains are converted into "ODE Events." If an agent’s action would cause the system to violate a physical boundary (like velocity dropping below zero), the integrator stops exactly at the boundary, mimicking the "guard" behavior in formal logic.
 
@@ -525,21 +363,51 @@ The generator automates the definition of the MDP (Markov Decision Process) inte
 *   **Action Space Branching:** The generator analyzes the "Control" part of the hybrid program. If the model uses non-deterministic choices (the `++` operator), the generator synthesizes a `Discrete` action space where each index corresponds to a logical branch. If the model uses assignments, it creates a `Box` space for continuous control inputs.
 *   **Logic-to-Lambda Conversion:** Symbolic expressions (e.g., $v^2 / (2b)$) are parsed and converted into Python `lambda` functions. This allows the environment to evaluate complex mathematical guards in real-time during the step function.
 
+Note: I need to revisit this in the generator
+
 ### 4. Formal Specification as Reward and Monitor
 A key innovation of this approach is the **Automatic Reward Shaping** derived from proof obligations:
 *   **Safety Monitors (Invariants):** The "Loop Invariant" of the formal proof is used as a continuous safety monitor. The generator wraps the `step()` function with checks that evaluate these invariants. If an action leads to a state where the invariant is false, the environment applies a "Safety Penalty" and terminates the episode.
 *   **Goal Alignment (Postconditions):** The "Ensure" predicates (the desired outcomes of the proof) are mapped to the termination logic. The environment distinguishes between "Success" (satisfying the postcondition) and "Failure" (violating an invariant), providing a clear signal for the RL agent.
 *   **Metadata-Driven Rewards:** The system parses metadata tags within the KeYmaera X model to assign specific numerical weights to different predicates, allowing the formal modeler to "hint" at the importance of certain safety or progress conditions.
 
-### 5. SMT-Backed Environment Resetting
-To solve the "Initial State Problem" in RL, the generator utilizes the model's **Preconditions**:
-*   **Constraint Satisfaction:** The environment includes a "Constrained Initial State Buffer" (CISB). 
-*   **Z3 Integration:** During the generation phase, the system prepares the preconditions for an SMT solver (Z3). When the environment is initialized, it uses Z3 to find a diverse set of starting points $(x_0, v_0, \dots)$ that satisfy all initial assumptions of the proof. This ensures the agent is only ever trained on valid, physically meaningful scenarios.
+Note: Need to recheck this, is ensure got hard coded as a reserved keyword and loop variant?
+
+### 5. SMT-Seeded Initial State Sampling
+To ensure the Reinforcement Learning agent is trained only on states that are logically and physically valid according to the formal proof, the generator automates the initialization process using the model's **Preconditions**:
+
+*   **Precondition-Satisfying Buffer:** During the environment's construction phase, a buffer of valid initial states is pre-populated. This prevents the "cold start" problem where an agent might otherwise begin in an unreachable or logically impossible state.
+*   **Stochastic SMT Solving (Z3):** Since standard SMT solvers like Z3 are deterministic and typically return the "simplest" solution, the generator employs a **Soft-Constraint Targeting** strategy to ensure diversity:
+    1.  **Bounding Box Extraction:** The generator reads metadata from the KeYmaera X model to define a sampling "bounding box" for each variable.
+    2.  **Randomized Targets:** For each buffer entry, a random target point is generated within these bounds.
+    3.  **Z3 Optimization:** The system constructs a Z3 `Optimize` query that combines the formal **Preconditions** (as hard constraints) with a **Soft Constraint** that pulls the solution toward the random target point.
+*   **Logical Consistency:** This process ensures that every starting point $(x_0, v_0, \dots)$ is not only diverse but is guaranteed to satisfy the complex logical assumptions of the proof. By populating this buffer at construction time, the environment provides high-speed resets during training without the overhead of calling the SMT solver in every episode.
 
 ### 6. Automated Code Serialization
 Finally, the generator uses a **Recursive Serializer** to embed a "snapshot" of the original AST directly into the Python file. This allows the environment to be "self-aware"—it carries its own formal specification with it. This enables advanced features like runtime debugging where the environment can print exactly which logical conjunct failed during a specific simulation step.
+
 
 ---
 
 ### Suggested Paragraph for your Paper:
 > "Our framework implements a syntax-directed translation from KeYmaera X Differential Dynamic Logic ($\text{d}\mathcal{L}$) to the Gymnasium interface. The synthesis engine performs three critical tasks: first, it compiles symbolic differential equations into a robust numerical physics engine; second, it maps the non-deterministic control structures of the hybrid program into a structured action space; and third, it transforms formal invariants and postconditions into a multi-objective reward function. By leveraging SMT solvers to satisfy model preconditions during initialization, the generated environment guarantees that the RL agent's training distribution remains consistent with the formal proof's assumptions. This automated bridge allows researchers to move from a verified high-level control model to a deep reinforcement learning implementation without manual coding, ensuring that the safety properties of the formal model are strictly monitored throughout the learning process."
+
+\paragraph{Translation}
+
+% TODO describe "parser" here (look at Fig. 2 here: https://arxiv.org/pdf/2305.08812)
+
+### 3. Mapping Logic to RL Components
+
+The AST facilitates a direct "Syntax-Directed Translation" from logic to Python code:
+
+| KeYmaera X Construct | AST Node Type | RL Implementation |
+| :--- | :--- | :--- |
+| `Real x;` | `VariableDeclarationConfig` | `obs_space['x']` |
+| `a := -b ++ {?v=0; a:=0}` | `NondeterministicChoiceOperatorConfig` | `Discrete(3)` Action Space |
+| `isSafe(...)` | `PredicateDefinitionConfig` | Safety Monitor / Termination Logic |
+| `@progress: shape={...}` | `Metadata` in `PredicateDefinition` | Reward Shaping Function |
+| `x' = v, t <= ep` | `DifferentialEquationBlockConfig` | `scipy.integrate.solve_ivp` |
+| `assumptions(...)` | `PreconditionConfig` | `env.reset()` via Z3 SMT Solver |
+
+---
+
