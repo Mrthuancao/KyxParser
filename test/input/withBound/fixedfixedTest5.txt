@@ -1,0 +1,145 @@
+/*
+ *	Robot must safely cross an intersection.
+ *  Theorem "IJRR17/Theorem 15: Cross intersection with deadline"
+ */
+
+Definitions
+  // @const: bound=[0.01:0.1]; def="time limit for control decisions"
+  Real ep;      /* time limit for control decisions */
+  // @const: bound=[0.5:5.0]; def="minimum braking capability of the robot"
+  Real b;       /* minimum braking capability of the robot */
+  // @const: bound=[1.0:10.0]; def="maximum acceleration"
+  Real A;       /* maximum acceleration -b <= a <= A */
+  // @const: bound=[0.1:2.0]; def="obstacle minimum speed"
+  Real Vmin;    /* obstacle minimum speed */
+  Real ixr = 0; /* position of intersection on path of robot */
+  Real ixo = 0; /* position of intersection on path of obstacle */
+  // @const: bound=[1.0:10.0]; def="deadline for robot to cross intersection"
+  Real D;       /* Deadline */
+
+  Real minV = A*ep;
+
+  Real stopDist(Real v) = v^2/(2*b);
+  Real accComp(Real v)  = ( (A/b + 1)*(A/2*ep^2 + ep*v) );
+
+  Bool OAfterX(Real xo) <-> xo>ixo;
+  Bool RAfterX(Real xr) <-> xr>ixr;
+
+  // Global Bounds
+  Bool bounds() <-> (
+      A > 0 
+    & b > 0 
+    & ep > 0 
+    & Vmin > 0
+    & D >= ep
+  );
+
+  // Initial Conditions
+  Bool initialState(Real xr, Real vr, Real ixr, Real xo, Real vo, Real ixo, Real T) <-> (
+    vr = 0
+    & vo>=Vmin
+    & xr < ixr
+    & ixr-xr < A/2*(D-ep)^2
+    & T = min(0, (xo-ixo)/Vmin) - ep
+    & RAfterX(xr + A/2*(D - ep)^2)
+  );
+
+  Bool assumptions(Real xr, Real vr, Real ixr, Real xo, Real vo, Real ixo, Real T) <->
+    bounds() & initialState(xr, vr, ixr, xo, vo, ixo, T);
+
+  // Safety Invariant
+  // @safety: penalty=-1000, on_failure=truncate:status=failure, on_success=continue:status=none
+  Bool safetyloopinv(Real xr, Real vr, Real ixr, Real xo, Real vo, Real ixo) <-> (
+    0 <= vr & Vmin<=vo & (RAfterX(xr) | OAfterX(xo) | xr + stopDist(vr) < ixr |
+      (vr>0 & ( xo+vo*(ixr-xr)/vr+A/2*((ixr-xr)/vr)^2 < ixo
+              | ixo < xo + Vmin*(ixr-xr)/vr))
+    )
+  );
+
+  // Deadline Invariant
+  // @progress: reward=10, on_success=continue:status=none, on_failure=continue:status=none, shape={-T}
+  Bool deadlineloopinv(Real xr, Real vr, Real ixr, Real xo, Real vo, Real ixo, Real T) <-> (
+    0 <= vr & Vmin<=vo
+    & T <= (xo-ixo)/Vmin
+    & ( T <= 0 & RAfterX(xr + A/2*(D - ep)^2)
+      | T > 0 & RAfterX(xr + vr*(max(0,D-T)) + A/2*(max(0,D-T))^2) )
+  );
+
+  HP controlFunc ::= {
+    // Obstacle's action
+    ao := *; ?-b<=ao & ao<=A;
+    
+    // Robot's action rewritten from if-else to {P?; A;} ++ {!P?; B;}
+    {
+      ?OAfterX(xo); 
+      ar := A;
+    } ++ {
+      ?!OAfterX(xo);
+      {
+        ?RAfterX(xr);
+        ar := *; ?-b<=ar & ar<=A;
+      } ++ {
+        ?!RAfterX(xr);
+        {
+          ?(vr>0 & ( xo+vo*(ixr-xr)/vr+A/2*((ixr-xr)/vr)^2 < ixo | ixo < xo + Vmin*(ixr-xr)/(vr+A*ep) ));
+          ar := *; ?0<=ar & ar<=A;
+        } ++ {
+          ?!(vr>0 & ( xo+vo*(ixr-xr)/vr+A/2*((ixr-xr)/vr)^2 < ixo | ixo < xo + Vmin*(ixr-xr)/(vr+A*ep) ));
+          {
+            ?(vr>0 & ixo < xo + Vmin*(ixr-xr)/vr);
+            ar := 0;
+          } ++ {
+            ?!(vr>0 & ixo < xo + Vmin*(ixr-xr)/vr);
+            { ar := -b; } 
+            ++ { ?vr = 0; ar := 0; }
+            ++ { ?xr + stopDist(vr) + accComp(vr) < ixr; ar := A; }
+          }
+        }
+      }
+    };
+    t := 0;
+  };
+
+  HP stepFunc ::= { {xr' = vr, vr' = ar, xo'=vo, vo'=ao, t' = 1, T'=-1 & t <= ep & vr >= 0 & vo>=Vmin } };
+
+  HP dwwcxd ::= {
+    {
+      controlFunc;
+      stepFunc;
+    }*@invariant(safetyloopinv(xr, vr, ixr, xo, vo, ixo) & deadlineloopinv(xr, vr, ixr, xo, vo, ixo, T))
+  };
+
+  // @safety: penalty=-1000, on_failure=terminate:status=failure, on_success=continue:status=none
+  Bool finalSafety(Real xr, Real xo, Real T) <-> ( (xr=ixr -> xo!=ixo) & (T>=D -> RAfterX(xr)) );
+
+  // @progress: reward=500, on_success=terminate:status=success, on_failure=terminate:status=failure
+  Bool ensure(Real xr) <-> RAfterX(xr);
+
+End.
+
+ProgramVariables
+  // @var: bound=[0:100]; def="robot position: x"
+  Real xr;
+  // @var: bound=[0:20]; def="robot translational velocity"
+  Real vr;
+  // @var: bound=[-10:10]; def="robot translational acceleration"
+  Real ar;
+  // @var: bound=[0:100]; def="obstacle position: x"
+  Real xo;
+  // @var: bound=[0:20]; def="obstacle velocity"
+  Real vo;
+  // @var: bound=[-10:10]; def="obstacle acceleration"
+  Real ao;
+  // @var: bound=[0:1]; def="time elapsed in current control step"
+  Real t;
+  // @var: bound=[-100:100]; def="remaining time until deadline"
+  Real T;
+End.
+
+Problem
+  assumptions(xr, vr, ixr, xo, vo, ixo, T)
+    ->
+    [ dwwcxd; ]finalSafety(xr, xo, T)
+    &
+    < dwwcxd; >ensure(xr)
+End.
