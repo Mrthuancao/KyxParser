@@ -9,13 +9,14 @@ import pandas as pd
 from typing import List, Dict, Any, Optional, Tuple, Union, Callable
 from abc import ABC, abstractmethod
 
-# NEW: Import expression_helpers for AST-based Z3 conversion
-from gym_generator.expression_helpers import format_kx_expr_for_z3_formula_generator
-from gym_generator.expression_helpers import expand_formula as ast_expand_formula # Alias to avoid name collision with self._expand_formula
+# The import for ast_expand_formula has been removed as the expansion logic is now
+# handled directly within _expand_formula in this file.
+from gym_generator.expression_helpers import format_kx_expr_for_z3_formula_generator, expand_formula # Import expand_formula here
 
 # NEW: Import cisb_analysis functions
 # Assuming cisb_analysis.py is in the same directory or an accessible package path
 from gym_generator.cisb_analysis import analyze_cisb_diversity, get_dynamic_bounding_box_defs, is_value_in_bounding_box, _approx_eq_helper
+# this is filed AST_parser/gym_generator/kx_env_base.py
 
 # NEW: Safe division helper
 def safe_div(a, b):
@@ -65,28 +66,29 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
             'list': list, 'dict': dict, 'tuple': tuple, 'None': None, 'True': True, 'False': False
         })
 
+        if self.debug_mode:
+            print(f"DEBUG_BASE_INIT: Raw config_serialized_str received:\n{config_serialized_str}") # Print full string
+            print(f"DEBUG_BASE_INIT: Hash of config_serialized_str: {hash(config_serialized_str)}") # Add hash to detect changes
+
         try:
             self.config: GymEnvironmentConfig = eval(config_serialized_str, {'__builtins__': None}, ast_classes_for_eval)
             if self.debug_mode:
-                print(f"DEBUG_INIT: Deserialization successful.")
-                print(f"DEBUG_INIT: Type of self.config: {type(self.config)}")
-                print(f"DEBUG_INIT: self.config.problem: {self.config.problem}")
-                if self.config.problem:
-                    print(f"DEBUG_INIT: Type of self.config.problem: {type(self.config.problem)}")
-                    print(f"DEBUG_INIT: self.config.problem.loop_execution: {self.config.problem.loop_execution}")
-                    if self.config.problem.loop_execution:
-                        print(f"DEBUG_INIT: Type of self.config.problem.loop_execution: {type(self.config.problem.loop_execution)}")
-                        print(f"DEBUG_INIT: self.config.problem.loop_execution.loop_invariant_formula: {self.config.problem.loop_execution.loop_invariant_formula}")
-                    else:
-                        print(f"DEBUG_INIT: self.config.problem.loop_execution is None.")
-                else:
-                    print(f"DEBUG_INIT: self.config.problem is None.")
+                print(f"DEBUG_BASE_INIT: Deserialization successful.")
+                # ADDED: Print the actual content of state_variables after deserialization
+                print(f"DEBUG_BASE_INIT: Content of self.config.variables.state_variables names (after eval): {[v.name for v in self.config.variables.state_variables]}")
+                print(f"DEBUG_BASE_INIT: Length of self.config.variables.state_variables: {len(self.config.variables.state_variables)}")
+                print(f"DEBUG_BASE_INIT: id(self.config.variables) after eval: {id(self.config.variables)}")
         except Exception as e:
             raise ValueError(f"Failed to deserialize GymEnvironmentConfig: {e}")
 
         self._definitions_config = self.config.definitions
         self._variables_config = self.config.variables
         self._problem_config = self.config.problem
+        if self.debug_mode:
+            print(f"DEBUG_BASE_INIT: id(self._variables_config) after assignment: {id(self._variables_config)}")
+            print(f"DEBUG_BASE_INIT: Content of self._variables_config.state_variables names (after assignment): {[v.name for v in self._variables_config.state_variables]}")
+
+
         self.equality_tolerance = 1e-7
         self.z3_equality_tolerance = 0.05
 
@@ -100,13 +102,12 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
         self.predicates: Dict[str, Any] = {}
 
         self._state_keys: List[str] = [v.name for v in self._variables_config.state_variables]
+        if self.debug_mode:
+            print(f"DEBUG_BASE_INIT: _state_keys after parsing config: {self._state_keys}, length: {len(self._state_keys)}")
+            print(f"DEBUG_BASE_INIT: id(self._state_keys) after parsing config: {id(self._state_keys)}")
+
         self.state: Dict[str, float] = {key: 0.0 for key in self._state_keys}
-
-        if 't' not in self.state:
-            self.state['t'] = 0.0
-            if 't' not in self._state_keys:
-                self._state_keys.append('t')
-
+        
         self.last_failing_precondition_formula = None
         self._ode_func_compiled = None
         self._ode_events_compiled = None
@@ -121,10 +122,6 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
         self._cisb_populate_attempts = cisb_populate_attempts
         self.sample_ranges: Dict[str, Tuple[float, float]] = {}
         
-        # This call is now moved to the child class (GeneratedKXEnv)
-        # after it has a chance to set its fixed constants.
-        # REMOVED: self._populate_cisb_diverse_z3()
-
     def _evaluate_expression(self, expr_str: str, local_vars: Optional[Dict[str, Any]] = None, is_constraint: bool = False) -> Any:
         """
         Safe evaluation of expressions using environment's context.
@@ -288,31 +285,24 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
                 else:
                     return f"({left}) {rel_op_found_py} ({right})"
 
-            # If no operators, it's a literal or identifier or function call
+            # If no logical operators, it's a literal or identifier or function call
             return sub_expr
 
-        expr_py_final = _parse_expression_recursive_runtime(processed_expr.replace('^', '**').replace('abs(', 'np.abs('))
+        expr_py_transformed = _parse_expression_recursive_runtime(processed_expr.replace('^', '**').replace('abs(', 'np.abs('))
 
         try:
             eval_globals_for_eval = {'np': np, 'math': math, '_approx_eq': self._approx_eq, 'self': self, 'safe_div': safe_div}
-            result = eval(expr_py_final, eval_globals_for_eval, local_vars)
+            result = eval(expr_py_transformed, eval_globals_for_eval, local_vars)
             return result
         except Exception as e:
             if self.debug_mode:
-                print(f"DEBUG_EVAL: Error evaluating expression '{expr_str}' (transformed: '{expr_py_final}'): {e}")
+                print(f"DEBUG_EVAL: Error evaluating expression '{expr_str}' (transformed: '{expr_py_transformed}'): {e}")
             if is_constraint:
                 return False
             raise
 
-    def _expand_formula(self, formula_str: str, definitions: Any) -> str:
-        """
-        Recursively expands predicate calls within a formula string.
-        This returns the formula in KeYmaera X syntax, suitable for further parsing.
-        It handles simple argument substitution.
-        """
-        # Now uses the AST-based expand_formula from expression_helpers
-        return ast_expand_formula(formula_str, definitions)
-
+    # Removed the _expand_formula method from kx_env_base.py
+    # The expansion is now handled by expression_helpers.expand_formula
 
     def _split_top_level_and_local(self, formula_str: str) -> List[str]:
         """
@@ -574,10 +564,15 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
     def _kx_expr_to_z3_formula(self, kx_expr: str, z3_symbol_map: Dict[str, Any], fixed_constants: Dict[str, Union[int, float]]) -> Any:
         """
         Converts a KeYmaera X expression string into a Z3 formula using the AST-based parser.
+        This function now relies on `expression_helpers.format_kx_expr_for_z3_formula_generator`
+        to handle both parsing and predicate expansion.
         """
+        if self.debug_mode:
+            print(f"DEBUG_CISB: Preparing KeYmaera X expression for Z3 conversion: {kx_expr}")
+
         return format_kx_expr_for_z3_formula_generator(
-            kx_expr,
-            self._definitions_config, # Pass DefinitionsConfig for predicate expansion
+            kx_expr, # Pass the original expression, expansion will happen inside
+            self._definitions_config,
             z3_symbol_map,
             fixed_constants,
             self.z3_equality_tolerance,
@@ -596,9 +591,9 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
         elif isinstance(node, ExpressionLiteral):
             return str(node.value)
         elif isinstance(node, ExpressionBinaryOp):
-            return f"({self._node_to_kx(node.left)} {node.op} {self._node_to_kx(node.right)})"
+            return f"({self._node_to_kx(node.left)} {node.to_kx_op()} {self._node_to_kx(node.right)})"
         elif isinstance(node, ExpressionUnaryOp):
-            return f"({node.op}{self._node_to_kx(node.operand)})"
+            return f"({node.to_kx_op()}{self._node_to_kx(node.operand)})"
         elif isinstance(node, ExpressionFunctionCall):
             args_str = ", ".join([self._node_to_kx(arg) for arg in node.args])
             return f"{self._node_to_kx(node.name)}({args_str})"
@@ -660,7 +655,7 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
                     # Corrected regex to parse bounds string (e.g., "0.1:0.5" or "[0.1:0.5]")
                     bound_part = bound_str.split(';')[0].strip()
                     # Updated regex to correctly capture numbers within optional square brackets
-                    match = re.match(r'^\s*\[?\s*(-?\d+(?:\.\d+)?)\s*:\s*(-?\d+(?:\.\d+)?)\s*\]?\s*$', bound_part)
+                    match = re.match(r'^\s*[?\s*(-?\d+(?:\.\d+)?)\s*:\s*(-?\d+(?:\.\d+)?)\s*]?\s*$', bound_part)
                     if match:
                         low = float(match.group(1))
                         high = float(match.group(2))
@@ -684,6 +679,7 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
         if self.debug_mode:
             print(f"DEBUG_CISB: Precondition formula for CISB population: {precondition_kx}")
         try:
+            # The expansion is now handled inside format_kx_expr_for_z3_formula_generator
             z3_precondition_formula = self._kx_expr_to_z3_formula(precondition_kx, z3_symbols, fixed_constants_map)
             opt.add(z3_precondition_formula)
         except ValueError as e:
@@ -699,26 +695,21 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
             attempts += 1
             opt.push()
 
-            soft_constraints_added = False
+            # Re-check if any variable is not fixed and has a range > 0
+            any_variable_can_be_sampled = False
             for var_name, z3_var in z3_symbols.items():
-                # Avoid adding soft constraints for variables that are already fixed by `fixed_constants_map`
-                # or for 't' which is typically 0.0 in initial states.
-                if var_name in fixed_constants_map or var_name == 't':
-                    continue
-
-                low, high = self.sample_ranges.get(var_name, (-100.0, 100.0))
-                if _approx_eq_helper(low, high, tolerance=1e-9): # Use approx_eq_helper for comparison
-                    continue
-
-                target = self.np_random.uniform(low, high)
-                opt.add_soft(z3_var == target, weight=1)
-                soft_constraints_added = True
-
-            if not soft_constraints_added:
-                # If no soft constraints were added (e.g., all variables have fixed values or single-point ranges),
-                # we still need to try and find a solution.
+                if var_name not in fixed_constants_map and var_name != 't':
+                    low, high = self.sample_ranges.get(var_name, (-100.0, 100.0))
+                    if not _approx_eq_helper(low, high, tolerance=1e-9):
+                        any_variable_can_be_sampled = True
+                        break
+            
+            # If no variables can be sampled, we still try to find a solution if one exists.
+            # The soft constraints are primarily for diversity.
+            if not any_variable_can_be_sampled:
                 if self.debug_mode:
-                    print("DEBUG_CISB: No soft constraints added, attempting to find a basic solution.")
+                    print("DEBUG_CISB: No variables with non-zero range found for soft constraints. Attempting to find a basic solution.")
+
 
             check_result = opt.check()
 
@@ -946,6 +937,9 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
         return np.isclose(a, b, atol=self.equality_tolerance)
 
     def _get_obs(self):
+        # This method is now primarily handled by the child class (GeneratedKXEnv)
+        # However, a basic implementation is here for abstract method compliance
+        # and as a fallback. The child's _get_obs will call super()._get_obs() if needed.
         return np.array([float(self.state.get(key, 0.0)) for key in self._state_keys], dtype=np.float32)
 
     def _get_info(self):
@@ -967,6 +961,11 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
         """
         super().reset(seed=seed)
 
+        if self.debug_mode:
+            print(f"DEBUG_BASE_RESET: _state_keys at start of base reset: {self._state_keys}, len: {len(self._state_keys)}")
+            print(f"DEBUG_BASE_RESET: id(self._state_keys) at start of base reset: {id(self._state_keys)}")
+
+
         self.last_episode_history = list(self.state_history)
 
         self.state_history = []
@@ -976,17 +975,27 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
 
         if not self._cisb:
             if self.debug_mode:
-                print("DEBUG_RESET: Error: CISB is empty. Generating a single initial state using Z3 as fallback.")
+                print("DEBUG_BASE_RESET: Error: CISB is empty. Generating a single initial state using Z3 as fallback.")
             # These fallback values should ideally match the fixed constants set in GeneratedKXEnv
             final_initial_state = {
-                'x': 0.0, 'y': 0.0, 'v': 0.0, 'a': 0.0, 'dx': 1.0, 'dy': 0.0,
-                'w': 0.0, 'r': 1.0, 'xo': 5.0, 'yo': 0.0, 't': 0.0,
-                'ep': 1.0, 'b': 0.5, 'A': 1.0, # Updated to match fixed constants in GeneratedKXEnv
-                'GDelta': 5.0, 'Vmax': 15.0 # Example values for sampled constants
+                # Ensure these keys match the actual state variables of GeneratedKXEnv
+                'xr': 0.0, 'vr': 0.0, 'ar': 0.0, 'xo': 0.0, 'vo': 0.1, 'ao': 0.0, 't': 0.0, 'T': 0.0,
+                'ep': 0.05, 'b': 2.0, 'A': 5.0, # Example values for sampled constants
+                'Vmin': 0.1, 'ixr': 0.0, 'ixo': 0.0, 'D': 5.0
             }
         else:
             chosen_initial_state_entry = self.np_random.choice(self._cisb)
             final_initial_state = chosen_initial_state_entry.copy()
+
+        if self.debug_mode:
+            print(f"DEBUG_BASE_RESET: Chosen final_initial_state from CISB/fallback: {final_initial_state}")
+            print(f"DEBUG_BASE_RESET: Keys in final_initial_state: {final_initial_state.keys()}")
+
+        # Re-initialize self.state to ensure it has all _state_keys before populating
+        self.state: Dict[str, float] = {key: 0.0 for key in self._state_keys}
+        if self.debug_mode:
+            print(f"DEBUG_BASE_RESET: self.state initialized with all _state_keys (before populating from final_initial_state): {self.state.keys()}")
+
 
         for var_name, value in final_initial_state.items():
             if var_name in self.state:
@@ -995,13 +1004,17 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
                 self.constants[var_name] = value
 
         if self.debug_mode:
-            print(f"DEBUG_RESET: Initial state: xr={self.state.get('xr',0):.6f}, vr={self.state.get('vr',0):.6f}, ar={self.state.get('ar',0):.6f}, xg={self.state.get('xg',0):.6f}, t={self.state.get('t',0):.6f}, T={self.state.get('T',0):.6f}, ep={self.constants.get('ep',0):.6f}")
-            print(f"DEBUG_RESET: Initial constants: A={self.constants.get('A',0):.6f}, b={self.constants.get('b',0):.6f}, ep={self.constants.get('ep',0):.6f}")
+            print(f"DEBUG_BASE_RESET: self.state after populating from final_initial_state: {self.state.keys()}, length: {len(self.state.keys())}")
+            print(f"DEBUG_BASE_RESET: _state_keys after populating self.state: {self._state_keys}, length: {len(self._state_keys)}")
+            print(f"DEBUG_BASE_RESET: id(self._state_keys) after populating self.state: {id(self._state_keys)}")
+
 
         self._add_state_to_history()
 
-        observation = self._get_obs()
+        observation = self._get_obs() # This calls the child's _get_obs
         info = self._get_info()
+        if self.debug_mode:
+            print(f"DEBUG_BASE_RESET: Observation returned by base reset (from child _get_obs): {observation}, length: {len(observation)}")
         return observation, info
 
     @abstractmethod
@@ -1142,8 +1155,9 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
                     print(f"  DEBUG_PLOT: Applied buffered y-lim: [{lower_bound:.6f}, {upper_bound:.6f}] (range {upper_bound - lower_bound:.6f})")
 
         # Hide any unused subplots
-        for j in range(i + 1, len(axes)):
-            fig.delaxes(axes[j])
+        for j in range(0, len(axes)):
+            if j >= num_vars:
+                fig.delaxes(axes[j])
 
         plt.tight_layout(rect=[0, 0.03, 1, 0.95])
         plt.show()

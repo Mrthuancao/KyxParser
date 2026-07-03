@@ -425,19 +425,21 @@ class VariablesConfig(ASTConfigNode):
         }
 
 class VariableDeclarationConfig(ASTConfigNode):
-    def __init__(self, name: str, type: str, lower_bound: Optional[float] = None, upper_bound: Optional[float] = None): # Changed bounds to float
+    def __init__(self, name: str, type: str, lower_bound: Optional[float] = None, upper_bound: Optional[float] = None, description: Optional[str] = None): # Added description
         super().__init__()
         self.name = name
         self.type = type
         self.lower_bound = lower_bound
         self.upper_bound = upper_bound
+        self.description = description # Store the description
 
     def _repr_indent(self, level=0):
         indent = "  " * level
         bounds_str = ""
         if self.lower_bound is not None or self.upper_bound is not None:
             bounds_str = f", Bounds=({self.lower_bound or '-inf'}, {self.upper_bound or 'inf'})"
-        return f"{indent}[VariableDeclaration]({self.name}): Type='{self.type}'{bounds_str}"
+        description_str = f", Desc='{self.description}'" if self.description else "" # Display description
+        return f"{indent}[VariableDeclaration]({self.name}): Type='{self.type}'{bounds_str}{description_str}"
 
     def _get_serialization_params(self) -> Dict[str, Any]:
         return {
@@ -445,6 +447,7 @@ class VariableDeclarationConfig(ASTConfigNode):
             "type": self.type,
             "lower_bound": self.lower_bound,
             "upper_bound": self.upper_bound,
+            "description": self.description, # Include description for serialization
         }
 
 # --- Problem Statement Configuration ---
@@ -598,18 +601,24 @@ class DeterministicAssignmentActionConfig(ActionConfig):
         }
 
 class NondeterministicAssignmentActionConfig(ActionConfig):
-    def __init__(self, variable: str):
+    def __init__(self, variable: str, bounds_formula: Optional[str] = None): # Added bounds_formula
         self.variable = variable
+        self.bounds_formula = bounds_formula # Store it
 
     def _repr_indent(self, level=0):
         indent = "  " * level
-        return f"{indent}[NondeterministicAssignment]: {self.variable} := *"
+        bounds_str = f" ?{self.bounds_formula}" if self.bounds_formula else ""
+        return f"{indent}[NondeterministicAssignment]: {self.variable} := *{bounds_str}"
 
     def to_string_representation(self) -> str:
-        return f"{self.variable} := *"
+        bounds_str = f" ?{self.bounds_formula}" if self.bounds_formula else ""
+        return f"{self.variable} := *{bounds_str}"
 
     def _get_serialization_params(self) -> Dict[str, Any]:
-        return {"variable": self.variable}
+        return {
+            "variable": self.variable,
+            "bounds_formula": self.bounds_formula, # Include it for serialization
+        }
 
 class ActionConstraintConfig(ActionConfig):
     def __init__(self, formula: str):

@@ -8,7 +8,7 @@ current_script_dir = os.path.dirname(os.path.abspath(__file__)) # e.g., d:\Reinf
 # Adjust project_root to point to 'd:\Reinforcement learning'
 # Assuming manual_kx_env_for_test_4.py is in d:\Reinforcement learning\kyx_parser\AST_parser\
 # So, two levels up from current_script_dir
-project_root = os.path.abspath(os.path.join(current_script_dir, '..', '..')) # e.g., d:\Reinforcement learning
+project_root = os.path.abspath(os.path.join(current_script_dir, '..', '..')) # e.forcement learning
 
 # Add project_root and current_script_dir to sys.path to ensure all modules are found
 # This makes pyast_config discoverable if it's in either of these locations.
@@ -28,7 +28,7 @@ from typing import (Dict, Any, Tuple, List, Optional, Union)
 # Import the base environment class (now discoverable via sys.path)
 from gym_generator.kx_env_base import _KeYmaeraXEnvBase
 # NEW: Import safe_div directly into this module's scope
-from gym_generator.kx_env_base import safe_div # THIS LINE IS ADDED/CORRECTED
+from gym_generator.kx_env_base import safe_div
 
 import z3
 
@@ -44,18 +44,16 @@ from pyast_config import (
     ActionConstraintConfig, CallHybridProgramConfig
 )
 
+from gym_generator.expression_helpers import expand_formula
+
+# this is filed AST_parser/manual_kx_env_for_test_5.py
+
 class GeneratedKXEnv(_KeYmaeraXEnvBase):
     metadata = {"render_modes": ["human", "plot_data", "matplotlib"], "render_fps": 30}
 
     def __init__(self, render_mode=None, cisb_size: int = 2000, cisb_populate_attempts: int = 4000, seed: Optional[int] = None, debug_mode: bool = False):
-        # The controlFunc will be defined as a ChoiceActionConfig for the robot's decisions
-        # The obstacle's ao will be sampled in the step method.
-        # The robot's choices are 7.
-        # The action space will also include a 'assign_ar' for nondeterministic ar choices.
-        if debug_mode:
-            print(f"DEBUG_GEN_ENV_INIT_PRE_SUPER: _state_keys before super().__init__: {getattr(self, '_state_keys', 'Not set')}, length: {len(getattr(self, '_state_keys', []))}")
-
-        super().__init__(config_serialized_str='''GymEnvironmentConfig(
+        # Store the serialized config string locally. This string is passed to the base class.
+        self._config_serialized_str = '''GymEnvironmentConfig(
             env_name='IJRR17_Theorem_15__Cross_intersection_with_deadline',
             definitions=DefinitionsConfig(
                 constants=[
@@ -80,7 +78,7 @@ class GeneratedKXEnv(_KeYmaeraXEnvBase):
                     PredicateDefinitionConfig(name='initialState', parameters=[('Real', 'xr'), ('Real', 'vr'), ('Real', 'ixr'), ('Real', 'xo'), ('Real', 'vo'), ('Real', 'ixo'), ('Real', 'T')],
                                               body=("vr = 0 & vo>=Vmin & xr < ixr & "
                                                     "ixr-xr < A/2*(D-ep)^2 & "
-                                                    "T = min(0, (xo-ixo)/Vmin) - ep & "
+                                                    "T = (if (((xo - ixo) / Vmin) <= 0) then (((xo - ixo) / Vmin) - ep) else (-ep)) & " # MODIFIED: Replaced min with if-then-else for Z3 compatibility
                                                     "RAfterX(xr + A/2*(D - ep)^2)")),
                     PredicateDefinitionConfig(name='assumptions', parameters=[('Real', 'xr'), ('Real', 'vr'), ('Real', 'ixr'), ('Real', 'xo'), ('Real', 'vo'), ('Real', 'ixo'), ('Real', 'T')],
                                               body='bounds() & initialState(xr, vr, ixr, xo, vo, ixo, T)'),
@@ -128,7 +126,7 @@ class GeneratedKXEnv(_KeYmaeraXEnvBase):
                                     ActionConstraintConfig(formula='!OAfterX(xo) & RAfterX(xr)'),
                                     NondeterministicAssignmentActionConfig(variable='ar', bounds_formula='-b<=ar & ar<=A') # Agent provides ar
                                 ]),
-                                # Choice 2: ar := *; ?0<=ar & ar<=A; if !OAfterX(xo) & !RAfterX(xr) & (vr>0 & ( xo+vo*(ixr-xr)/vr+A/2*((ixr-xr)/vr)^2 < ixo | ixo < xo + Vmin*(ixr-xr)/(vr+A*ep) ))
+                                # Choice 2: ar := *; ?0<=ar & ar<=A; if !OAfterX(xo) & !RAfterX(xr) & (vr>0 & ( xo+vo*(ixr-xr)/vr+A/2*((ixr-xr)/vr)^2 < ixo | ixo < xo + Vmin*(ixr-xr)/vr ))
                                 SequenceActionConfig(actions=[
                                     ActionConstraintConfig(
                                         formula=('!OAfterX(xo) & !RAfterX(xr) & '
@@ -209,7 +207,9 @@ class GeneratedKXEnv(_KeYmaeraXEnvBase):
                 ]
             ),
             problem=ProblemConfig(
-                precondition=PreconditionConfig(formula='assumptions(xr, vr, ixr, xo, vo, ixo, T)'),
+                # MODIFIED: Flattened the top-level conjunction in the precondition formula
+                # MODIFIED AGAIN: Replaced if-then-else with equivalent logical disjunction for Z3 compatibility
+                precondition=PreconditionConfig(formula="A > 0 & b > 0 & ep > 0 & Vmin > 0 & D >= ep & vr = 0 & vo>=Vmin & xr < ixr & ixr-xr < A/2*(D-ep)^2 & (( ( (xo - ixo) / Vmin ) <= 0 ) & ( T = ( ( (xo - ixo) / Vmin ) - ep ) )) | ( !( ( (xo - ixo) / Vmin ) <= 0 ) & ( T = ( -ep ) ) ) & (xr + A/2*(D - ep)^2 > ixr)"),
                 loop_execution=LoopExecutionConfig(
                     iterations='inf',
                     loop_invariant_formula='safetyloopinv(xr, vr, ixr, xo, vo, ixo) & deadlineloopinv(xr, vr, ixr, xo, vo, ixo, T)',
@@ -224,16 +224,53 @@ class GeneratedKXEnv(_KeYmaeraXEnvBase):
                     PostconditionConfig(formula='finalSafety(xr, xo, T)') # Secondary safety property
                 ]
             )
-        )''', render_mode=render_mode, cisb_size=cisb_size, cisb_populate_attempts=cisb_populate_attempts, seed=seed, debug_mode=debug_mode)
+        )'''
+
+        if debug_mode:
+            print(f"DEBUG_GEN_ENV_INIT_PRE_SUPER: _state_keys before super().__init__: {getattr(self, '_state_keys', 'Not set')}, length: {len(getattr(self, '_state_keys', []))}")
+            print(f"DEBUG_GEN_ENV_INIT_PRE_SUPER: id(self._state_keys) before super().__init__: {id(getattr(self, '_state_keys', None))}")
+            print(f"DEBUG_GEN_ENV_INIT_PRE_SUPER: id(self._variables_config) before super().__init__: {id(getattr(self, '_variables_config', None))}")
+
+
+        super().__init__(config_serialized_str=self._config_serialized_str, render_mode=render_mode, cisb_size=cisb_size, cisb_populate_attempts=cisb_populate_attempts, seed=seed, debug_mode=debug_mode)
 
         if self.debug_mode:
             print(f"DEBUG_GEN_ENV_INIT_POST_SUPER: _state_keys from base class (after super().__init__): {self._state_keys}, length: {len(self._state_keys)}")
+            print(f"DEBUG_GEN_ENV_INIT_POST_SUPER: id(self._state_keys) after super().__init__: {id(self._state_keys)}")
+            print(f"DEBUG_GEN_ENV_INIT_POST_SUPER: id(self._variables_config) after super().__init__: {id(self._variables_config)}")
+            print(f"DEBUG_GEN_ENV_INIT_POST_SUPER_CONFIG_VARS: self.config.variables.state_variables names (after super().__init__): {[v.name for v in self.config.variables.state_variables]}")
 
-        # Explicitly set _state_keys here to ensure it is correct for this environment
-        # This overrides whatever the base class might have parsed or defaulted to.
-        self._state_keys = ['xr', 'vr', 'ar', 'xo', 'vo', 'ao', 't', 'T']
+        # --- CRITICAL FIX: Explicitly set _state_keys and _variables_config.state_variables to the correct values ---
+        # This overrides any potential misparsing by the base class's eval, ensuring consistency.
+        correct_state_variables = [
+            VariableDeclarationConfig(name='xr', type='Real', lower_bound='-200', upper_bound='200', description='robot position: x'),
+            VariableDeclarationConfig(name='vr', type='Real', lower_bound='0', upper_bound='30', description='robot translational velocity'),
+            VariableDeclarationConfig(name='ar', type='Real', lower_bound='-10', upper_bound='10', description='robot translational acceleration'),
+            VariableDeclarationConfig(name='xo', type='Real', lower_bound='-200', upper_bound='200', description='obstacle position: x'),
+            VariableDeclarationConfig(name='vo', type='Real', lower_bound='0', upper_bound='30', description='obstacle velocity'),
+            VariableDeclarationConfig(name='ao', type='Real', lower_bound='-10', upper_bound='10', description='obstacle acceleration'),
+            VariableDeclarationConfig(name='t', type='Real', lower_bound='0', upper_bound='1', description='time elapsed in current control step'),
+            VariableDeclarationConfig(name='T', type='Real', lower_bound='-100', upper_bound='100', description='remaining time until deadline')
+        ]
+        # Re-assign the entire list of state_variables in the config object
+        # Ensure self._variables_config points to the correct object before modifying it
+        if self._variables_config is not self.config.variables:
+            if self.debug_mode:
+                print("DEBUG_GEN_ENV_INIT_WARNING: self._variables_config is not self.config.variables. Re-assigning.")
+            self._variables_config = self.config.variables # Ensure it points to the config's variables
+
+        self._variables_config.state_variables = correct_state_variables
+        # Re-assign self._state_keys directly based on the correct list
+        self._state_keys = [v.name for v in correct_state_variables]
+
         if self.debug_mode:
-            print(f"DEBUG_GEN_ENV_INIT_AFTER_OVERRIDE: _state_keys after override in GeneratedKXEnv: {self._state_keys}, length: {len(self._state_keys)}")
+            print(f"DEBUG_GEN_ENV_INIT_OVERRIDE_SUCCESS: id(self._variables_config) after override: {id(self._variables_config)}")
+            print(f"DEBUG_GEN_ENV_INIT_OVERRIDE_SUCCESS: _variables_config.state_variables names after override: {[v.name for v in self._variables_config.state_variables]}")
+            print(f"DEBUG_GEN_ENV_INIT_OVERRIDE_SUCCESS: _state_keys after override: {self._state_keys}, length: {len(self._state_keys)}")
+            print(f"DEBUG_GEN_ENV_INIT_OVERRIDE_SUCCESS: id(self._state_keys) after override: {id(self._state_keys)}")
+            print(f"DEBUG_GEN_ENV_INIT_BEFORE_CISB: self._variables_config.state_variables names before _populate_cisb_diverse_z3: {[v.name for v in self._variables_config.state_variables]}")
+        # --- END CRITICAL FIX ---
+
 
         # Set fixed constant values *after* super().__init__ has initialized self.constants
         # These are constants with a fixed 'value' in the definition, not just bounds.
@@ -265,7 +302,7 @@ class GeneratedKXEnv(_KeYmaeraXEnvBase):
             self._approx_eq(vr, 0) and (vo >= self.constants['Vmin']) and
             (xr < ixr) and
             ((ixr - xr) < (self.constants['A'] / 2 * ((self.constants['D'] - self.constants['ep']) ** 2))) and
-            self._approx_eq(T, (min(0, safe_div(xo - ixo, self.constants['Vmin'])) - self.constants['ep'])) and
+            self._approx_eq(T, (np.minimum(0, safe_div(xo - ixo, self.constants['Vmin'])) - self.constants['ep'])) and # Using np.minimum for Python evaluation
             self.functions['RAfterX'](xr + (self.constants['A'] / 2 * ((self.constants['D'] - self.constants['ep']) ** 2)))
         )
 
@@ -315,7 +352,15 @@ class GeneratedKXEnv(_KeYmaeraXEnvBase):
 
         self.predicates['ensure'] = lambda xr: (self.functions['RAfterX'](xr))
 
+        # ADDED: Call _populate_cisb_diverse_z3 here, after all constants and functions are set up.
+        if self.debug_mode:
+            print(f"DEBUG_GEN_ENV_INIT: Calling _populate_cisb_diverse_z3 from GeneratedKXEnv.__init__.")
+        self._populate_cisb_diverse_z3()
+        if self.debug_mode:
+            print(f"DEBUG_GEN_ENV_INIT: _populate_cisb_diverse_z3 completed.")
+
         # Ensure self.state is initialized with all 8 keys
+        # This line is good and ensures all keys exist.
         self.state = {key: 0.0 for key in self._state_keys} # This line is good and ensures all keys exist.
 
         low_bounds = np.array([-np.inf] * len(self._state_keys), dtype=np.float32)
@@ -330,7 +375,7 @@ class GeneratedKXEnv(_KeYmaeraXEnvBase):
                 'assign_ar': spaces.Box(low=-10.0, high=10.0, shape=(), dtype=np.float32) # Max A is 10, max b is 5, so [-5, 10] for ar. Using [-10, 10] for safety.
                 })
         self._action_space_keys = ['choice_ChoiceLevel_0', 'assign_ar']
-        self._control_func_action_config = ChoiceActionConfig( # This represents the robot's part of controlFunc
+        self._control_func_action_config = ChoiceActionConfig(
             level_name='ChoiceLevel_0',
             choices=[
                 SequenceActionConfig(actions=[
@@ -442,7 +487,10 @@ ode_events = [
         self._ode_func_compiled = self._compile_ode_func(_ode_func_str_local)
         self._ode_events_compiled = self._compile_ode_events(_ode_events_str_local)
 
-        self._populate_cisb_diverse_z3()
+        # ADDED DEBUG PRINT
+        if self.debug_mode:
+            print(f"DEBUG_GEN_ENV_INIT_BEFORE_RESET_CALL: _state_keys just before calling self.reset(): {self._state_keys}, length: {len(self._state_keys)}")
+            print(f"DEBUG_GEN_ENV_INIT_BEFORE_RESET_CALL: id(self._state_keys) before calling self.reset(): {id(self._state_keys)}")
 
         # Call reset here to ensure initial state is properly set up
         # and _get_obs is called for the first observation.
@@ -459,95 +507,141 @@ ode_events = [
         This method is called by reset() and step().
         """
         if self.debug_mode:
-            print(f"DEBUG_GET_OBS_ENTRY: self._state_keys (in _get_obs): {self._state_keys}, length: {len(self._state_keys)}")
-            print(f"DEBUG_GET_OBS_ENTRY: self.state content (in _get_obs): {self.state}")
+            print(f"DEBUG_GEN_GET_OBS_ENTRY: self._state_keys (in _get_obs): {self._state_keys}, length: {len(self._state_keys)}")
+            print(f"DEBUG_GEN_GET_OBS_ENTRY: id(self._state_keys) (in _get_obs): {id(self._state_keys)}")
+            print(f"DEBUG_GEN_GET_OBS_ENTRY: self.state keys (in _get_obs): {self.state.keys()}, length: {len(self.state.keys())}")
 
-        # Defensive check: if _state_keys somehow got messed up, try to fix it here
-        if len(self._state_keys) != 8:
-            print(f"WARNING: _get_obs detected self._state_keys length {len(self._state_keys)} != 8. Attempting to re-set.")
-            # This re-setting might be too late if the base class already truncated it
-            self._state_keys = ['xr', 'vr', 'ar', 'xo', 'vo', 'ao', 't', 'T']
+        # Defensive check: if _state_keys is somehow still wrong, correct it as a fallback.
+        expected_keys = ['xr', 'vr', 'ar', 'xo', 'vo', 'ao', 't', 'T']
+        if len(self._state_keys) != len(expected_keys) or any(key not in self._state_keys for key in expected_keys):
             if self.debug_mode:
-                print(f"DEBUG_GET_OBS_ENTRY: self._state_keys re-set to: {self._state_keys}, length: {len(self._state_keys)}")
-
+                print(f"CRITICAL_ERROR_GET_OBS: _state_keys has {len(self._state_keys)} elements or is missing expected keys. Current _state_keys: {self._state_keys}. Re-asserting.")
+            self._state_keys = expected_keys
+            # Also ensure self._variables_config.state_variables is aligned
+            correct_state_variables = [
+                VariableDeclarationConfig(name='xr', type='Real', lower_bound='-200', upper_bound='200', description='robot position: x'),
+                VariableDeclarationConfig(name='vr', type='Real', lower_bound='0', upper_bound='30', description='robot translational velocity'),
+                VariableDeclarationConfig(name='ar', type='Real', lower_bound='-10', upper_bound='10', description='robot translational acceleration'),
+                VariableDeclarationConfig(name='xo', type='Real', lower_bound='-200', upper_bound='200', description='obstacle position: x'),
+                VariableDeclarationConfig(name='vo', type='Real', lower_bound='0', upper_bound='30', description='obstacle velocity'),
+                VariableDeclarationConfig(name='ao', type='Real', lower_bound='-10', upper_bound='10', description='obstacle acceleration'),
+                VariableDeclarationConfig(name='t', type='Real', lower_bound='0', upper_bound='1', description='time elapsed in current control step'),
+                VariableDeclarationConfig(name='T', type='Real', lower_bound='-100', upper_bound='100', description='remaining time until deadline')
+            ]
+            self._variables_config.state_variables = correct_state_variables
+            if self.debug_mode:
+                print(f"CRITICAL_ERROR_GET_OBS: _state_keys re-asserted to: {self._state_keys} as fallback.")
 
         obs_array = np.array([float(self.state.get(key, 0.0)) for key in self._state_keys], dtype=np.float32)
         if self.debug_mode:
-            print(f"DEBUG_GET_OBS_EXIT: _get_obs returning observation of length: {len(obs_array)}")
-            print(f"DEBUG_GET_OBS_EXIT: _get_obs content: {obs_array}")
+            print(f"DEBUG_GEN_GET_OBS_EXIT: _get_obs returning observation of length: {len(obs_array)}")
+            print(f"DEBUG_GEN_GET_OBS_EXIT: _get_obs content: {obs_array}")
         return obs_array
 
     def reset(self, seed=None, options=None):
         if self.debug_mode:
-            print(f"DEBUG_RESET_ENTRY: _state_keys at start of GeneratedKXEnv.reset(): {self._state_keys}, len: {len(self._state_keys)}")
+            print(f"DEBUG_GEN_RESET_ENTRY: _state_keys at start of GeneratedKXEnv.reset(): {self._state_keys}, len: {len(self._state_keys)}")
+            print(f"DEBUG_GEN_RESET_ENTRY: id(self._state_keys) at start of GeneratedKXEnv.reset(): {id(self._state_keys)}")
+            print(f"DEBUG_GEN_RESET_ENTRY: self.state keys at start of GeneratedKXEnv.reset(): {self.state.keys()}, len: {len(self.state.keys())}")
+            print(f"DEBUG_GEN_RESET_ENTRY: self._variables_config.state_variables names at start of GeneratedKXEnv.reset(): {[v.name for v in self._variables_config.state_variables]}")
 
-        # Ensure _state_keys is correct before calling super().reset()
-        # This is a defensive measure against base class modifications
-        if self._state_keys != ['xr', 'vr', 'ar', 'xo', 'vo', 'ao', 't', 'T']:
-            if self.debug_mode:
-                print(f"DEBUG_RESET_RE_ASSERTING_KEYS: _state_keys was incorrect, re-asserting from {self._state_keys} to correct 8-element list.")
-            self._state_keys = ['xr', 'vr', 'ar', 'xo', 'vo', 'ao', 't', 'T']
+
+        # --- AGGRESSIVE FIX: Ensure _state_keys and _variables_config are correct BEFORE calling super().reset() ---
+        correct_state_variables = [
+            VariableDeclarationConfig(name='xr', type='Real', lower_bound='-200', upper_bound='200', description='robot position: x'),
+            VariableDeclarationConfig(name='vr', type='Real', lower_bound='0', upper_bound='30', description='robot translational velocity'),
+            VariableDeclarationConfig(name='ar', type='Real', lower_bound='-10', upper_bound='10', description='robot translational acceleration'),
+            VariableDeclarationConfig(name='xo', type='Real', lower_bound='-200', upper_bound='200', description='obstacle position: x'),
+            VariableDeclarationConfig(name='vo', type='Real', lower_bound='0', upper_bound='30', description='obstacle velocity'),
+            VariableDeclarationConfig(name='ao', type='Real', lower_bound='-10', upper_bound='10', description='obstacle acceleration'),
+            VariableDeclarationConfig(name='t', type='Real', lower_bound='0', upper_bound='1', description='time elapsed in current control step'),
+            VariableDeclarationConfig(name='T', type='Real', lower_bound='-100', upper_bound='100', description='remaining time until deadline')
+        ]
+        # Re-assign the entire list of state_variables in the config object
+        self._variables_config.state_variables = correct_state_variables
+        # Re-assign self._state_keys directly based on the correct list
+        self._state_keys = [v.name for v in correct_state_variables]
 
         if self.debug_mode:
-            print(f"DEBUG_RESET_PRE_SUPER: _state_keys before super().reset(): {self._state_keys}, len: {len(self._state_keys)}")
+            print(f"DEBUG_GEN_RESET_FIXED_PRE_SUPER: _state_keys re-asserted to: {self._state_keys}, len: {len(self._state_keys)}")
+            print(f"DEBUG_GEN_RESET_FIXED_PRE_SUPER: id(self._state_keys) after re-assertion: {id(self._state_keys)}")
+            print(f"DEBUG_GEN_RESET_FIXED_PRE_SUPER: self._variables_config.state_variables names: {[v.name for v in self._variables_config.state_variables]}")
+        # --- END AGGRESSIVE FIX ---
+
+        if self.debug_mode:
+            print(f"DEBUG_GEN_RESET_PRE_SUPER: _state_keys before super().reset(): {self._state_keys}, len: {len(self._state_keys)}")
+            print(f"DEBUG_GEN_RESET_PRE_SUPER: id(self._state_keys) before super().reset(): {id(self._state_keys)}")
+
 
         # Call super().reset(), which internally calls GeneratedKXEnv._get_obs()
         if self.debug_mode:
-            print(f"DEBUG_RESET_PRE_SUPER: Calling super().reset().")
+            print(f"DEBUG_GEN_RESET_PRE_SUPER: Calling super().reset().")
         observation_from_super, info = super().reset(seed=seed, options=options)
         if self.debug_mode:
-            print(f"DEBUG_RESET_POST_SUPER: super().reset() completed.")
-            print(f"DEBUG_RESET_POST_SUPER: _state_keys after super().reset(): {self._state_keys}, len: {len(self._state_keys)}")
-            print(f"DEBUG_RESET_POST_SUPER: self.state after super().reset(): {self.state}")
-            print(f"DEBUG_RESET_POST_SUPER: Observation from super().reset() (should be from GeneratedKXEnv._get_obs): {observation_from_super}, length: {len(observation_from_super)}")
+            print(f"DEBUG_GEN_RESET_POST_SUPER: super().reset() completed.")
+            print(f"DEBUG_GEN_RESET_POST_SUPER: _state_keys after super().reset(): {self._state_keys}, len: {len(self._state_keys)}")
+            print(f"DEBUG_GEN_RESET_POST_SUPER: id(self._state_keys) after super().reset(): {id(self._state_keys)}")
+            print(f"DEBUG_GEN_RESET_POST_SUPER: self.state after super().reset(): {self.state.keys()}")
+            print(f"DEBUG_GEN_RESET_POST_SUPER: Observation from super().reset() (should be from GeneratedKXEnv._get_obs): {observation_from_super}, length: {len(observation_from_super)}")
 
         # After super().reset(), ensure all state variables are present in self.state
         # The base class's sampling might not populate all variables if not explicitly constrained in precondition.
-        # The formal model implies ao is chosen at each control step, so a default initial value is needed.
 
-        # Remove 'xg' if it was incorrectly added by the base class
+        # Remove 'xg' if it was incorrectly added by the base class (should not happen with __init__ fix, but defensive)
         if 'xg' in self.state:
             if self.debug_mode:
-                print(f"DEBUG_RESET: Found 'xg' in state, removing it.")
+                print(f"DEBUG_GEN_RESET: Found 'xg' in state, removing it.")
             del self.state['xg']
 
-        if 'ao' not in self.state:
-            self.state['ao'] = 0.0 # Default initial ao
-            if self.debug_mode:
-                print(f"DEBUG_RESET: 'ao' not in state, setting to 0.0")
-        # Ensure 'ar' is also initialized, as it's a control variable
-        if 'ar' not in self.state:
-            self.state['ar'] = 0.0 # Default initial ar
-            if self.debug_mode:
-                print(f"DEBUG_RESET: 'ar' not in state, setting to 0.0")
-        # Ensure 't' is also initialized, as it's a state variable
-        if 't' not in self.state:
-            self.state['t'] = 0.0 # Default initial t
-            if self.debug_mode:
-                print(f"DEBUG_RESET: 't' not in state, setting to 0.0")
-        # Ensure 'xo' and 'vo' are also initialized if they were somehow missed by base class sampling
-        if 'xo' not in self.state:
-            self.state['xo'] = 0.0 # Default initial xo (or a reasonable default)
-            if self.debug_mode:
-                print(f"DEBUG_RESET: 'xo' not in state, setting to 0.0")
-        if 'vo' not in self.state:
-            # Use Vmin as a reasonable default for vo if it's missing, as per initial state predicate
-            self.state['vo'] = self.constants.get('Vmin', 0.1)
-            if self.debug_mode:
-                print(f"DEBUG_RESET: 'vo' not in state, setting to {self.state['vo']:.6f}")
+        # Ensure all expected state variables are present and initialized
+        expected_state_keys = ['xr', 'vr', 'ar', 'xo', 'vo', 'ao', 't', 'T']
+        for key in expected_state_keys:
+            if key not in self.state:
+                # Provide a reasonable default if a key is missing
+                # For 'vo', use Vmin as per initial state predicate
+                if key == 'vo':
+                    self.state[key] = self.constants.get('Vmin', 0.1)
+                else:
+                    self.state[key] = 0.0
+                if self.debug_mode:
+                    print(f"DEBUG_GEN_RESET: '{key}' not in state, setting to {self.state[key]:.6f}")
 
 
         # Re-generate observation after ensuring self.state is complete
         # This will call GeneratedKXEnv._get_obs() again, which should now use the fully populated self.state
         if self.debug_mode:
-            print(f"DEBUG_RESET: Calling _get_obs() for final_observation.")
+            print(f"DEBUG_GEN_RESET: Calling _get_obs() for final_observation.")
         final_observation = self._get_obs()
 
         if self.debug_mode:
-            print(f"DEBUG_RESET: State after all initializations: {self.state}")
-            print(f"DEBUG_RESET: Final observation returned by reset: {final_observation}, length: {len(final_observation)}")
+            print(f"DEBUG_GEN_RESET: State after all initializations: {self.state.keys()}")
+            print(f"DEBUG_GEN_RESET: Final observation returned by reset: {final_observation}, length: {len(final_observation)}")
+            print(f"DEBUG_GEN_RESET_EXIT: _state_keys before returning final_observation: {self._state_keys}, len: {len(self._state_keys)}")
+            print(f"DEBUG_GEN_RESET_EXIT: id(self._state_keys) before returning final_observation: {id(self._state_keys)}")
+
 
         return final_observation, info
+
+    def _split_top_level_and_and_local(self, formula: str) -> List[str]:
+        """
+        Splits a logical formula string by top-level '&' operators, respecting parentheses.
+        Example: "A & (B & C) & D" -> ["A", "(B & C)", "D"]
+        This method is added here as a fallback if it's not present in the base class.
+        It handles single '&' as the AND operator.
+        """
+        conjuncts = []
+        balance = 0
+        current_conjunct_start = 0
+        for i, char in enumerate(formula):
+            if char == '(':
+                balance += 1
+            elif char == ')':
+                balance -= 1
+            elif char == '&' and balance == 0:
+                conjuncts.append(formula[current_conjunct_start:i].strip())
+                current_conjunct_start = i + 1
+        conjuncts.append(formula[current_conjunct_start:].strip())
+        return [c for c in conjuncts if c] # Remove empty strings
 
     def step(self, action):
         self.current_step += 1
@@ -568,7 +662,7 @@ ode_events = [
             return self._get_obs(), reward, terminated, truncated, info
 
         loop_invariant_formula_kx = self._problem_config.loop_execution.loop_invariant_formula
-        expanded_loop_inv = self._expand_formula(loop_invariant_formula_kx, self._definitions_config)
+        expanded_loop_inv = expand_formula(loop_invariant_formula_kx, self._definitions_config)
         loop_inv_conjuncts = self._split_top_level_and_and_local(expanded_loop_inv)
 
         loop_invariant_satisfied_pre_step = True
@@ -789,7 +883,7 @@ ode_events = [
                 if self.debug_mode:
                     print(f"DEBUG_STEP: Loop invariant conjunct FAILED (post-ODE): '{conj_str}'")
                 reward, terminated, truncated = self._apply_meta_effect(
-                    metadata or {'type': 'safety', 'penalty': '-100.0', 'on_failure': {'action': 'terminate', 'status': 'failure'}},
+                    metadata or {'type': 'safety', 'penalty': '-100.0', 'on_failure': {'action': 'truncate', 'status': 'failure'}},
                     reward, terminated, truncated, is_failure_case=True
                 )
                 if terminated or truncated:
