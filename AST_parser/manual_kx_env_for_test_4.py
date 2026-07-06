@@ -1,4 +1,3 @@
-# manual_kx_env_for_test_4.py (Your GeneratedKXEnv file)
 import sys
 import os
 from typing import Optional
@@ -72,8 +71,18 @@ class GeneratedKXEnv(_KeYmaeraXEnvBase):
                 ],
                 predicates=[
                     PredicateDefinitionConfig(name='bounds', parameters=[], body="A > 0 & b > 0 & ep > 0 & Vmax >= 2*A*ep & GDelta > Vmax*ep + Vmax^2/(2*b)"),
-                    PredicateDefinitionConfig(name='initialState', parameters=[('Real', 'xr'), ('Real', 'vr'), ('Real', 'xg'), ('Real', 'T')], body="vr = 0 & xr < waypointStartDist(xg) & T > ep + maxTravelTime(xg-xr) + ep + stopTime(Vmax)"),
-                    PredicateDefinitionConfig(name='assumptions', parameters=[('Real', 'xr'), ('Real', 'vr'), ('Real', 'xg'), ('Real', 'T')], body='bounds() & initialState(xr, vr, xg, T)'),
+                    # MODIFIED: initialState now includes ar and t in parameters and body
+                    PredicateDefinitionConfig(
+                        name='initialState',
+                        parameters=[('Real', 'xr'), ('Real', 'vr'), ('Real', 'ar'), ('Real', 'xg'), ('Real', 't'), ('Real', 'T')],
+                        body="vr = 0 & ar = 0 & t = 0 & xr < waypointStartDist(xg) & T > ep + maxTravelTime(xg-xr) + ep + stopTime(Vmax)"
+                    ),
+                    # MODIFIED: assumptions now includes ar and t in parameters
+                    PredicateDefinitionConfig(
+                        name='assumptions',
+                        parameters=[('Real', 'xr'), ('Real', 'vr'), ('Real', 'ar'), ('Real', 'xg'), ('Real', 't'), ('Real', 'T')],
+                        body='bounds() & initialState(xr, vr, ar, xg, t, T)'
+                    ),
                     PredicateDefinitionConfig(
                         name='loopinv',
                         parameters=[('Real', 'xr'), ('Real', 'vr'), ('Real', 'xg'), ('Real', 'T')],
@@ -130,7 +139,8 @@ class GeneratedKXEnv(_KeYmaeraXEnvBase):
                 ]
             ),
             problem=ProblemConfig(
-                precondition=PreconditionConfig(formula='assumptions(xr, vr, xg, T)'),
+                # MODIFIED: Precondition formula now includes ar and t
+                precondition=PreconditionConfig(formula='assumptions(xr, vr, ar, xg, t, T)'),
                 loop_execution=LoopExecutionConfig(
                     iterations='inf',
                     loop_invariant_formula='loopinv(xr, vr, xg, T)',
@@ -165,17 +175,28 @@ class GeneratedKXEnv(_KeYmaeraXEnvBase):
 
         # Initialize predicates using lambdas. These will now use the fixed values for A, b, ep.
         self.predicates['bounds'] = lambda: (((((self.constants['A']) > (0))) and (((self.constants['b']) > (0)))) and (((self.constants['ep']) > (0)))) and (((self.constants['Vmax']) >= ((2) * (self.constants['A']) * (self.constants['ep']))) and (((self.constants['GDelta']) > (((self.constants['Vmax']) * (self.constants['ep'])) + (((self.constants['Vmax']) ** (2)) / ((2) * (self.constants['b'])))))))
-        self.predicates['initialState'] = lambda xr, vr, xg, T: (((self._approx_eq(vr, 0)) and ((xr) < (self.functions['waypointStartDist'](xg)))) and ((T) > (((self.constants['ep']) + (self.functions['maxTravelTime'](((xg) - (xr))))  + (self.constants['ep']) + (self.functions['stopTime'](self.constants['Vmax']))))))
-        self.predicates['assumptions'] = lambda xr, vr, xg, T: ((self.predicates['bounds']()) and (self.predicates['initialState'](xr, vr, xg, T)))
+        # MODIFIED: initialState lambda to include ar and t parameters and constraints
+        self.predicates['initialState'] = lambda xr, vr, ar, xg, t, T: (
+            (self._approx_eq(vr, 0)) and
+            (self._approx_eq(ar, 0)) and # ar must be 0 initially
+            (self._approx_eq(t, 0)) and  # t must be 0 initially
+            ((xr) < (self.functions['waypointStartDist'](xg))) and
+            ((T) > (((self.constants['ep']) + (self.functions['maxTravelTime'](((xg) - (xr))))  + (self.constants['ep']) + (self.functions['stopTime'](self.constants['Vmax'])))))
+        )
+        # MODIFIED: assumptions lambda to include ar and t parameters
+        self.predicates['assumptions'] = lambda xr, vr, ar, xg, t, T: ((self.predicates['bounds']()) and (self.predicates['initialState'](xr, vr, ar, xg, t, T)))
         self.predicates['loopinv'] = lambda xr, vr, xg, T: (((((0) <= (vr)) and ((vr) <= (self.constants['Vmax']))) and (((xr) + (self.functions['stopDist'](vr))) < (self.functions['waypointEndDist'](xg)))) and (((self.functions['waypointStartDist'](xg)) < (xr)) == (((self._approx_eq(vr, 0)) or ((T) >= (self.functions['stopTime'](vr)))))) and (((xr) <= (self.functions['waypointStartDist'](xg))) == ((((vr) >= (self.functions['minV']())) and ((T) > (((self.functions['maxTravelTime'](((xg) - (xr)))) + (self.constants['ep'])) + (self.functions['stopTime'](self.constants['Vmax']))))) or (((vr) <= (self.functions['minV']())) and ((T) > (((self.functions['speedUpTime'](vr)) + (self.functions['maxTravelTime'](((xg) - (xr))))) + ((self.constants['ep']) + (self.functions['stopTime'](self.constants['Vmax'])))))))))
         self.predicates['ensure'] = lambda xr, vr, xg: (((self.functions['waypointStartDist'](xg)) < (xr)) and (self._approx_eq(vr, 0)))
 
         self._state_keys = ['xr', 'vr', 'ar', 'xg', 't', 'T']
         self.state = {key: 0.0 for key in self._state_keys}
 
-        low_bounds = np.array([-np.inf] * len(self._state_keys), dtype=np.float32)
-        high_bounds = np.array([np.inf] * len(self._state_keys), dtype=np.float32)
-        self.observation_space = spaces.Box(low_bounds, high_bounds, shape=(len(self._state_keys),), dtype=np.float32)
+        # MODIFICATION START: Update observation space to include GDelta and Vmax
+        # 6 state variables + 2 constants (GDelta, Vmax) = 8
+        low_bounds = np.array([-np.inf] * (len(self._state_keys) + 2), dtype=np.float32)
+        high_bounds = np.array([np.inf] * (len(self._state_keys) + 2), dtype=np.float32)
+        self.observation_space = spaces.Box(low_bounds, high_bounds, shape=(len(self._state_keys) + 2,), dtype=np.float32)
+        # MODIFICATION END
 
         # Action space for controlFunc
         # Only choice is for ChoiceLevel_0, no nondeterministic assignments in this model
@@ -301,6 +322,16 @@ ode_events = [
 
         self.reset()
 
+    # MODIFICATION START: Override _get_obs to include GDelta and Vmax
+    def _get_obs(self):
+        # Get observations from state variables ['xr', 'vr', 'ar', 'xg', 't', 'T']
+        obs = [self.state[key] for key in self._state_keys]
+        # Add the constants GDelta and Vmax which define the problem instance
+        obs.append(self.constants['GDelta'])
+        obs.append(self.constants['Vmax'])
+        return np.array(obs, dtype=np.float32)
+    # MODIFICATION END
+
     def reset(self, seed=None, options=None):
         observation, info = super().reset(seed=seed, options=options)
 
@@ -329,6 +360,9 @@ ode_events = [
         loop_inv_conjuncts = self._split_top_level_and_local(expanded_loop_inv)
 
         loop_invariant_satisfied_pre_step = True
+        # MODIFICATION START: Get loopinv metadata once
+        loop_inv_meta = self._get_predicate_metadata('loopinv')
+        # MODIFICATION END
         for conj_str in loop_inv_conjuncts:
             conjunct_result = self._evaluate_expression(conj_str, is_constraint=True)
             predicate_name_match = re.match(r'^\s*(\w+)\s*\(', conj_str)
@@ -357,13 +391,23 @@ ode_events = [
                         self.state_history.append(state_record_before_early_return)
                         return self._get_obs(), reward, terminated, truncated, info
 
-        if not loop_invariant_satisfied_pre_step:
+        # MODIFICATION START: Apply continuous shape reward for loopinv if it's satisfied
+        if loop_invariant_satisfied_pre_step:
+            if loop_inv_meta.get('type') == 'safety' and 'shape' in loop_inv_meta:
+                shape_value = self._evaluate_shape_expression(loop_inv_meta['shape'])
+                reward += shape_value # Add shape reward for being safe
+                if self.debug_mode:
+                    print(f"DEBUG_STEP: Applied pre-control loopinv shape reward: {shape_value:.6f}")
+        # MODIFICATION END
+        else: # General loop invariant failed
             if self.debug_mode:
                 print(f"DEBUG_STEP: General loop invariant FAILED (pre-control).")
+            # MODIFICATION START: Use loop_inv_meta directly for general failure
             reward, terminated, truncated = self._apply_meta_effect(
-                {'type': 'safety', 'penalty': '-500.0', 'on_failure': {'action': 'terminate', 'status': 'failure'}},
+                loop_inv_meta,
                 reward, terminated, truncated, is_failure_case=True
             )
+            # MODIFICATION END
             state_record_before_early_return = self.state.copy()
             state_record_before_early_return['episode_time'] = self.cumulative_episode_time
             self.state_history.append(state_record_before_early_return)
@@ -513,7 +557,7 @@ ode_events = [
         for conj_str in loop_inv_conjuncts:
             conjunct_result = self._evaluate_expression(conj_str, is_constraint=True)
             predicate_name_match = re.match(r'^\s*(\w+)\s*\(', conj_str)
-            pred_name = predicate_name_match.group(1) if predicate_name_match else None
+            pred_name = predicate_name_match.group(1) if predicate_name_match else None # Corrected typo
             metadata = self._get_predicate_metadata(pred_name) if pred_name else {}
 
             if not conjunct_result:
@@ -538,13 +582,23 @@ ode_events = [
                         self.state_history.append(state_record_before_early_return)
                         return self._get_obs(), reward, terminated, truncated, info
 
-        if not loop_invariant_satisfied_post_ode:
+        # MODIFICATION START: Apply continuous shape reward for loopinv if it's satisfied
+        if loop_invariant_satisfied_post_ode:
+            if loop_inv_meta.get('type') == 'safety' and 'shape' in loop_inv_meta:
+                shape_value = self._evaluate_shape_expression(loop_inv_meta['shape'])
+                reward += shape_value # Add shape reward for being safe
+                if self.debug_mode:
+                    print(f"DEBUG_STEP: Applied post-ODE loopinv shape reward: {shape_value:.6f}")
+        # MODIFICATION END
+        else: # General loop invariant failed
             if self.debug_mode:
                 print(f"DEBUG_STEP: General loop invariant FAILED (post-ODE).")
+            # MODIFICATION START: Use loop_inv_meta directly for general failure
             reward, terminated, truncated = self._apply_meta_effect(
-                {'type': 'safety', 'penalty': '-300.0', 'on_failure': {'action': 'terminate', 'status': 'failure'}},
+                loop_inv_meta,
                 reward, terminated, truncated, is_failure_case=True
             )
+            # MODIFICATION END
             if terminated or truncated:
                 state_record_before_early_return = self.state.copy()
                 state_record_before_early_return['episode_time'] = self.cumulative_episode_time

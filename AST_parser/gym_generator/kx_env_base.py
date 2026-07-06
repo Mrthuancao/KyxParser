@@ -107,6 +107,24 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
             if 't' not in self._state_keys:
                 self._state_keys.append('t')
 
+        # FIX: Initialize self.sample_ranges here
+        self.sample_ranges: Dict[str, Tuple[float, float]] = {}
+
+        # MODIFIED: Populate self.sample_ranges from VariableDeclarationConfig for all state variables
+        # This ensures that Z3 respects the declared bounds for state variables like 'ar' and 't'
+        # even if they are not explicitly constrained in the 'initialState' predicate.
+        # This is crucial for ensuring the 'user suggestions' for bounds are followed during sampling.
+        for var_decl in self._variables_config.state_variables:
+            try:
+                lower = float(var_decl.lower_bound)
+                upper = float(var_decl.upper_bound)
+                self.sample_ranges[var_decl.name] = (lower, upper)
+            except (ValueError, TypeError):
+                if self.debug_mode:
+                    print(f"DEBUG_INIT: Warning: Could not parse bounds for state variable '{var_decl.name}'. Using default (-100.0, 100.0).")
+                self.sample_ranges[var_decl.name] = (-100.0, 100.0)
+        # END MODIFIED
+
         self.last_failing_precondition_formula = None
         self._ode_func_compiled = None
         self._ode_events_compiled = None
@@ -119,8 +137,8 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
         self._cisb: List[Dict[str, float]] = []
         self._cisb_size = cisb_size
         self._cisb_populate_attempts = cisb_populate_attempts
-        self.sample_ranges: Dict[str, Tuple[float, float]] = {}
-        
+        # self.sample_ranges is now populated above from VariableDeclarationConfig
+
         # This call is now moved to the child class (GeneratedKXEnv)
         # after it has a chance to set its fixed constants.
         # REMOVED: self._populate_cisb_diverse_z3()
@@ -631,12 +649,10 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
         z3_symbols = {}
         fixed_constants_map = {} # Stores constants that have a fixed numerical value or evaluated expression value
 
-        # Initialize sample_ranges for state variables (if not already set)
+        # self.sample_ranges is now populated in __init__ for state variables.
+        # Ensure z3_symbols are created for all state variables.
         for var_decl in self._variables_config.state_variables:
             z3_symbols[var_decl.name] = z3.Real(var_decl.name)
-            # Default bounds for state variables if not specified elsewhere
-            if var_decl.name not in self.sample_ranges:
-                self.sample_ranges[var_decl.name] = (-100.0, 100.0)
 
         # Process constants
         for const_decl in self._definitions_config.constants:
@@ -660,7 +676,7 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
                     # Corrected regex to parse bounds string (e.g., "0.1:0.5" or "[0.1:0.5]")
                     bound_part = bound_str.split(';')[0].strip()
                     # Updated regex to correctly capture numbers within optional square brackets
-                    match = re.match(r'^\s*\[?\s*(-?\d+(?:\.\d+)?)\s*:\s*(-?\d+(?:\.\d+)?)\s*\]?\s*$', bound_part)
+                    match = re.match(r'^\s*[?\s*(-?\d+(?:\.\d+)?)\s*:\s*(-?\d+(?:\.\d+)?)\s*]?\s*$', bound_part)
                     if match:
                         low = float(match.group(1))
                         high = float(match.group(2))
