@@ -1,9 +1,3 @@
-To address the notes in your document, I have refined the technical descriptions to be more precise, defined the "missing" concepts (like MDP and DSL), and clarified the "Innovation" vs. "Experimental" status of your work.
-
-Here is the revised **Section 4: Approach**, followed by the specific clarifications for your notes.
-
----
-
 ### 4. Approach
 
 Our framework bridges the gap between formal verification and practical control by treating the KeYmaera X Abstract Syntax Tree (AST) as a blueprint for a **Markov Decision Process (MDP)**. In this context, the MDP provides the mathematical framework for the RL agent's world: the $\text{d}\mathcal{L}$ state variables define the **State Space ($S$)**, the non-deterministic choices in the Hybrid Program define the **Action Space ($A$)**, the ODEs define the **Transition Function ($P$)**, and our annotated predicates define the **Reward Function ($R$)**.
@@ -11,11 +5,65 @@ Our framework bridges the gap between formal verification and practical control 
 We implement a syntax-directed translation that extracts physical dynamics into a high-fidelity ODE solver and logical invariants into a dense reward function.
 
 #### 4.1 Extended Formal Syntax and RL-Annotations
-To facilitate this bridge without altering the underlying proof logic, we introduce an **RL-Annotation Syntax**. This is a **Domain-Specific Language (DSL)**—a mini-language specialized for RL configuration—embedded within KeYmaera X comments. This DSL allows developers to attach **RL Metadata** (non-logical attributes like numerical bounds, reward weights, and visualization hints) directly to formal $\text{d}\mathcal{L}$ definitions.
 
-Annotations use category-specific tags—`@safety`, `@progress`, `@stability`, `@const`, and `@var`—to define the environment's state space and reward structure. We are currently evaluating a **Reward Decomposition Model** designed to address the "Sparse Reward" problem. This model separates the step-wise reward into three components:
-\[ R_{total} = \text{shape} + \begin{cases} \text{reward} & \text{if } \phi \text{ is True} \\ \text{penalty} & \text{if } \phi \text{ is False} \end{cases} \]
-This approach allows the formal modeler to provide a continuous "gradient" signal (via `shape`) while retaining discrete bonuses or costs for satisfying or violating logical predicates. *Note: This method is currently in the experimental phase to determine its effectiveness in improving convergence rates compared to standard sparse rewards.*
+The RL-Annotation Syntax is a comment-based DSL embedded within KeYmaera X files. By separating these into variable-level and predicate-level annotations, we provide a clean mapping to the Gymnasium environment's **Observation Space** and **Reward/Termination Logic**, respectively.
+
+##### 4.1.1 Variable Annotations (`@var`, `@const`)
+These annotations are placed above `Real` declarations in the `ProgramVariables` or `Definitions` sections. They define the numerical boundaries and metadata for the environment's state.
+
+**Grammar:**
+\[
+\begin{array}{lcl}
+\text{VarAnnotation} & ::= & \text{"//"} \text{ ("@var" } \mid \text{ "@const")} \text{ ":" } \text{ VarAttrList} \\
+\text{VarAttrList}   & ::= & \text{VarAttr} \mid \text{VarAttr} \text{ "," } \text{ VarAttrList} \\
+\text{VarAttr}       & ::= & \text{"bound=[" } r \text{ ":" } r \text{ "]"} \mid \text{"def=" } \text{STRING} \mid \text{"plot=" } \text{PlotType} \\
+\text{PlotType}      & ::= & \text{"line"} \mid \text{"hist"} \mid \text{"scatter"} \mid \text{"none"}
+\end{array}
+\]
+
+*   **`@var`**: Maps a `Real` program variable to an element in the Gymnasium **Observation Space**. The `bound` defines the `Box` limits.
+*   **`@const`**: Maps a `Real` definition to a fixed parameter. If a `bound` is provided, the value is sampled once at `reset()`.
+
+##### 4.1.2 Predicate Annotations (`@safety`, `@progress`, `@stability`)
+These annotations are placed above `Bool` or `Real` definitions. They define how the truth value of a $\text{d}\mathcal{L}$ formula translates into rewards and episode transitions.
+
+**Grammar:**
+\[
+\begin{array}{lcl}
+\text{PredAnnotation} & ::= & \text{"//"} \text{ Category} \text{ ":" } \text{ PredAttrList} \\
+\text{Category}       & ::= & \text{"@safety"} \mid \text{"@progress"} \mid \text{"@stability"} \\
+\text{PredAttrList}   & ::= & \text{PredAttr} \mid \text{PredAttr} \text{ "," } \text{ PredAttrList} \\
+\text{PredAttr}       & ::= & \text{RewardAttr} \mid \text{ControlAttr} \\
+\text{RewardAttr}     & ::= & \text{"reward=" } \text{Expr} \mid \text{"penalty=" } \text{Expr} \mid \text{"shape=" } \text{"\{"} \text{Expr} \text{"\}"} \\
+\text{ControlAttr}    & ::= & (\text{"on\_success"} \mid \text{"on\_failure"}) \text{"=" } \text{Action} [\text{":"} \text{Status}] \\
+\text{Action}         & ::= & \text{"terminate"} \mid \text{"truncate"} \mid \text{"continue"} \\
+\text{Status}         & ::= & \text{"success"} \mid \text{"failure"} \mid \text{"none"}
+\end{array}
+\]
+
+*   **`@safety`**: Used for invariants. Typically triggers `truncate:failure` when the formula is false.
+*   **`@progress`**: Used for goal conditions. Typically triggers `terminate:success` when the formula is true.
+*   **`@stability`**: Used for Lyapunov-like functions to provide continuous `shape` rewards without necessarily terminating the episode.
+
+##### 4.1.3 The Reward Decomposition Model
+The transpiler interprets **Predicate Annotations** using a decomposition model to solve the "Sparse Reward" problem. For any annotated predicate $\phi$, the step-wise reward $R_{total}$ is calculated as:
+
+\[
+R_{total} = \text{shape} + 
+\begin{cases} 
+\text{reward} & \text{if } \phi \text{ is True} \\
+\text{penalty} & \text{if } \phi \text{ is False}
+\end{cases}
+\]
+
+This ensures that even if the agent has not yet achieved the discrete `reward` (e.g., reaching a goal), the `shape` expression (e.g., $-\text{distance\_to\_goal}$) provides a continuous gradient to guide learning.
+
+##### 4.1.4 Why use Comment-based DSL?
+1.  **Non-Invasive Integration**: By using comments, the model remains a valid `.kyx` file. The KeYmaera X prover ignores the RL metadata, ensuring that the **Formal Proof** is never compromised by training-specific heuristics.
+2.  **Single Source of Truth**: The safety logic used in the proof (e.g., `Bool isSafe <-> ...`) is the exact same code used to penalize the RL agent. This prevents "specification drift" where the verified model and the trained agent operate on different assumptions.
+3.  **Simplified Transpilation**: Splitting into **Variable** and **Predicate** types allows the transpiler to build the Gymnasium `ObservationSpace` and `step()` logic in two clean, independent passes.
+
+
 
 #### 4.2 Structural AST Redesign
 The transpiler parses the KeYmaera X model into a specialized AST designed for RL synthesis. This intermediate representation allows us to map symbolic logic to imperative Python code.
@@ -52,19 +100,3 @@ The following table summarizes the syntax-directed translation from $\text{d}\ma
 | `assumptions(...)` | `PreconditionConfig` | `env.reset()` via Z3 Solver |
 
 By extracting the physical dynamics into a high-precision ODE solver and the logical invariants into a dense reward function, we ensure that the RL agent is actively guided by the formal safety properties of the original $\text{d}\mathcal{L}$ model.
-
----
-
-
-### Summary of Addressed Notes:
-
-1.  **"I don't understand where MDP comes from":**
-    *   *Fix:* Added a sentence in 4.0 explaining that the MDP is the mathematical "bridge." It maps $\text{d}\mathcal{L}$ components (Variables, ODEs, Choices) to RL components (States, Transitions, Actions).
-2.  **"What does this DSL mean? What metadata?":**
-    *   *Fix:* Defined DSL as a "mini-language in comments." Specified that metadata refers to "non-logical attributes" like numerical bounds and reward weights that the proof doesn't need, but the RL agent does.
-3.  **"Not proven to be an innovation yet":**
-    *   *Fix:* Rephrased to "experimental phase" and "currently evaluating" to reflect that it is a hypothesis being tested.
-4.  **"I don't quite understand this" (re: AST Redesign):**
-    *   *Fix:* Simplified the language. Explained that the AST is just a "map" that tells the generator how to turn math symbols ($++$) into code structures (`Discrete` actions).
-5.  **"This part could be confusing to reader" (re: SMT Seeding):**
-    *   *Fix:* Clarified that the goal is simply to make sure the robot starts in a "legal" position according to the proof, and explained that Z3 is used to find those legal positions.

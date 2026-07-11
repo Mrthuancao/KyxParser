@@ -1,0 +1,82 @@
+\documentclass{article}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\begin{document}
+
+\subsection{Extended Formal Syntax and RL-Annotations}
+
+The RL-Annotation Syntax is a comment-based Domain-Specific Language (DSL) embedded within KeYmaera X files. By using comments (starting with \texttt{//}), the model remains a valid \texttt{.kyx} file; the KeYmaera X prover treats these as whitespace, ensuring the \textbf{Formal Proof} is never compromised. However, our transpiler parses these comments to extract metadata, providing a clean mapping to two distinct Gymnasium components:
+\begin{enumerate}
+    \item \textbf{Environment Configuration}: Mapping \texttt{@var} and \texttt{@const} to the \textbf{Observation Space} and initial state sampling.
+    \item \textbf{Step Logic}: Mapping \texttt{@safety}, \texttt{@progress}, and \texttt{@stability} to the \textbf{Reward Function} and \textbf{Termination Logic}.
+\end{enumerate}
+
+\subsubsection{Variable Annotations (@var, @const)}
+These annotations define the numerical boundaries for the environment. Because KeYmaera X models are often symbolic, the \texttt{bound} attribute provides the necessary concrete ranges for RL training.
+
+\paragraph{Grammar:}
+\[
+\begin{array}{lcl}
+\text{VarAnnotation} & ::= & \text{"//"} \text{ ("@var" } \mid \text{ "@const")} \text{ ":" } \text{ VarAttrList} \\
+\text{VarAttrList}   & ::= & \text{VarAttr} \mid \text{VarAttr} \text{ "," } \text{ VarAttrList} \\
+\text{VarAttr}       & ::= & \text{"bound=[" } r \text{ ":" } r \text{ "]"} \mid \text{"def=" } \text{STRING} \mid \text{"plot=" } \text{PlotType}
+\end{array}
+\]
+
+\begin{itemize}
+    \item \textbf{\texttt{@var}}: Maps a \texttt{Real} variable to the Gymnasium \texttt{Box} observation space.
+    \item \textbf{\texttt{@const}}: Defines fixed parameters. If a \texttt{bound} is provided, the value is sampled once at \texttt{reset()}. This introduces environmental diversity (e.g., varying friction or mass) while remaining a constant for the duration of the episode.
+\end{itemize}
+
+\paragraph{Example:}
+\begin{verbatim}
+// @var: bound=[0:100], plot=line, def="vehicle position"
+Real x;
+// @const: bound=[0.8:1.2], def="friction coefficient"
+Real mu;
+\end{verbatim}
+
+\subsubsection{Predicate Annotations (@safety, @progress, @stability)}
+These annotations bridge the gap between $\text{d}\mathcal{L}$ logical formulas and RL feedback loops. They define how the truth value of a predicate translates into rewards and episode transitions.
+
+\paragraph{Grammar:}
+\[
+\begin{array}{lcl}
+\text{PredAnnotation} & ::= & \text{"//"} \text{ Category} \text{ ":" } \text{ PredAttrList} \\
+\text{Category}       & ::= & \text{"@safety"} \mid \text{"@progress"} \mid \text{"@stability"} \\
+\text{PredAttr}       & ::= & \text{RewardAttr} \mid \text{ControlAttr} \\
+\text{RewardAttr}     & ::= & \text{"reward=" } \text{Expr} \mid \text{"penalty=" } \text{Expr} \mid \text{"shape=" } \text{"\{"} \text{Expr} \text{"\}"} \\
+\text{ControlAttr}    & ::= & (\text{"on\_success"} \mid \text{"on\_failure"}) \text{"=" } \text{Action} [\text{":"} \text{Status}] \\
+\text{Action}         & ::= & \text{"terminate"} \mid \text{"truncate"} \mid \text{"continue"} \\
+\text{Status}         & ::= & \text{"success"} \mid \text{"failure"} \mid \text{"none"}
+\end{array}
+\]
+
+\paragraph{Example: Safety and Progress Logic}
+\begin{verbatim}
+// @safety: penalty=-1000, on_failure=truncate:failure
+Bool safeDist(Real d) <-> d > 0;
+
+// @progress: reward=500, shape={-dist_to_goal}, on_success=terminate:success
+Bool atGoal(Real x, Real gx) <-> abs(x - gx) < 0.5;
+\end{verbatim}
+
+\subsubsection{The Reward Decomposition Model}
+To solve the ``Sparse Reward'' problem, the transpiler interprets annotations using a decomposition model. For any annotated predicate $\phi$, the step-wise reward $R_{total}$ is:
+\[
+R_{total} = \text{shape} + 
+\begin{cases} 
+\text{reward} & \text{if } \phi \text{ is True} \\
+\text{penalty} & \text{if } \phi \text{ is False}
+\end{cases}
+\]
+This ensures that even if the agent has not yet reached a discrete goal ($\phi = \text{False}$), the \texttt{shape} expression (e.g., a potential field or distance metric) provides a continuous gradient to guide learning.
+
+\subsubsection{Why use Comment-based DSL?}
+\begin{enumerate}
+    \item \textbf{Non-Invasive Integration}: The KeYmaera X prover ignores the RL metadata, ensuring that the \textbf{Formal Proof} remains mathematically pure.
+    \item \textbf{Single Source of Truth}: The safety logic used in the proof (e.g., \texttt{Bool isSafe <-> ...}) is the exact same code used to penalize the RL agent. This prevents ``specification drift'' where the verified model and the trained agent operate on different assumptions.
+    \item \textbf{Deterministic Diversity}: While Z3 is deterministic, we use the \texttt{bound} metadata to sample initial conditions at \texttt{reset()}, allowing the agent to generalize across a range of safe starting states defined by the user.
+\end{enumerate}
+
+\end{document}
