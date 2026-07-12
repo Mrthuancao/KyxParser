@@ -1,0 +1,129 @@
+/*
+ *	Robot must safely cross an intersection.
+ *  Fixed version: T is a countdown timer starting at D.
+ */
+
+Definitions
+  // @const: bound=[0.01:0.1]; def="time limit for control decisions"
+  Real ep;      
+  // @const: bound=[0.5:5.0]; def="minimum braking capability of the robot"
+  Real b;       
+  // @const: bound=[1.0:10.0]; def="maximum acceleration"
+  Real A;       
+  // @const: bound=[0.1:2.0]; def="obstacle minimum speed"
+  Real Vmin;    
+  Real ixr = 0; 
+  Real ixo = 0; 
+  // @const: bound=[1.0:10.0]; def="deadline for robot to cross intersection"
+  Real D;       
+
+  Real stopDist(Real v) = v^2/(2*b);
+  Real accComp(Real v)  = ( (A/b + 1)*(A/2*ep^2 + ep*v) );
+
+  Bool OAfterX(Real xo) <-> xo > ixo;
+  Bool RAfterX(Real xr) <-> xr > ixr;
+
+  // Global Bounds
+  Bool bounds() <-> (
+      A > 0 
+    & b > 0 
+    & ep > 0 
+    & Vmin > 0
+    & D >= ep
+  );
+
+  // Initial Conditions
+  Bool initialState(Real xr, Real vr, Real ixr, Real xo, Real vo, Real ixo, Real T) <-> (
+    vr = 0
+    & vo >= Vmin
+    & xr < ixr
+    // Robot is physically capable of reaching intersection by D-ep
+    & xr + A/2*(D - ep)^2 > ixr
+    & T = D
+  );
+
+  Bool assumptions(Real xr, Real vr, Real ixr, Real xo, Real vo, Real ixo, Real T) <->
+    bounds() & initialState(xr, vr, ixr, xo, vo, ixo, T);
+
+  // Safety Invariant: Avoid collision with obstacle
+  Bool safetyloopinv(Real xr, Real vr, Real ixr, Real xo, Real vo, Real ixo) <-> (
+    0 <= vr & Vmin <= vo & (
+      RAfterX(xr) | 
+      OAfterX(xo) | 
+      xr + stopDist(vr) < ixr |
+      (vr > 0 & ( xo + vo*(ixr-xr)/vr + A/2*((ixr-xr)/vr)^2 < ixo 
+                | ixo < xo + Vmin*(ixr-xr)/vr))
+    )
+  );
+
+  // Deadline Invariant: Can the robot make it if it floors it for the remaining time T?
+  Bool deadlineloopinv(Real xr, Real vr, Real ixr, Real T) <-> (
+    RAfterX(xr + vr*max(0, T) + A/2*max(0, T)^2)
+  );
+
+  HP controlFunc ::= {
+    // Obstacle's non-deterministic action
+    ao := *; ?-b <= ao & ao <= A;
+    
+    // Robot's control logic
+    {
+      // If obstacle passed or robot passed, robot can go full speed
+      ?OAfterX(xo) | RAfterX(xr); 
+      ar := A;
+    } ++ {
+      // If intersection is ahead for both
+      ?!OAfterX(xo) & ?!RAfterX(xr);
+      {
+        // If it's safe to accelerate (won't hit obstacle)
+        ?(vr > 0 & ( xo + vo*(ixr-xr)/vr + A/2*((ixr-xr)/vr)^2 < ixo | ixo < xo + Vmin*(ixr-xr)/(vr+A*ep) ));
+        ar := A;
+      } ++ {
+        // If not safe to accelerate, try to maintain or brake
+        ?!(vr > 0 & ( xo + vo*(ixr-xr)/vr + A/2*((ixr-xr)/vr)^2 < ixo | ixo < xo + Vmin*(ixr-xr)/(vr+A*ep) ));
+        { ar := -b; } 
+        ++ { ?vr = 0; ar := 0; }
+      }
+    };
+    t := 0;
+  };
+
+  HP stepFunc ::= { 
+    {xr' = vr, vr' = ar, xo' = vo, vo' = ao, t' = 1, T' = -1 
+     & t <= ep & vr >= 0 & vo >= Vmin } 
+  };
+
+  HP dwwcxd ::= {
+    {
+      controlFunc;
+      stepFunc;
+    }*@invariant(safetyloopinv(xr, vr, ixr, xo, vo, ixo) & deadlineloopinv(xr, vr, ixr, T))
+  };
+
+  // Final Safety: No collision at intersection AND cross before deadline
+  Bool finalSafety(Real xr, Real xo, Real T) <-> ( 
+    (xr = ixr -> xo != ixo) & 
+    (T <= 0 -> RAfterX(xr)) 
+  );
+
+  Bool ensure(Real xr) <-> RAfterX(xr);
+
+End.
+
+ProgramVariables
+  Real xr;  // robot position
+  Real vr;  // robot velocity
+  Real ar;  // robot acceleration
+  Real xo;  // obstacle position
+  Real vo;  // obstacle velocity
+  Real ao;  // obstacle acceleration
+  Real t;   // local control clock
+  Real T;   // remaining time to deadline
+End.
+
+Problem
+  assumptions(xr, vr, ixr, xo, vo, ixo, T)
+    ->
+    [ dwwcxd; ]finalSafety(xr, xo, T)
+    &
+    < dwwcxd; >ensure(xr)
+End.

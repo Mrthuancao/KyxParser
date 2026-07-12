@@ -654,7 +654,6 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
                     bound_str = const_decl.metadata['bound']
                     # Corrected regex to parse bounds string (e.g., "0.1:0.5" or "[0.1:0.5]")
                     bound_part = bound_str.split(';')[0].strip()
-                    # Updated regex to correctly capture numbers within optional square brackets
                     match = re.match(r'^\s*[?\s*(-?\d+(?:\.\d+)?)\s*:\s*(-?\d+(?:\.\d+)?)\s*]?\s*$', bound_part)
                     if match:
                         low = float(match.group(1))
@@ -682,6 +681,8 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
             # The expansion is now handled inside format_kx_expr_for_z3_formula_generator
             z3_precondition_formula = self._kx_expr_to_z3_formula(precondition_kx, z3_symbols, fixed_constants_map)
             opt.add(z3_precondition_formula)
+            if self.debug_mode:
+                print(f"DEBUG_CISB: Z3 Precondition formula added to optimizer: {z3_precondition_formula}")
         except ValueError as e:
             print(f"CRITICAL ERROR: Failed to convert precondition to Z3 formula during CISB population: {e}")
             return
@@ -690,6 +691,9 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
             # Use the bounds from self.sample_ranges, which now includes constant bounds
             low, high = self.sample_ranges.get(var_name, (-100.0, 100.0))
             opt.add(z3_var >= low, z3_var <= high)
+            if self.debug_mode:
+                print(f"DEBUG_CISB: Z3 variable '{var_name}' bounds added: [{low}, {high}]")
+
 
         while current_cisb_count < self._cisb_size and attempts < self._cisb_populate_attempts:
             attempts += 1
@@ -762,6 +766,9 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
                 solved_values.update(evaluated_z3_vars)
                 solved_values.update(fixed_constants_map) # Fixed constants override if there's overlap (e.g. if 'A' is both a Z3 var and in fixed_constants_map)
 
+                if self.debug_mode:
+                    print(f"DEBUG_CISB: Z3 SAT model values (before final const eval): vo={solved_values.get('vo')}, Vmin={solved_values.get('Vmin')}")
+
                 # Now, evaluate constants that have a 'value' expression (e.g., minV = A*ep)
                 # These must be evaluated using the values *just obtained* from the model or fixed_constants_map.
                 for const_def in self._definitions_config.constants:
@@ -827,6 +834,9 @@ class _KeYmaeraXEnvBase(gym.Env, ABC):
                 current_cisb_count += 1
                 if self.debug_mode and current_cisb_count % 100 == 0:
                     print(f"DEBUG_CISB: ... {current_cisb_count}/{self._cisb_size} states populated.")
+                if self.debug_mode:
+                    print(f"DEBUG_CISB: Z3 SAT model values (after final const eval): vo={solved_values.get('vo')}, Vmin={solved_values.get('Vmin')}")
+
 
                 blocking_conditions = []
                 for var_name, z3_var in z3_symbols.items():
