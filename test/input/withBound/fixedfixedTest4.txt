@@ -36,7 +36,7 @@ Definitions
     Real stopDist(Real v) = v^2/(2*b);
     Real accComp(Real v)  = ( (A/b + 1)*(A/2*ep^2 + ep*v) );
 
-    Bool bounds() <-> (                                                                  /* Bounds for global constants */
+    Bool bounds() <-> (                                                                 
         A > 0                                                                                         /* Working engine */
         & b > 0                                                                                         /* Working brakes */
         & ep > 0                                                                              /* Controller reaction time */
@@ -44,12 +44,13 @@ Definitions
         & GDelta > Vmax*ep + Vmax^2/(2*b)  /* waypoint is large enough that robot can start driving and still stop inside */
     );
 
-    Bool initialState(Real xr, Real vr, Real xg, Real T) <-> (                      /* Stopped somewhere safe initially */
+    Bool initialState(Real xr, Real vr, Real xg, Real T) <-> (                      
         vr = 0
         & xr < waypointStartDist(xg)
         & T > ep + maxTravelTime(xg-xr) + ep + stopTime(Vmax)
     );
-    Bool assumptions(Real xr, Real vr, Real xg, Real T) <->              /* Under these assumptions we guarantee safety */
+
+    Bool assumptions(Real xr, Real vr, Real xg, Real T) <->              
         bounds() & initialState(xr, vr, xg, T);
 
     // @safety: penalty=-1000, on_failure=truncate:status=failure
@@ -61,9 +62,6 @@ Definitions
                     | (vr <= minV & T > speedUpTime(vr) + maxTravelTime(xg-xr) + ep + stopTime(Vmax)))
     );
 
-    // Renamed 'ctrl' to 'controlFunc' as per documentation.
-    // MODIFIED: Converted if/else structure to guarded choices (using '?' and '++')
-    // and using curly braces {} for action grouping to be compatible with the parser.
     HP controlFunc ::= {
         // Choice 1: If in the goal area, decide to brake
         { ? (xr > waypointStartDist(xg));  ar := -b; } 
@@ -78,21 +76,14 @@ Definitions
         { ? (xr <= waypointStartDist(xg) & !(xr + stopDist(vr) + accComp(vr) < waypointEndDist(xg) & vr+A*ep <= Vmax));  ar := 0; }
     };
 
-    // Renamed 'dyn' to 'stepFunc' as per documentation.
     HP stepFunc ::= {xr' = vr, vr' = ar, t' = 1, T'=-1 & t <= ep & vr >= 0};
 
-    // The 'stepFunc;' was already wrapped in its own brace block in the previous iteration,
-    // which aligns with the parser's expectation for the continuous part of the loop.
     HP dwwpdl ::= {
         {	{ controlFunc; t := 0; }
             { stepFunc; }
         }*@invariant(loopinv(xr, vr, xg, T))
     };
 
-    // Define the 'ensure' predicate for the goal condition, with progress metadata.
-    // This captures the liveness postcondition from the original problem statement,
-    // which is typically the success condition for an RL agent.
-    // The safety part of the original postcondition is handled in the Problem section.
     // @progress: reward=1000, on_success=terminate:status=success, on_failure=terminate:status=failure
     Bool ensure(Real xr, Real vr, Real xg) <-> (
         waypointStartDist(xg) < xr & vr = 0
@@ -116,10 +107,6 @@ ProgramVariables
 End.
 
 Problem
-    // The problem statement is adapted to use 'assumptions' and 'ensure'.
-    // The original problem combined safety and liveness.
-    // The first part is the safety property (what must always hold at the end).
-    // The second part is the liveness property (that the 'ensure' goal is reachable).
     assumptions(xr, vr, xg, T)
         -> [ dwwpdl; ](xr < waypointEndDist(xg) & (T <= 0 -> ensure(xr, vr, xg))) // Safety postcondition
         & < dwwpdl; > ensure(xr, vr, xg)                                         // Liveness postcondition
