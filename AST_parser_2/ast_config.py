@@ -1,3 +1,27 @@
+"""
+File name: ast_config.py
+
+This module defines the Abstract Syntax Tree (AST) for KeYmaera X models.
+
+It provides a hierarchical structure to represent the various components of a KeYmaera X
+proof or model, including archive entries (theorems, lemmas), definitions (functions,
+predicates, hybrid programs), program variable declarations, the problem statement
+(a formula), and tactics.
+
+The AST is composed of several base classes:
+- ASTNode: The root abstract base class for all nodes.
+- Term: Abstract base class for mathematical expressions that evaluate to a value.
+- Formula: Abstract base class for logical expressions that evaluate to true/false.
+- HybridProgram: Abstract base class for dynamic systems and control flow.
+
+Each concrete class inherits from one of these bases and defines its specific
+structure and behavior, including equality (`__eq__`), hashing (`__hash__`),
+and a detailed string representation (`__repr__`) for debugging and inspection.
+
+The design aims for immutability where practical, and provides robust comparison
+and hashing for use in data structures like sets and dictionaries.
+"""
+
 import abc
 from typing import List, Optional, Union, Dict, Any
 

@@ -1,3 +1,38 @@
+"""
+File name: ast_parser.py
+
+This module provides a parser for KeYmaera models, converting their textual
+representation into a structured Abstract Syntax Tree (AST).
+
+KeYmaera is a hybrid systems theorem prover that uses a specialized syntax
+to define hybrid programs, differential equations, and logical formulas.
+This parser aims to facilitate programmatic analysis, manipulation, or
+translation of KeYmaera models by representing them as a hierarchical
+data structure.
+
+The parsing process involves:
+1.  **Lexical Analysis (Tokenization):** Breaking down the input text into a
+    stream of meaningful tokens (e.g., keywords, identifiers, operators, literals).
+2.  **Syntactic Analysis (Parsing):** Building the AST from the token stream
+    according to the grammar rules of KeYmaera. This includes handling:
+    *   **Terms:** Mathematical expressions involving variables, literals,
+        function calls, and arithmetic operators (e.g., `x + y * z`).
+    *   **Formulas:** Logical expressions involving predicates, comparisons,
+        quantifiers, and logical operators (e.g., `forall(x). x > 0 -> P(x)`).
+    *   **Hybrid Programs (HPs):** Dynamic systems combining discrete assignments,
+        differential equations, non-deterministic choices, sequences, tests,
+        and iterations (e.g., `{x'=v, v'=-g & t<=5} ++ (x:=x+1; ?(x<10))`).
+    *   **Model Structure:** Identifying and parsing top-level sections like
+        `Definitions`, `ProgramVariables`, and `Problem`.
+
+The parser employs a recursive descent strategy enhanced with operator
+precedence parsing (Pratt parser) for terms and formulas to correctly handle
+operator associativity and precedence. It also includes helper functions
+for parsing annotations embedded in comments.
+
+The AST nodes are defined in `ast_config.py`, which is assumed to be
+available in the same environment.
+"""
 import abc
 import re
 from typing import List, Optional, Union, Dict, Any
@@ -1223,3 +1258,249 @@ class KeYmaeraParser:
         
         # A KeYmaera model can contain multiple archive entries, but typically one per file.
         return KeYmaeraModel([archive_entry])
+
+
+if __name__ == "__main__":
+    # This section demonstrates how to use the KeYmaeraParser and provides
+    # a comprehensive example for breakpoint debugging and understanding the code flow.
+
+    print("--- Starting KeYmaera Parser Test Section ---")
+
+    # --- Test parse_annotations helper function ---
+    print("\nTesting parse_annotations...")
+    annotation_line1 = '// @const: bound=[0.1:0.5]; def="time limit"; is_active=true'
+    parsed_anno1 = parse_annotations(annotation_line1)
+    print(f"Input: '{annotation_line1}'")
+    print(f"Output: {parsed_anno1}")
+    assert parsed_anno1 == {'const': {'bound': [0.1, 0.5], 'def': 'time limit', 'is_active': True}}
+
+    annotation_line2 = '// @param: value=10, type=int'
+    parsed_anno2 = parse_annotations(annotation_line2)
+    print(f"Input: '{annotation_line2}'")
+    print(f"Output: {parsed_anno2}")
+    assert parsed_anno2 == {'param': {'value': 10, 'type': 'int'}}
+
+    annotation_line3 = '// Not an annotation'
+    parsed_anno3 = parse_annotations(annotation_line3)
+    print(f"Input: '{annotation_line3}'")
+    print(f"Output: {parsed_anno3}")
+    assert parsed_anno3 == {}
+    print("parse_annotations tests passed.")
+
+    # --- Sample KeYmaera Model Text for comprehensive parsing ---
+    sample_keymaera_model_text = """
+    Theorem "IJRR17/Theorem 14: Reach waypoint with deadline"
+
+/*
+ *	Robot must stop within distance delta at goal.
+ *
+ *  Robot
+ * 	- must stop within distance delta of goal
+ *  - can only drive straight and forward
+ *  - ensures progress towards goal
+ *
+ *  Liveness property:
+ *  - Robot can stop at goal
+ *
+ */
+
+Definitions
+    // @const: bound=[0.1:0.5]; def="time limit for control decisions"
+    Real ep;      /* time limit for control decisions */
+    // @const: bound=[0.5:5.0]; def="minimum braking capability of the robot"
+    Real b;       /* minimum braking capability of the robot */
+    // @const: bound=[1.0:10.0]; def="maximum acceleration"
+    Real A;       /* maximum acceleration -b <= a <= A */
+    // @const: bound=[1.0:10.0]; def="goal area size"
+    Real GDelta;	 /* goal area size */
+    // @const: bound=[5.0:30.0]; def="maximum robot velocity"
+    Real Vmax;    /* robot cannot go faster than this */
+
+    Real waypointStartDist(Real xg) = xg-GDelta;
+    Real waypointEndDist(Real xg)   = xg+GDelta;
+
+    Real minV = A*ep;
+    Real maxTravelTime(Real g) = waypointStartDist(g)/minV;
+    Real stopTime(Real v)      = v/b;
+    Real speedUpTime(Real v)   = ep-v/A;
+
+    Real stopDist(Real v) = v^2/(2*b);
+    Real accComp(Real v)  = ( (A/b + 1)*(A/2*ep^2 + ep*v) );
+
+    Bool bounds() <-> (                                                                 
+        A > 0                                                                                         /* Working engine */
+        & b > 0                                                                                         /* Working brakes */
+        & ep > 0                                                                              /* Controller reaction time */
+        & Vmax >= 2*A*ep
+        & GDelta > Vmax*ep + Vmax^2/(2*b)  /* waypoint is large enough that robot can start driving and still stop inside */
+    );
+
+    Bool initialState(Real xr, Real vr, Real xg, Real T) <-> (                      
+        vr = 0
+        & xr < waypointStartDist(xg)
+        & T > ep + maxTravelTime(xg-xr) + ep + stopTime(Vmax)
+    );
+
+    Bool assumptions(Real xr, Real vr, Real xg, Real T) <->              
+        bounds() & initialState(xr, vr, xg, T);
+
+    // @safety: penalty=-1000, on_failure=truncate:status=failure
+    Bool loopinv(Real xr, Real vr, Real xg, Real T) <-> ( // Added T to parameters as it's used in the invariant
+        0 <= vr & vr <= Vmax & xr + stopDist(vr) < waypointEndDist(xg)
+                & (waypointStartDist(xg) < xr -> (vr = 0 | T >= stopTime(vr)))
+                & (xr <= waypointStartDist(xg) ->
+                    (vr >= minV & T > maxTravelTime(xg-xr) + ep + stopTime(Vmax))
+                    | (vr <= minV & T > speedUpTime(vr) + maxTravelTime(xg-xr) + ep + stopTime(Vmax)))
+    );
+
+    HP controlFunc ::= {
+        // Choice 1: If in the goal area, decide to brake
+        { ? (xr > waypointStartDist(xg));  ar := -b; } 
+        ++
+        // Choice 2: If in the goal area AND already stopped, decide to stay stopped
+        { ? (xr > waypointStartDist(xg) & vr = 0);  ar := 0; }
+        ++
+        // Choice 3: If outside the goal area AND can accelerate, decide to accelerate
+        { ? (xr <= waypointStartDist(xg) & (xr + stopDist(vr) + accComp(vr) < waypointEndDist(xg) & vr+A*ep <= Vmax));  ar := A; }
+        ++
+        // Choice 4: If outside the goal area AND cannot accelerate (must coast), decide to coast
+        { ? (xr <= waypointStartDist(xg) & !(xr + stopDist(vr) + accComp(vr) < waypointEndDist(xg) & vr+A*ep <= Vmax));  ar := 0; }
+    };
+
+    HP stepFunc ::= {xr' = vr, vr' = ar, t' = 1, T'=-1 & t <= ep & vr >= 0};
+
+    HP dwwpdl ::= {
+        {	{ controlFunc; t := 0; }
+            { stepFunc; }
+        }*@invariant(loopinv(xr, vr, xg, T))
+    };
+
+    // @progress: reward=1000, on_success=terminate:status=success, on_failure=terminate:status=failure
+    Bool ensure(Real xr, Real vr, Real xg) <-> (
+        waypointStartDist(xg) < xr & vr = 0
+    );
+
+End.
+
+ProgramVariables
+    // @var: bound=[0:100], def="robot position: x"
+    Real xr;
+    // @var: bound=[0:20], def="robot translational velocity"
+    Real vr;
+    // @var: bound=[-10:10], def="robot translational acceleration"
+    Real ar;
+    // @var: bound=[0:100], def="goal position: x"
+    Real xg;
+    // @var: bound=[0:1], def="time elapsed in current control step"
+    Real t;
+    // @var: bound=[0:1000], def="global time remaining until deadline"
+    Real T;
+End.
+
+Problem
+    assumptions(xr, vr, xg, T)
+        -> [ dwwpdl; ](xr < waypointEndDist(xg) & (T <= 0 -> ensure(xr, vr, xg))) // Safety postcondition
+        & < dwwpdl; > ensure(xr, vr, xg)                                         // Liveness postcondition
+End.
+    """
+
+    print("\n--- Parsing full sample KeYmaera model ---")
+    parser = KeYmaeraParser(sample_keymaera_model_text)
+    try:
+        model_ast = parser.parse()
+        print("Full model parsing successful!")
+        # Breakpoint 1: After successful parsing of the entire model.
+        # Inspect `model_ast` here to see the complete AST.
+        breakpoint() 
+        
+        print(f"Model Kind: {model_ast.entries[0].kind}")
+        print(f"Model Name: {model_ast.entries[0].name}")
+        
+        print("\n--- Definitions ---")
+        for definition in model_ast.entries[0].definitions.defs:
+            print(f"- {definition.__class__.__name__}: Name='{definition.name}', Type='{getattr(definition, 'type', 'N/A')}', Annotations={definition.annotations}")
+            if isinstance(definition, FuncDef):
+                print(f"  Body: {definition.body}")
+            elif isinstance(definition, PredDef):
+                print(f"  Body: {definition.body}")
+            elif isinstance(definition, HPDef):
+                print(f"  Body: {definition.body}")
+
+        print("\n--- Program Variables ---")
+        for pv_decl in model_ast.entries[0].program_variables.decls:
+            print(f"- {pv_decl.type} {pv_decl.name}, Annotations={pv_decl.annotations}")
+
+        print("\n--- Problem Formula ---")
+        print(model_ast.entries[0].problem.formula)
+
+    except ValueError as e:
+        print(f"Error parsing full model: {e}")
+        # Breakpoint 2: When an error occurs during the main model parsing.
+        # This is useful to see the exact error message and stack trace.
+        breakpoint() 
+
+    # --- Specific Test Cases for Individual Parsers ---
+    print("\n--- Testing parse_term ---")
+    term_parser = KeYmaeraParser("")
+    try:
+        term_expr1 = "x + y * (z - 5)^2 + f(a, b')"
+        parsed_term1 = term_parser.parse_term(term_expr1)
+        print(f"Term '{term_expr1}' parsed as: {parsed_term1}")
+        # Breakpoint 3: After successful parsing of a complex term.
+        # Inspect `parsed_term1` to see the term's AST.
+        breakpoint()
+        
+        term_expr2 = "-10 + x'"
+        parsed_term2 = term_parser.parse_term(term_expr2)
+        print(f"Term '{term_expr2}' parsed as: {parsed_term2}")
+        # Breakpoint 4: After successful parsing of another term.
+        breakpoint()
+
+    except ValueError as e:
+        print(f"Error parsing term: {e}")
+        # Breakpoint 5: When an error occurs during term parsing.
+        breakpoint()
+
+    print("\n--- Testing parse_formula ---")
+    formula_parser = KeYmaeraParser("")
+    try:
+        formula_expr1 = "forall(x, y). P(x) -> (x > 0 && y < 10)"
+        parsed_formula1 = formula_parser.parse_formula(formula_expr1)
+        print(f"Formula '{formula_expr1}' parsed as: {parsed_formula1}")
+        # Breakpoint 6: After successful parsing of a complex formula.
+        # Inspect `parsed_formula1` here.
+        breakpoint()
+
+        formula_expr2 = "![hp_choice] (x = 5) <-> <simple_hp> true"
+        parsed_formula2 = formula_parser.parse_formula(formula_expr2)
+        print(f"Formula '{formula_expr2}' parsed as: {parsed_formula2}")
+        # Breakpoint 7: After successful parsing of another formula.
+        breakpoint()
+
+    except ValueError as e:
+        print(f"Error parsing formula: {e}")
+        # Breakpoint 8: When an error occurs during formula parsing.
+        breakpoint()
+
+    print("\n--- Testing parse_hybrid_program ---")
+    hp_parser = KeYmaeraParser("")
+    try:
+        hp_expr1 = "{x' = v, t <= 10} ; ?(x > 0) ++ {y := y + 1}*@invariant(y < 5)"
+        parsed_hp1 = hp_parser.parse_hybrid_program(hp_expr1)
+        print(f"Hybrid Program '{hp_expr1}' parsed as: {parsed_hp1}")
+        # Breakpoint 9: After successful parsing of a complex hybrid program.
+        # Inspect `parsed_hp1` here.
+        breakpoint()
+
+        hp_expr2 = "{x := x + 1; y := y - 1} ; complex_ode"
+        parsed_hp2 = hp_parser.parse_hybrid_program(hp_expr2)
+        print(f"Hybrid Program '{hp_expr2}' parsed as: {parsed_hp2}")
+        # Breakpoint 10: After successful parsing of another hybrid program.
+        breakpoint()
+
+    except ValueError as e:
+        print(f"Error parsing hybrid program: {e}")
+        # Breakpoint 11: When an error occurs during hybrid program parsing.
+        breakpoint()
+
+    print("\n--- KeYmaera Parser Test Section Complete ---")
