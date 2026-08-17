@@ -1,8 +1,22 @@
+#file description: This file contains the AST node classes for representing the structure of KeYmaera models, including terms, formulas, hybrid programs, and model definitions. Each class includes a method for generating an indented string representation of the node and its children.
+#name: ast_config.py
 from typing import List, Optional, Union, Dict, Any
+
+# Helper for indentation
+def _indent(text: str, level: int):
+    prefix = "  " * level
+    return "\n".join(prefix + line for line in text.splitlines())
 
 class ASTNode:
     """Base class for all Abstract Syntax Tree nodes."""
-    pass
+    def __repr__(self):
+        # Public __repr__ calls the indented version starting at level 0
+        return self._repr_indented(0)
+
+    def _repr_indented(self, indent_level: int):
+        # Default implementation for simple nodes, can be overridden
+        # Fallback to default repr if not specifically handled
+        return super().__repr__()
 
 # --- Term Nodes ---
 class Term(ASTNode):
@@ -11,13 +25,13 @@ class Term(ASTNode):
 class Literal(Term):
     def __init__(self, value: Union[int, float, bool]):
         self.value = value
-    def __repr__(self):
+    def _repr_indented(self, indent_level: int):
         return f"Literal({self.value})"
 
 class VarRef(Term):
     def __init__(self, name: str):
         self.name = name
-    def __repr__(self):
+    def _repr_indented(self, indent_level: int):
         return f"VarRef('{self.name}')"
 
 class BinaryTermOp(Term):
@@ -25,22 +39,31 @@ class BinaryTermOp(Term):
         self.op = op
         self.left = left
         self.right = right
-    def __repr__(self):
-        return f"BinaryTermOp('{self.op}', {self.left}, {self.right})"
+    def _repr_indented(self, indent_level: int):
+        left_repr = _indent(self.left._repr_indented(indent_level + 1), 0)
+        right_repr = _indent(self.right._repr_indented(indent_level + 1), 0)
+        return (f"BinaryTermOp('{self.op}',\n"
+                f"{left_repr},\n"
+                f"{right_repr})")
 
 class UnaryTermOp(Term):
     def __init__(self, op: str, operand: Term):
         self.op = op
         self.operand = operand
-    def __repr__(self):
-        return f"UnaryTermOp('{self.op}', {self.operand})"
+    def _repr_indented(self, indent_level: int):
+        operand_repr = _indent(self.operand._repr_indented(indent_level + 1), 0)
+        return (f"UnaryTermOp('{self.op}',\n"
+                f"{operand_repr})")
 
 class FunctionCall(Term):
     def __init__(self, name: str, args: List[Term]):
         self.name = name
         self.args = args
-    def __repr__(self):
-        return f"FunctionCall('{self.name}', {self.args})"
+    def _repr_indented(self, indent_level: int):
+        args_repr = ",\n".join(_indent(arg._repr_indented(indent_level + 1), 0) for arg in self.args)
+        return (f"FunctionCall('{self.name}', [\n"
+                f"{args_repr}\n"
+                f"{'  ' * indent_level}])")
 
 # --- Formula Nodes ---
 class Formula(ASTNode):
@@ -49,7 +72,7 @@ class Formula(ASTNode):
 class BooleanLiteral(Formula):
     def __init__(self, value: bool):
         self.value = value
-    def __repr__(self):
+    def _repr_indented(self, indent_level: int):
         return f"BooleanLiteral({self.value})"
 
 class BinaryFormulaOp(Formula):
@@ -57,52 +80,76 @@ class BinaryFormulaOp(Formula):
         self.op = op
         self.left = left
         self.right = right
-    def __repr__(self):
-        return f"BinaryFormulaOp('{self.op}',\n  {self.left},\n  {self.right})"
+    def _repr_indented(self, indent_level: int):
+        left_repr = _indent(self.left._repr_indented(indent_level + 1), 0)
+        right_repr = _indent(self.right._repr_indented(indent_level + 1), 0)
+        return (f"BinaryFormulaOp('{self.op}',\n"
+                f"{left_repr},\n"
+                f"{right_repr})")
 
 class UnaryFormulaOp(Formula):
     def __init__(self, op: str, operand: Formula):
         self.op = op
         self.operand = operand
-    def __repr__(self):
-        return f"UnaryFormulaOp('{self.op}', {self.operand})"
+    def _repr_indented(self, indent_level: int):
+        operand_repr = _indent(self.operand._repr_indented(indent_level + 1), 0)
+        return (f"UnaryFormulaOp('{self.op}',\n"
+                f"{operand_repr})")
 
 class Comparison(Formula):
     def __init__(self, op: str, left: Term, right: Term):
         self.op = op
         self.left = left
         self.right = right
-    def __repr__(self):
-        return f"Comparison('{self.op}', {self.left}, {self.right})"
+    def _repr_indented(self, indent_level: int):
+        left_repr = _indent(self.left._repr_indented(indent_level + 1), 0)
+        right_repr = _indent(self.right._repr_indented(indent_level + 1), 0)
+        return (f"Comparison('{self.op}',\n"
+                f"{left_repr},\n"
+                f"{right_repr})")
 
 class Quantifier(Formula):
     def __init__(self, quantifier_type: str, variables: List[VarRef], body: Formula):
         self.quantifier_type = quantifier_type
         self.variables = variables
         self.body = body
-    def __repr__(self):
-        return f"Quantifier('{self.quantifier_type}', {self.variables}, {self.body})"
+    def _repr_indented(self, indent_level: int):
+        vars_repr = ", ".join(v._repr_indented(0) for v in self.variables)
+        body_repr = _indent(self.body._repr_indented(indent_level + 1), 0)
+        return (f"Quantifier('{self.quantifier_type}', [{vars_repr}],\n"
+                f"{body_repr})")
 
 class ModalFormula(Formula):
     def __init__(self, modality: str, program: 'HybridProgram', formula: Formula):
         self.modality = modality
         self.program = program
         self.formula = formula
-    def __repr__(self):
-        return f"ModalFormula('{self.modality}',\n    program={self.program},\n    formula={self.formula})"
+    def _repr_indented(self, indent_level: int):
+        program_repr = _indent(self.program._repr_indented(indent_level + 2), 0)
+        formula_repr = _indent(self.formula._repr_indented(indent_level + 2), 0)
+        return (f"ModalFormula('{self.modality}',\n"
+                f"{'  ' * (indent_level + 1)}program={program_repr},\n"
+                f"{'  ' * (indent_level + 1)}formula={formula_repr})")
 
 class PredicateCall(Formula):
     def __init__(self, name: str, args: List[Term]):
         self.name = name
         self.args = args
-    def __repr__(self):
-        return f"PredicateCall('{self.name}', {self.args})"
+    def _repr_indented(self, indent_level: int):
+        if self.args:
+            args_repr = ",\n".join(_indent(arg._repr_indented(indent_level + 1), 0) for arg in self.args)
+            return (f"PredicateCall('{self.name}', [\n"
+                    f"{args_repr}\n"
+                    f"{'  ' * indent_level}])")
+        return f"PredicateCall('{self.name}', [])"
 
 class C_Formula(Formula):
     def __init__(self, formula: Formula):
         self.formula = formula
-    def __repr__(self):
-        return f"C_Formula({self.formula})"
+    def _repr_indented(self, indent_level: int):
+        formula_repr = _indent(self.formula._repr_indented(indent_level + 1), 0)
+        return (f"C_Formula(\n"
+                f"{formula_repr})")
 
 # --- Hybrid Program Nodes ---
 class HybridProgram(ASTNode):
@@ -112,60 +159,88 @@ class Assignment(HybridProgram):
     def __init__(self, var: VarRef, expr: Term):
         self.var = var
         self.expr = expr
-    def __repr__(self):
-        return f"Assignment({self.var}, {self.expr})"
+    def _repr_indented(self, indent_level: int):
+        var_repr = _indent(self.var._repr_indented(indent_level + 1), 0)
+        expr_repr = _indent(self.expr._repr_indented(indent_level + 1), 0)
+        return (f"Assignment(\n"
+                f"{var_repr},\n"
+                f"{expr_repr})")
 
 class NondetAssignment(HybridProgram):
     def __init__(self, var: VarRef):
         self.var = var
-    def __repr__(self):
-        return f"NondetAssignment({self.var})"
+    def _repr_indented(self, indent_level: int):
+        var_repr = _indent(self.var._repr_indented(indent_level + 1), 0)
+        return f"NondetAssignment({var_repr})"
 
 class Test(HybridProgram):
     def __init__(self, condition: Formula):
         self.condition = condition
-    def __repr__(self):
-        return f"Test({self.condition})"
+    def _repr_indented(self, indent_level: int):
+        condition_repr = _indent(self.condition._repr_indented(indent_level + 1), 0)
+        return (f"Test(\n"
+                f"{condition_repr})")
 
 class Sequence(HybridProgram):
     def __init__(self, programs: List[HybridProgram]):
         self.programs = programs
-    def __repr__(self):
-        return f"Sequence({self.programs})"
+    def _repr_indented(self, indent_level: int):
+        programs_repr = ",\n".join(_indent(p._repr_indented(indent_level + 1), 0) for p in self.programs)
+        return (f"Sequence([\n"
+                f"{programs_repr}\n"
+                f"{'  ' * indent_level}])")
 
 class Choice(HybridProgram):
     def __init__(self, left: HybridProgram, right: HybridProgram):
         self.left = left
         self.right = right
-    def __repr__(self):
-        return f"Choice(\n  left={self.left},\n  right={self.right})"
+    def _repr_indented(self, indent_level: int):
+        left_repr = _indent(self.left._repr_indented(indent_level + 2), 0)
+        right_repr = _indent(self.right._repr_indented(indent_level + 2), 0)
+        return (f"Choice(\n"
+                f"{'  ' * (indent_level + 1)}left={left_repr},\n"
+                f"{'  ' * (indent_level + 1)}right={right_repr})")
 
 class Iteration(HybridProgram):
     def __init__(self, program: HybridProgram, invariant: Optional[Formula] = None):
         self.program = program
         self.invariant = invariant
-    def __repr__(self):
-        return f"Iteration(\n    program={self.program},\n    invariant={self.invariant})"
+    def _repr_indented(self, indent_level: int):
+        program_repr = _indent(self.program._repr_indented(indent_level + 2), 0)
+        invariant_repr = _indent(self.invariant._repr_indented(indent_level + 2), 0) if self.invariant else "None"
+        return (f"Iteration(\n"
+                f"{'  ' * (indent_level + 1)}program={program_repr},\n"
+                f"{'  ' * (indent_level + 1)}invariant={invariant_repr})")
 
 class ODE(HybridProgram):
     def __init__(self, equations: List['ODEEquation'], domain_constraint: Optional[Formula] = None):
         self.equations = equations
         self.domain_constraint = domain_constraint
-    def __repr__(self):
-        return f"ODE(\n      equations={self.equations},\n      domain_constraint={self.domain_constraint})"
+    def _repr_indented(self, indent_level: int):
+        equations_repr = ",\n".join(_indent(eq._repr_indented(indent_level + 3), 0) for eq in self.equations)
+        domain_repr = _indent(self.domain_constraint._repr_indented(indent_level + 3), 0) if self.domain_constraint else "None"
+        return (f"ODE(\n"
+                f"{'  ' * (indent_level + 1)}equations=[\n"
+                f"{equations_repr}\n"
+                f"{'  ' * (indent_level + 1)}],\n"
+                f"{'  ' * (indent_level + 1)}domain_constraint={domain_repr})")
 
 class ODEEquation(ASTNode):
     def __init__(self, var: VarRef, expr: Term):
         self.var = var
         self.expr = expr
-    def __repr__(self):
-        return f"ODEEquation({self.var}, {self.expr})"
+    def _repr_indented(self, indent_level: int):
+        var_repr = self.var._repr_indented(0)
+        expr_repr = self.expr._repr_indented(0)
+        return f"ODEEquation({var_repr}, {expr_repr})"
 
 class HPBlock(HybridProgram):
     def __init__(self, program: HybridProgram):
         self.program = program
-    def __repr__(self):
-        return f"HPBlock(\n    program={self.program})"
+    def _repr_indented(self, indent_level: int):
+        program_repr = _indent(self.program._repr_indented(indent_level + 2), 0)
+        return (f"HPBlock(\n"
+                f"{'  ' * (indent_level + 1)}program={program_repr})")
 
 
 # --- Model Structure Nodes ---
@@ -173,6 +248,8 @@ class Definition(ASTNode):
     def __init__(self, name: str, annotations: Dict[str, Any]):
         self.name = name
         self.annotations = annotations
+    def _repr_indented(self, indent_level: int):
+        return f"Definition('{self.name}', {self.annotations})" # Default, subclasses override
 
 class FuncDef(Definition):
     def __init__(self, name: str, type: str, body: Term, args: List[VarRef], annotations: Dict[str, Any]):
@@ -180,8 +257,13 @@ class FuncDef(Definition):
         self.type = type
         self.body = body
         self.args = args
-    def __repr__(self):
-        return f"FuncDef('{self.name}', '{self.type}', {self.body}, {self.args}, {self.annotations})"
+    def _repr_indented(self, indent_level: int):
+        body_repr = _indent(self.body._repr_indented(indent_level + 1), 0)
+        args_repr = ", ".join(arg._repr_indented(0) for arg in self.args)
+        return (f"FuncDef('{self.name}', '{self.type}',\n"
+                f"{body_repr},\n"
+                f"{'  ' * (indent_level + 1)}[{args_repr}],\n"
+                f"{'  ' * (indent_level + 1)}{self.annotations})")
 
 class PredDef(Definition):
     def __init__(self, name: str, type: str, body: Formula, args: List[VarRef], annotations: Dict[str, Any]):
@@ -189,47 +271,63 @@ class PredDef(Definition):
         self.type = type
         self.body = body
         self.args = args
-    def __repr__(self):
-        return f"PredDef('{self.name}', '{self.type}', {self.body}, {self.args}, {self.annotations})"
+    def _repr_indented(self, indent_level: int):
+        body_repr = _indent(self.body._repr_indented(indent_level + 1), 0)
+        args_repr = ", ".join(arg._repr_indented(0) for arg in self.args)
+        return (f"PredDef('{self.name}', '{self.type}',\n"
+                f"{body_repr},\n"
+                f"{'  ' * (indent_level + 1)}[{args_repr}],\n"
+                f"{'  ' * (indent_level + 1)}{self.annotations})")
 
 class HPDef(Definition):
     def __init__(self, name: str, body: HybridProgram, annotations: Dict[str, Any]):
         super().__init__(name, annotations)
         self.body = body
-    def __repr__(self):
-        return f"HPDef('{self.name}', {self.body}, {self.annotations})"
+    def _repr_indented(self, indent_level: int):
+        body_repr = _indent(self.body._repr_indented(indent_level + 1), 0)
+        return (f"HPDef('{self.name}',\n"
+                f"{body_repr},\n"
+                f"{'  ' * (indent_level + 1)}{self.annotations})")
 
 class DefinitionsBlock(ASTNode):
     def __init__(self, defs: List[Definition]):
         self.defs = defs
-    def __repr__(self):
-        return f"DefinitionsBlock({self.defs})"
+    def _repr_indented(self, indent_level: int):
+        defs_repr = ",\n".join(_indent(d._repr_indented(indent_level + 1), 0) for d in self.defs)
+        return (f"DefinitionsBlock([\n"
+                f"{defs_repr}\n"
+                f"{'  ' * indent_level}])")
 
 class ProgramVariableDecl(ASTNode):
     def __init__(self, type: str, name: str, annotations: Dict[str, Any]):
         self.type = type
         self.name = name
         self.annotations = annotations
-    def __repr__(self):
+    def _repr_indented(self, indent_level: int):
         return f"ProgramVariableDecl('{self.type}', '{self.name}', {self.annotations})"
 
 class ProgramVariablesBlock(ASTNode):
     def __init__(self, vars: List[ProgramVariableDecl]):
         self.vars = vars
-    def __repr__(self):
-        return f"ProgramVariablesBlock({self.vars})"
+    def _repr_indented(self, indent_level: int):
+        vars_repr = ",\n".join(_indent(v._repr_indented(indent_level + 1), 0) for v in self.vars)
+        return (f"ProgramVariablesBlock([\n"
+                f"{vars_repr}\n"
+                f"{'  ' * indent_level}])")
 
 class ProblemBlock(ASTNode):
     def __init__(self, formula: Formula):
         self.formula = formula
-    def __repr__(self):
-        return f"ProblemBlock({self.formula})"
+    def _repr_indented(self, indent_level: int):
+        formula_repr = _indent(self.formula._repr_indented(indent_level + 1), 0)
+        return (f"ProblemBlock(\n"
+                f"{formula_repr})")
 
 class TacticBlock(ASTNode):
     def __init__(self, name: str, args: List[str]):
         self.name = name
         self.args = args
-    def __repr__(self):
+    def _repr_indented(self, indent_level: int):
         return f"TacticBlock('{self.name}', {self.args})"
 
 class ArchiveEntry(ASTNode):
@@ -240,15 +338,24 @@ class ArchiveEntry(ASTNode):
         self.program_variables = program_variables
         self.problem = problem
         self.tactics = tactics
-    def __repr__(self):
+    def _repr_indented(self, indent_level: int):
+        defs_repr = _indent(self.definitions._repr_indented(indent_level + 1), 0)
+        pv_repr = _indent(self.program_variables._repr_indented(indent_level + 1), 0)
+        problem_repr = _indent(self.problem._repr_indented(indent_level + 1), 0)
+        tactics_repr = ",\n".join(_indent(t._repr_indented(indent_level + 1), 0) for t in self.tactics)
         return (f"ArchiveEntry(kind='{self.kind}', name='{self.name}',\n"
-                f"  definitions={self.definitions},\n"
-                f"  program_variables={self.program_variables},\n"
-                f"  problem={self.problem},\n"
-                f"  tactics={self.tactics})")
+                f"{'  ' * (indent_level + 1)}definitions={defs_repr},\n"
+                f"{'  ' * (indent_level + 1)}program_variables={pv_repr},\n"
+                f"{'  ' * (indent_level + 1)}problem={problem_repr},\n"
+                f"{'  ' * (indent_level + 1)}tactics=[\n"
+                f"{tactics_repr}\n"
+                f"{'  ' * (indent_level + 1)}])")
 
 class KeYmaeraModel(ASTNode):
     def __init__(self, entries: List[ArchiveEntry]):
         self.entries = entries
-    def __repr__(self):
-        return f"KeYmaeraModel({self.entries})"
+    def _repr_indented(self, indent_level: int):
+        entries_repr = ",\n".join(_indent(e._repr_indented(indent_level + 1), 0) for e in self.entries)
+        return (f"KeYmaeraModel([\n"
+                f"{entries_repr}\n"
+                f"{'  ' * indent_level}])")

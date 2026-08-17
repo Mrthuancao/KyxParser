@@ -1,0 +1,379 @@
+KeYmaeraModel([
+ArchiveEntry(kind='IJRR17', name='Theorem 1: Static safety',
+    definitions=DefinitionsBlock([
+FuncDef('ep', 'Real',
+VarRef('ep'),
+        [],
+        {'const': {'bound': [0.1, 0.5], 'def': 'time limit for control decisions'}}),
+FuncDef('b', 'Real',
+VarRef('b'),
+        [],
+        {'const': {'bound': [0.5, 5.0], 'def': 'minimum braking capability of the robot'}}),
+FuncDef('A', 'Real',
+VarRef('A'),
+        [],
+        {'const': {'bound': [1.0, 10.0], 'def': 'maximum acceleration'}}),
+FuncDef('W', 'Real',
+VarRef('W'),
+        [],
+        {'const': {'bound': [0.1, 1.0], 'def': 'maximum steering (rotational velocity)'}}),
+FuncDef('stopDist', 'Real',
+BinaryTermOp('/',
+BinaryTermOp('^',
+VarRef('v'),
+Literal(2.0)),
+BinaryTermOp('*',
+Literal(2.0),
+VarRef('b'))),
+        [VarRef('v')],
+        {}),
+FuncDef('accelComp', 'Real',
+BinaryTermOp('*',
+BinaryTermOp('+',
+BinaryTermOp('/',
+VarRef('A'),
+VarRef('b')),
+Literal(1.0)),
+BinaryTermOp('+',
+BinaryTermOp('*',
+BinaryTermOp('/',
+VarRef('A'),
+Literal(2.0)),
+BinaryTermOp('^',
+VarRef('ep'),
+Literal(2.0))),
+BinaryTermOp('*',
+VarRef('ep'),
+VarRef('v')))),
+        [VarRef('v')],
+        {}),
+FuncDef('admissibleSeparation', 'Real',
+BinaryTermOp('+',
+FunctionCall('stopDist', [
+VarRef('v')
+          ]),
+FunctionCall('accelComp', [
+VarRef('v')
+          ])),
+        [VarRef('v')],
+        {}),
+PredDef('isWellformedDir', 'Bool',
+Comparison('=',
+BinaryTermOp('+',
+BinaryTermOp('^',
+VarRef('dx'),
+Literal(2.0)),
+BinaryTermOp('^',
+VarRef('dy'),
+Literal(2.0))),
+Literal(1.0)),
+        [VarRef('dx'), VarRef('dy')],
+        {'progress': {'reward': 10, 'shape': '{-((dx**2 + dy**2) - 1)**2}', 'on_success': 'continue:status=none', 'on_failure': 'continue:status=none'}}),
+PredDef('isPhysicallyValid', 'Bool',
+BinaryFormulaOp('&',
+Comparison('>=',
+VarRef('v'),
+Literal(0.0)),
+Comparison('!=',
+VarRef('r'),
+Literal(0.0))),
+        [VarRef('v'), VarRef('r')],
+        {'safety': {'penalty': -500, 'on_failure': 'truncate:status=failure', 'on_success': 'continue:status=none'}}),
+PredDef('isSafe', 'Bool',
+BinaryFormulaOp('|',
+Comparison('>',
+FunctionCall('abs', [
+BinaryTermOp('-',
+VarRef('x'),
+VarRef('xo'))
+            ]),
+FunctionCall('stopDist', [
+VarRef('v')
+            ])),
+Comparison('>',
+FunctionCall('abs', [
+BinaryTermOp('-',
+VarRef('y'),
+VarRef('yo'))
+            ]),
+FunctionCall('stopDist', [
+VarRef('v')
+            ]))),
+        [VarRef('x'), VarRef('y'), VarRef('v'), VarRef('xo'), VarRef('yo')],
+        {'safety': {'penalty': -1000, 'shape': '{(abs(x-xo) - stopDist(v)) + (abs(y-yo) - stopDist(v))}', 'on_failure': 'truncate:status=failure', 'on_success': 'continue:status=none'}}),
+PredDef('isEfficient', 'Bool',
+Comparison('>=',
+VarRef('v'),
+Literal(0.0)),
+        [VarRef('v')],
+        {'progress': {'shape': '{1/v if v > 0 else v}', 'on_success': 'continue:status=none', 'on_failure': 'continue:status=none'}}),
+PredDef('bounds', 'Bool',
+BinaryFormulaOp('&',
+BinaryFormulaOp('&',
+Comparison('>=',
+VarRef('A'),
+Literal(0.0)),
+Comparison('>',
+VarRef('b'),
+Literal(0.0))),
+Comparison('>',
+VarRef('ep'),
+Literal(0.0))),
+        [],
+        {}),
+PredDef('initialState', 'Bool',
+BinaryFormulaOp('&',
+BinaryFormulaOp('&',
+BinaryFormulaOp('&',
+Comparison('=',
+VarRef('v'),
+Literal(0.0)),
+Comparison('>',
+BinaryTermOp('+',
+BinaryTermOp('^',
+BinaryTermOp('-',
+VarRef('x'),
+VarRef('xo')),
+Literal(2.0)),
+BinaryTermOp('^',
+BinaryTermOp('-',
+VarRef('y'),
+VarRef('yo')),
+Literal(2.0))),
+Literal(0.0))),
+PredicateCall('isWellformedDir', [
+VarRef('dx'),
+VarRef('dy')
+            ])),
+Comparison('!=',
+VarRef('r'),
+Literal(0.0))),
+        [VarRef('x'), VarRef('y'), VarRef('v'), VarRef('dx'), VarRef('dy'), VarRef('xo'), VarRef('yo')],
+        {}),
+PredDef('assumptions', 'Bool',
+BinaryFormulaOp('&',
+PredicateCall('bounds', []),
+PredicateCall('initialState', [
+VarRef('x'),
+VarRef('y'),
+VarRef('v'),
+VarRef('dx'),
+VarRef('dy'),
+VarRef('xo'),
+VarRef('yo')
+          ])),
+        [VarRef('x'), VarRef('y'), VarRef('v'), VarRef('dx'), VarRef('dy'), VarRef('xo'), VarRef('yo')],
+        {}),
+PredDef('loopinv', 'Bool',
+BinaryFormulaOp('&',
+BinaryFormulaOp('&',
+BinaryFormulaOp('&',
+PredicateCall('isPhysicallyValid', [
+VarRef('v'),
+VarRef('r')
+              ]),
+PredicateCall('isWellformedDir', [
+VarRef('dx'),
+VarRef('dy')
+              ])),
+PredicateCall('isSafe', [
+VarRef('x'),
+VarRef('y'),
+VarRef('v'),
+VarRef('xo'),
+VarRef('yo')
+            ])),
+PredicateCall('isEfficient', [
+VarRef('v')
+          ])),
+        [VarRef('x'), VarRef('y'), VarRef('v'), VarRef('dx'), VarRef('dy'), VarRef('xo'), VarRef('yo'), VarRef('r')],
+        {}),
+PredDef('ensure', 'Bool',
+Comparison('>',
+BinaryTermOp('+',
+BinaryTermOp('^',
+BinaryTermOp('-',
+VarRef('x'),
+VarRef('xo')),
+Literal(2.0)),
+BinaryTermOp('^',
+BinaryTermOp('-',
+VarRef('y'),
+VarRef('yo')),
+Literal(2.0))),
+Literal(0.0)),
+        [VarRef('x'), VarRef('y'), VarRef('xo'), VarRef('yo')],
+        {'progress': {'reward': 500, 'penalty': -1000, 'on_success': 'terminate:status=success', 'on_failure': 'terminate:status=failure'}}),
+HPDef('controlFunc',
+HPBlock(
+          program=Choice(
+              left=HPBlock(
+                  program=Assignment(
+VarRef('a'),
+UnaryTermOp('-',
+VarRef('b')))),
+              right=Choice(
+                  left=HPBlock(
+                      program=Sequence([
+Test(
+Comparison('=',
+VarRef('v'),
+Literal(0.0))),
+Assignment(
+VarRef('a'),
+Literal(0.0)),
+Assignment(
+VarRef('w'),
+Literal(0.0))
+                        ])),
+                  right=HPBlock(
+                      program=Sequence([
+Assignment(
+VarRef('a'),
+VarRef('A')),
+NondetAssignment(VarRef('w')),
+Test(
+BinaryFormulaOp('&',
+Comparison('<=',
+UnaryTermOp('-',
+VarRef('W')),
+VarRef('w')),
+Comparison('<=',
+VarRef('w'),
+VarRef('W')))),
+NondetAssignment(VarRef('r')),
+NondetAssignment(VarRef('xo')),
+NondetAssignment(VarRef('yo')),
+Test(
+BinaryFormulaOp('&',
+Comparison('!=',
+VarRef('r'),
+Literal(0.0)),
+Comparison('=',
+BinaryTermOp('*',
+VarRef('r'),
+VarRef('w')),
+VarRef('v')))),
+Test(
+BinaryFormulaOp('|',
+Comparison('>',
+FunctionCall('abs', [
+BinaryTermOp('-',
+VarRef('x'),
+VarRef('xo'))
+                                ]),
+FunctionCall('admissibleSeparation', [
+VarRef('v')
+                                ])),
+Comparison('>',
+FunctionCall('abs', [
+BinaryTermOp('-',
+VarRef('y'),
+VarRef('yo'))
+                                ]),
+FunctionCall('admissibleSeparation', [
+VarRef('v')
+                                ]))))
+                        ]))))),
+        {}),
+HPDef('stepFunc',
+HPBlock(
+          program=ODE(
+              equations=[
+ODEEquation(VarRef('x'), BinaryTermOp('*',
+VarRef('v'),
+VarRef('dx'))),
+ODEEquation(VarRef('y'), BinaryTermOp('*',
+VarRef('v'),
+VarRef('dy'))),
+ODEEquation(VarRef('v'), VarRef('a')),
+ODEEquation(VarRef('dx'), BinaryTermOp('*',
+UnaryTermOp('-',
+VarRef('w')),
+VarRef('dy'))),
+ODEEquation(VarRef('dy'), BinaryTermOp('*',
+VarRef('w'),
+VarRef('dx'))),
+ODEEquation(VarRef('w'), BinaryTermOp('/',
+VarRef('a'),
+VarRef('r'))),
+ODEEquation(VarRef('t'), Literal(1.0))
+              ],
+              domain_constraint=BinaryFormulaOp('&',
+Comparison('<=',
+VarRef('t'),
+VarRef('ep')),
+Comparison('>=',
+VarRef('v'),
+Literal(0.0))))),
+        {})
+    ]),
+    program_variables=ProgramVariablesBlock([
+ProgramVariableDecl('Real', 'x', {'var': {'bound': [0.0, 100.0], 'def': 'robot position: x'}}),
+ProgramVariableDecl('Real', 'y', {'var': {'bound': [0.0, 100.0], 'def': 'robot position: y'}}),
+ProgramVariableDecl('Real', 'v', {'var': {'bound': [0.0, 20.0], 'def': 'robot translational velocity'}}),
+ProgramVariableDecl('Real', 'a', {'var': {'bound': [-10.0, 10.0], 'def': 'robot translational acceleration'}}),
+ProgramVariableDecl('Real', 'dx', {'var': {'bound': [-1.0, 1.0], 'def': 'robot orientation: x component'}}),
+ProgramVariableDecl('Real', 'dy', {'var': {'bound': [-1.0, 1.0], 'def': 'robot orientation: y component'}}),
+ProgramVariableDecl('Real', 'w', {'var': {'bound': [-2.0, 2.0], 'def': 'robot rotational velocity'}}),
+ProgramVariableDecl('Real', 'r', {'var': {'bound': [-1000.0, 1000.0], 'def': 'robot curve radius (r!=0)'}}),
+ProgramVariableDecl('Real', 'xo', {'var': {'bound': [0.0, 100.0], 'def': 'position of closest obstacle on curve: x'}}),
+ProgramVariableDecl('Real', 'yo', {'var': {'bound': [0.0, 100.0], 'def': 'position of closest obstacle on curve: y'}}),
+ProgramVariableDecl('Real', 't', {'var': {'bound': [0.0, 1.0], 'def': 'time elapsed in current control step'}})
+    ]),
+    problem=ProblemBlock(
+BinaryFormulaOp('->',
+PredicateCall('assumptions', [
+VarRef('x'),
+VarRef('y'),
+VarRef('v'),
+VarRef('dx'),
+VarRef('dy'),
+VarRef('xo'),
+VarRef('yo')
+        ]),
+ModalFormula('box',
+          program=Iteration(
+              program=HPBlock(
+                  program=Sequence([
+HPBlock(
+                        program=Sequence([
+VarRef('controlFunc'),
+Assignment(
+VarRef('t'),
+Literal(0.0))
+                          ])),
+HPBlock(
+                        program=Sequence([
+VarRef('stepFunc'),
+Test(
+BinaryFormulaOp('&&',
+Comparison('>=',
+VarRef('t'),
+Literal(0.0)),
+PredicateCall('isWellformedDir', [
+VarRef('dx'),
+VarRef('dy')
+                                ])))
+                          ]))
+                    ])),
+              invariant=PredicateCall('loopinv', [
+VarRef('x'),
+VarRef('y'),
+VarRef('v'),
+VarRef('dx'),
+VarRef('dy'),
+VarRef('xo'),
+VarRef('yo'),
+VarRef('r')
+                ])),
+          formula=PredicateCall('ensure', [
+VarRef('x'),
+VarRef('y'),
+VarRef('xo'),
+VarRef('yo')
+            ])))),
+    tactics=[
+
+    ])
+])

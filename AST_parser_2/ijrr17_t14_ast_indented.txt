@@ -1,0 +1,452 @@
+KeYmaeraModel([
+    ArchiveEntry(kind='IJRR17', name='Theorem 14: Reach waypoint with deadline',
+        definitions=DefinitionsBlock([
+            FuncDef('ep', 'Real',
+                VarRef('ep'),
+                [],
+                {'const': {'bound': [0.1, 0.5], 'def': 'time limit for control decisions'}}),
+            FuncDef('b', 'Real',
+                VarRef('b'),
+                [],
+                {'const': {'bound': [0.5, 5.0], 'def': 'minimum braking capability of the robot'}}),
+            FuncDef('A', 'Real',
+                VarRef('A'),
+                [],
+                {'const': {'bound': [1.0, 10.0], 'def': 'maximum acceleration'}}),
+            FuncDef('GDelta', 'Real',
+                VarRef('GDelta'),
+                [],
+                {'const': {'bound': [1.0, 10.0], 'def': 'goal area size'}}),
+            FuncDef('Vmax', 'Real',
+                VarRef('Vmax'),
+                [],
+                {'const': {'bound': [5.0, 30.0], 'def': 'maximum robot velocity'}}),
+            FuncDef('waypointStartDist', 'Real',
+                BinaryTermOp('-',
+                    VarRef('xg'),
+                    VarRef('GDelta')),
+                [VarRef('xg')],
+                {}),
+            FuncDef('waypointEndDist', 'Real',
+                BinaryTermOp('+',
+                    VarRef('xg'),
+                    VarRef('GDelta')),
+                [VarRef('xg')],
+                {}),
+            FuncDef('minV', 'Real',
+                BinaryTermOp('*',
+                    VarRef('A'),
+                    VarRef('ep')),
+                [],
+                {}),
+            FuncDef('maxTravelTime', 'Real',
+                BinaryTermOp('/',
+                    FunctionCall('waypointStartDist', [
+                        VarRef('g')
+                    ]),
+                    VarRef('minV')),
+                [VarRef('g')],
+                {}),
+            FuncDef('stopTime', 'Real',
+                BinaryTermOp('/',
+                    VarRef('v'),
+                    VarRef('b')),
+                [VarRef('v')],
+                {}),
+            FuncDef('speedUpTime', 'Real',
+                BinaryTermOp('-',
+                    VarRef('ep'),
+                    BinaryTermOp('/',
+                        VarRef('v'),
+                        VarRef('A'))),
+                [VarRef('v')],
+                {}),
+            FuncDef('stopDist', 'Real',
+                BinaryTermOp('/',
+                    BinaryTermOp('^',
+                        VarRef('v'),
+                        Literal(2.0)),
+                    BinaryTermOp('*',
+                        Literal(2.0),
+                        VarRef('b'))),
+                [VarRef('v')],
+                {}),
+            FuncDef('accComp', 'Real',
+                BinaryTermOp('*',
+                    BinaryTermOp('+',
+                        BinaryTermOp('/',
+                            VarRef('A'),
+                            VarRef('b')),
+                        Literal(1.0)),
+                    BinaryTermOp('+',
+                        BinaryTermOp('*',
+                            BinaryTermOp('/',
+                                VarRef('A'),
+                                Literal(2.0)),
+                            BinaryTermOp('^',
+                                VarRef('ep'),
+                                Literal(2.0))),
+                        BinaryTermOp('*',
+                            VarRef('ep'),
+                            VarRef('v')))),
+                [VarRef('v')],
+                {}),
+            PredDef('bounds', 'Bool',
+                BinaryFormulaOp('&',
+                    BinaryFormulaOp('&',
+                        BinaryFormulaOp('&',
+                            BinaryFormulaOp('&',
+                                Comparison('>',
+                                    VarRef('A'),
+                                    Literal(0.0)),
+                                Comparison('>',
+                                    VarRef('b'),
+                                    Literal(0.0))),
+                            Comparison('>',
+                                VarRef('ep'),
+                                Literal(0.0))),
+                        Comparison('>=',
+                            VarRef('Vmax'),
+                            BinaryTermOp('*',
+                                BinaryTermOp('*',
+                                    Literal(2.0),
+                                    VarRef('A')),
+                                VarRef('ep')))),
+                    Comparison('>',
+                        VarRef('GDelta'),
+                        BinaryTermOp('+',
+                            BinaryTermOp('*',
+                                VarRef('Vmax'),
+                                VarRef('ep')),
+                            BinaryTermOp('/',
+                                BinaryTermOp('^',
+                                    VarRef('Vmax'),
+                                    Literal(2.0)),
+                                BinaryTermOp('*',
+                                    Literal(2.0),
+                                    VarRef('b')))))),
+                [],
+                {}),
+            PredDef('initialState', 'Bool',
+                BinaryFormulaOp('&',
+                    BinaryFormulaOp('&',
+                        Comparison('=',
+                            VarRef('vr'),
+                            Literal(0.0)),
+                        Comparison('<',
+                            VarRef('xr'),
+                            FunctionCall('waypointStartDist', [
+                                VarRef('xg')
+                            ]))),
+                    Comparison('>',
+                        VarRef('T'),
+                        BinaryTermOp('+',
+                            BinaryTermOp('+',
+                                BinaryTermOp('+',
+                                    VarRef('ep'),
+                                    FunctionCall('maxTravelTime', [
+                                        BinaryTermOp('-',
+                                            VarRef('xg'),
+                                            VarRef('xr'))
+                                    ])),
+                                VarRef('ep')),
+                            FunctionCall('stopTime', [
+                                VarRef('Vmax')
+                            ])))),
+                [VarRef('xr'), VarRef('vr'), VarRef('xg'), VarRef('T')],
+                {}),
+            PredDef('assumptions', 'Bool',
+                BinaryFormulaOp('&',
+                    PredicateCall('bounds', []),
+                    PredicateCall('initialState', [
+                        VarRef('xr'),
+                        VarRef('vr'),
+                        VarRef('xg'),
+                        VarRef('T')
+                    ])),
+                [VarRef('xr'), VarRef('vr'), VarRef('xg'), VarRef('T')],
+                {}),
+            PredDef('loopinv', 'Bool',
+                BinaryFormulaOp('&',
+                    BinaryFormulaOp('&',
+                        BinaryFormulaOp('&',
+                            BinaryFormulaOp('&',
+                                Comparison('<=',
+                                    Literal(0.0),
+                                    VarRef('vr')),
+                                Comparison('<=',
+                                    VarRef('vr'),
+                                    VarRef('Vmax'))),
+                            Comparison('<',
+                                BinaryTermOp('+',
+                                    VarRef('xr'),
+                                    FunctionCall('stopDist', [
+                                        VarRef('vr')
+                                    ])),
+                                FunctionCall('waypointEndDist', [
+                                    VarRef('xg')
+                                ]))),
+                        BinaryFormulaOp('->',
+                            Comparison('<',
+                                FunctionCall('waypointStartDist', [
+                                    VarRef('xg')
+                                ]),
+                                VarRef('xr')),
+                            BinaryFormulaOp('|',
+                                Comparison('=',
+                                    VarRef('vr'),
+                                    Literal(0.0)),
+                                Comparison('>=',
+                                    VarRef('T'),
+                                    FunctionCall('stopTime', [
+                                        VarRef('vr')
+                                    ]))))),
+                    BinaryFormulaOp('->',
+                        Comparison('<=',
+                            VarRef('xr'),
+                            FunctionCall('waypointStartDist', [
+                                VarRef('xg')
+                            ])),
+                        BinaryFormulaOp('|',
+                            BinaryFormulaOp('&',
+                                Comparison('>=',
+                                    VarRef('vr'),
+                                    VarRef('minV')),
+                                Comparison('>',
+                                    VarRef('T'),
+                                    BinaryTermOp('+',
+                                        BinaryTermOp('+',
+                                            FunctionCall('maxTravelTime', [
+                                                BinaryTermOp('-',
+                                                    VarRef('xg'),
+                                                    VarRef('xr'))
+                                            ]),
+                                            VarRef('ep')),
+                                        FunctionCall('stopTime', [
+                                            VarRef('Vmax')
+                                        ])))),
+                            BinaryFormulaOp('&',
+                                Comparison('<=',
+                                    VarRef('vr'),
+                                    VarRef('minV')),
+                                Comparison('>',
+                                    VarRef('T'),
+                                    BinaryTermOp('+',
+                                        BinaryTermOp('+',
+                                            BinaryTermOp('+',
+                                                FunctionCall('speedUpTime', [
+                                                    VarRef('vr')
+                                                ]),
+                                                FunctionCall('maxTravelTime', [
+                                                    BinaryTermOp('-',
+                                                        VarRef('xg'),
+                                                        VarRef('xr'))
+                                                ])),
+                                            VarRef('ep')),
+                                        FunctionCall('stopTime', [
+                                            VarRef('Vmax')
+                                        ])))))))),
+                [VarRef('xr'), VarRef('vr'), VarRef('xg'), VarRef('T')],
+                {'safety': {'penalty': -1000, 'on_failure': 'truncate:status=failure'}}),
+            HPDef('controlFunc',
+                HPBlock(
+                    program=Choice(
+                        left=HPBlock(
+                            program=Sequence([
+                                Test(
+                                    Comparison('>',
+                                        VarRef('xr'),
+                                        FunctionCall('waypointStartDist', [
+                                            VarRef('xg')
+                                        ]))),
+                                Assignment(
+                                    VarRef('ar'),
+                                    UnaryTermOp('-',
+                                        VarRef('b')))
+                            ])),
+                        right=Choice(
+                            left=HPBlock(
+                                program=Sequence([
+                                    Test(
+                                        BinaryFormulaOp('&',
+                                            Comparison('>',
+                                                VarRef('xr'),
+                                                FunctionCall('waypointStartDist', [
+                                                    VarRef('xg')
+                                                ])),
+                                            Comparison('=',
+                                                VarRef('vr'),
+                                                Literal(0.0)))),
+                                    Assignment(
+                                        VarRef('ar'),
+                                        Literal(0.0))
+                                ])),
+                            right=Choice(
+                                left=HPBlock(
+                                    program=Sequence([
+                                        Test(
+                                            BinaryFormulaOp('&',
+                                                Comparison('<=',
+                                                    VarRef('xr'),
+                                                    FunctionCall('waypointStartDist', [
+                                                        VarRef('xg')
+                                                    ])),
+                                                BinaryFormulaOp('&',
+                                                    Comparison('<',
+                                                        BinaryTermOp('+',
+                                                            BinaryTermOp('+',
+                                                                VarRef('xr'),
+                                                                FunctionCall('stopDist', [
+                                                                    VarRef('vr')
+                                                                ])),
+                                                            FunctionCall('accComp', [
+                                                                VarRef('vr')
+                                                            ])),
+                                                        FunctionCall('waypointEndDist', [
+                                                            VarRef('xg')
+                                                        ])),
+                                                    Comparison('<=',
+                                                        BinaryTermOp('+',
+                                                            VarRef('vr'),
+                                                            BinaryTermOp('*',
+                                                                VarRef('A'),
+                                                                VarRef('ep'))),
+                                                        VarRef('Vmax'))))),
+                                        Assignment(
+                                            VarRef('ar'),
+                                            VarRef('A'))
+                                    ])),
+                                right=HPBlock(
+                                    program=Sequence([
+                                        Test(
+                                            BinaryFormulaOp('&',
+                                                Comparison('<=',
+                                                    VarRef('xr'),
+                                                    FunctionCall('waypointStartDist', [
+                                                        VarRef('xg')
+                                                    ])),
+                                                UnaryFormulaOp('!',
+                                                    BinaryFormulaOp('&',
+                                                        Comparison('<',
+                                                            BinaryTermOp('+',
+                                                                BinaryTermOp('+',
+                                                                    VarRef('xr'),
+                                                                    FunctionCall('stopDist', [
+                                                                        VarRef('vr')
+                                                                    ])),
+                                                                FunctionCall('accComp', [
+                                                                    VarRef('vr')
+                                                                ])),
+                                                            FunctionCall('waypointEndDist', [
+                                                                VarRef('xg')
+                                                            ])),
+                                                        Comparison('<=',
+                                                            BinaryTermOp('+',
+                                                                VarRef('vr'),
+                                                                BinaryTermOp('*',
+                                                                    VarRef('A'),
+                                                                    VarRef('ep'))),
+                                                            VarRef('Vmax')))))),
+                                        Assignment(
+                                            VarRef('ar'),
+                                            Literal(0.0))
+                                    ])))))),
+                {}),
+            HPDef('stepFunc',
+                HPBlock(
+                    program=ODE(
+                        equations=[
+                            ODEEquation(VarRef('xr'), VarRef('vr')),
+                            ODEEquation(VarRef('vr'), VarRef('ar')),
+                            ODEEquation(VarRef('t'), Literal(1.0)),
+                            ODEEquation(VarRef('T'), UnaryTermOp('-',
+                                Literal(1.0)))
+                        ],
+                        domain_constraint=BinaryFormulaOp('&',
+                            Comparison('<=',
+                                VarRef('t'),
+                                VarRef('ep')),
+                            Comparison('>=',
+                                VarRef('vr'),
+                                Literal(0.0))))),
+                {}),
+            HPDef('dwwpdl',
+                HPBlock(
+                    program=Iteration(
+                        program=HPBlock(
+                            program=Sequence([
+                                HPBlock(
+                                    program=Sequence([
+                                        VarRef('controlFunc'),
+                                        Assignment(
+                                            VarRef('t'),
+                                            Literal(0.0))
+                                    ])),
+                                HPBlock(
+                                    program=VarRef('stepFunc'))
+                            ])),
+                        invariant=PredicateCall('loopinv', [
+                            VarRef('xr'),
+                            VarRef('vr'),
+                            VarRef('xg'),
+                            VarRef('T')
+                        ]))),
+                {}),
+            PredDef('ensure', 'Bool',
+                BinaryFormulaOp('&',
+                    Comparison('<',
+                        FunctionCall('waypointStartDist', [
+                            VarRef('xg')
+                        ]),
+                        VarRef('xr')),
+                    Comparison('=',
+                        VarRef('vr'),
+                        Literal(0.0))),
+                [VarRef('xr'), VarRef('vr'), VarRef('xg')],
+                {'progress': {'reward': 1000, 'on_success': 'terminate:status=success', 'on_failure': 'terminate:status=failure'}})
+        ]),
+        program_variables=ProgramVariablesBlock([
+            ProgramVariableDecl('Real', 'xr', {'var': {'bound': [0.0, 100.0], 'def': 'robot position: x'}}),
+            ProgramVariableDecl('Real', 'vr', {'var': {'bound': [0.0, 20.0], 'def': 'robot translational velocity'}}),
+            ProgramVariableDecl('Real', 'ar', {'var': {'bound': [-10.0, 10.0], 'def': 'robot translational acceleration'}}),
+            ProgramVariableDecl('Real', 'xg', {'var': {'bound': [0.0, 100.0], 'def': 'goal position: x'}}),
+            ProgramVariableDecl('Real', 't', {'var': {'bound': [0.0, 1.0], 'def': 'time elapsed in current control step'}}),
+            ProgramVariableDecl('Real', 'T', {'var': {'bound': [0.0, 1000.0], 'def': 'global time remaining until deadline'}})
+        ]),
+        problem=ProblemBlock(
+            BinaryFormulaOp('->',
+                PredicateCall('assumptions', [
+                    VarRef('xr'),
+                    VarRef('vr'),
+                    VarRef('xg'),
+                    VarRef('T')
+                ]),
+                ModalFormula('box',
+                    program=VarRef('dwwpdl'),
+                    formula=BinaryFormulaOp('&',
+                        BinaryFormulaOp('&',
+                            Comparison('<',
+                                VarRef('xr'),
+                                FunctionCall('waypointEndDist', [
+                                    VarRef('xg')
+                                ])),
+                            BinaryFormulaOp('->',
+                                Comparison('<=',
+                                    VarRef('T'),
+                                    Literal(0.0)),
+                                PredicateCall('ensure', [
+                                    VarRef('xr'),
+                                    VarRef('vr'),
+                                    VarRef('xg')
+                                ]))),
+                        ModalFormula('diamond',
+                            program=VarRef('dwwpdl'),
+                            formula=PredicateCall('ensure', [
+                                VarRef('xr'),
+                                VarRef('vr'),
+                                VarRef('xg')
+                            ])))))),
+        tactics=[
+
+        ])
+])

@@ -1,6 +1,7 @@
 import unittest
 import re
 from typing import List, Optional, Union, Dict, Any
+import os # Import os module for file path manipulation
 
 # Assuming keymaera_parser.py, keymaera_lexer.py, and ast_config.py are in the same directory
 from keymaera_parser import KeYmaeraParser
@@ -17,6 +18,10 @@ from ast_config import (
 
 
 class TestKeYmaeraParser(unittest.TestCase):
+
+    # --- Toggle this flag to True to see the AST output for each test ---
+    # Set to True to write full ASTs to files
+    _print_ast_output = True 
 
     # --- Sample KeYmaera Model Texts ---
     SAMPLE_MODEL_IJRR17_T14 = """
@@ -460,7 +465,12 @@ End.
             self.assertGreater(len(model_ast.entries[0].program_variables.vars), 0)
             self.assertIsInstance(model_ast.entries[0].problem.formula, Formula)
             print("Full model (IJRR17/T14) parsing successful!")
-            # Optional: Add more specific assertions for the content of the AST if needed
+            if self._print_ast_output:
+                filename = "ijrr17_t14_ast.txt"
+                with open(filename, "w") as f:
+                    f.write(str(model_ast))
+                print(f"--- AST Output for IJRR17/T14 written to '{filename}' ---")
+                print("----------------------------------------------------")
         except ValueError as e:
             self.fail(f"Error parsing full model (IJRR17/T14): {e}")
 
@@ -476,7 +486,12 @@ End.
             self.assertGreater(len(model_ast.entries[0].program_variables.vars), 0)
             self.assertIsInstance(model_ast.entries[0].problem.formula, Formula)
             print("Full model (IJRR17/T15) parsing successful!")
-            # Optional: Add more specific assertions for the content of the AST if needed
+            if self._print_ast_output:
+                filename = "ijrr17_t15_ast.txt"
+                with open(filename, "w") as f:
+                    f.write(str(model_ast))
+                print(f"--- AST Output for IJRR17/T15 written to '{filename}' ---")
+                print("----------------------------------------------------")
         except ValueError as e:
             self.fail(f"Error parsing full model (IJRR17/T15): {e}")
 
@@ -492,7 +507,12 @@ End.
             self.assertGreater(len(model_ast.entries[0].program_variables.vars), 0)
             self.assertIsInstance(model_ast.entries[0].problem.formula, Formula)
             print("Full model (IJRR17/T1) parsing successful!")
-            # Optional: Add more specific assertions for the content of the AST if needed
+            if self._print_ast_output:
+                filename = "ijrr17_t1_ast.txt"
+                with open(filename, "w") as f:
+                    f.write(str(model_ast))
+                print(f"--- AST Output for IJRR17/T1 written to '{filename}' ---")
+                print("----------------------------------------------------")
         except ValueError as e:
             self.fail(f"Error parsing full model (IJRR17/T1): {e}")
 
@@ -504,6 +524,8 @@ End.
         parsed_term1 = term_parser.parse_term(term_expr1)
         self.assertIsInstance(parsed_term1, Term)
         print(f"Term '{term_expr1}' parsed as: {parsed_term1}")
+        if self._print_ast_output:
+            print(f"AST for '{term_expr1}':\n{parsed_term1}")
         # Example assertion: check the top-level operator
         self.assertIsInstance(parsed_term1, BinaryTermOp)
         self.assertEqual(parsed_term1.op, '+')
@@ -512,6 +534,8 @@ End.
         parsed_term2 = term_parser.parse_term(term_expr2)
         self.assertIsInstance(parsed_term2, Term)
         print(f"Term '{term_expr2}' parsed as: {parsed_term2}")
+        if self._print_ast_output:
+            print(f"AST for '{term_expr2}':\n{parsed_term2}")
         self.assertIsInstance(parsed_term2, BinaryTermOp)
         self.assertEqual(parsed_term2.op, '+')
         self.assertIsInstance(parsed_term2.left, UnaryTermOp)
@@ -530,6 +554,8 @@ End.
         parsed_formula1 = formula_parser.parse_formula(formula_expr1)
         self.assertIsInstance(parsed_formula1, Formula)
         print(f"Formula '{formula_expr1}' parsed as: {parsed_formula1}")
+        if self._print_ast_output:
+            print(f"AST for '{formula_expr1}':\n{parsed_formula1}")
         self.assertIsInstance(parsed_formula1, Quantifier)
         self.assertEqual(parsed_formula1.quantifier_type, 'forall')
 
@@ -537,6 +563,8 @@ End.
         parsed_formula2 = formula_parser.parse_formula(formula_expr2)
         self.assertIsInstance(parsed_formula2, Formula)
         print(f"Formula '{formula_expr2}' parsed as: {parsed_formula2}")
+        if self._print_ast_output:
+            print(f"AST for '{formula_expr2}':\n{parsed_formula2}")
         # FIX: The top-level operator for this formula is '!', which is a UnaryFormulaOp.
         self.assertIsInstance(parsed_formula2, UnaryFormulaOp)
         self.assertEqual(parsed_formula2.op, '!')
@@ -550,12 +578,16 @@ End.
         parsed_hp1 = hp_parser.parse_hybrid_program(hp_expr1)
         self.assertIsInstance(parsed_hp1, HybridProgram)
         print(f"Hybrid Program '{hp_expr1}' parsed as: {parsed_hp1}")
+        if self._print_ast_output:
+            print(f"AST for '{hp_expr1}':\n{parsed_hp1}")
         self.assertIsInstance(parsed_hp1, Choice)
 
         hp_expr2 = "{x := x + 1; y := y - 1} ; complex_ode"
         parsed_hp2 = hp_parser.parse_hybrid_program(hp_expr2)
         self.assertIsInstance(parsed_hp2, HybridProgram)
         print(f"Hybrid Program '{hp_expr2}' parsed as: {parsed_hp2}")
+        if self._print_ast_output:
+            print(f"AST for '{hp_expr2}':\n{parsed_hp2}")
         self.assertIsInstance(parsed_hp2, Sequence)
 
 

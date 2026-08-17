@@ -1,3 +1,5 @@
+#file description: This file contains the KeYmaeraLexer class, which performs lexical analysis for KeYmaera model text, converting it into a stream of tokens. It also includes a helper function to parse annotations from comments.
+# name: keymaera_lexer.py
 import re
 from typing import List, Optional, Dict, Any
 
