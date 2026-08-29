@@ -1,8 +1,12 @@
 ArchiveEntry "IJRR17/Corollary 2: Velocity-controlled passive orientation safety"
 Definitions
+  // @const: bound=[0.1:0.5], def="time limit for control decisions"
   Real ep;      /* time limit for control decisions */
+  // @const: bound=[0.1:1.0], def="maximum steering (rotational velocity)"
   Real W;       /* maximum steering */
+  // @const: bound=[0.1:5.0], def="maximum obstacle velocity"
   Real V;       /* maximum obstacle velocity */
+  // @const: bound=[0.1:PI/2], def="Sensor range in radian"
   Real GammA;   /* Sensor range in radian */
 
   Real stopDist(Real v)   = 0;
@@ -12,6 +16,7 @@ Definitions
   Real admissibleSeparation(Real v) = stopMargin(v) + accelMargin(v);
   Real admissibleTurnLength(Real v) = stopDist(v) + accelComp(v);
 
+  // @progress: reward=10, shape={-((dx**2 + dy**2) - 1)**2}, on_success=continue:status=none, on_failure=continue:status=none
   Bool isWellformedDir(Real dx, Real dy) <-> dx^2 + dy^2 = 1;       /* The orientation of the robot is a unit vector. */
 
   Bool isVisible(Real x) <-> x>0;  /* Indicates whether or not the obstacle is visible for the robot at the decision. */
@@ -35,6 +40,7 @@ Definitions
   Bool assumptions(Real x, Real y, Real v, Real beta, Real r, Real dx, Real dy, Real xo, Real yo) <->
     bounds() & initialState(x, y, v, beta, r, dx, dy, xo, yo);
 
+  // @safety: penalty=-1000, on_failure=truncate:status=failure, on_success=continue:status=none
   Bool loopinv(Real x, Real y, Real v, Real beta, Real visDeg, Real r, Real dx, Real dy, Real xo, Real yo) <-> (                                                /* Conditions that are true on each loop iteration */
     v >= 0
     & isWellformedDir(dx,dy)
@@ -42,23 +48,42 @@ Definitions
     & (v>0 -> ( (abs(x-xo) > stopMargin(v) | abs(y-yo) > stopMargin(v))
               | (!isVisible(visDeg) & abs(beta) + stopDist(v)/abs(r) < GammA )) )
   );
+
+  // @progress: reward=1000, on_success=terminate:status=success, on_failure=terminate:status=failure
+  Bool ensure(Real v, Real x, Real y, Real xo, Real yo, Real visDeg, Real beta) <-> (v > 0 -> ((x - xo)^2 + (y - yo)^2 > 0 | (!isVisible(visDeg) & (abs(beta) < GammA))) );
+
 End.
 
 ProgramVariables
+  // @var: bound=[0:100], def="robot position: x"
   Real x;    /* robot position: x */
+  // @var: bound=[0:100], def="robot position: y"
   Real y;    /* robot position: y */
+  // @var: bound=[0:20], def="robot translational velocity"
   Real v;    /* robot translational velocity */
+  // @var: bound=[-10:10], def="robot translational acceleration (not a program variable here, but conceptually exists)"
   Real a;    /* robot translational acceleration */
+  // @var: bound=[-1:1], def="robot orientation: x component"
   Real dx;   /* robot orientation: x */
+  // @var: bound=[-1:1], def="robot orientation: y component"
   Real dy;   /* robot orientation: y */
+  // @var: bound=[-2:2], def="robot rotational velocity"
   Real w;    /* robot rotational velocity */
+  // @var: bound=[-1000:1000], def="robot curve radius (r!=0)"
   Real r;    /* robot curve radius */
+  // @var: bound=[0:100], def="position of closest obstacle on curve: x"
   Real xo;   /* position of closest obstacle on curve */
+  // @var: bound=[0:100], def="position of closest obstacle on curve: y"
   Real yo;
+  // @var: bound=[-5:5], def="obstacle velocity: x component"
   Real vxo;  /* velocity vector of obstacle */
+  // @var: bound=[-5:5], def="obstacle velocity: y component"
   Real vyo;
+  // @var: bound=[0:1], def="time elapsed in current control step"
   Real t;    /* time */
+  // @var: bound=[-PI:PI], def="Angle that the robot traveled since it last chose a new curve"
   Real beta; /* Angle that the robot traveled since it last chose a new curve */
+  // @var: bound=[-1:1], def="Indicates the 'degree' to which the obstacle is visible to the robot (input to isVisible)"
   Real visDeg; /* Indicates the "degree" to which the obstacle is visible to the robot (input to isVisible) */
 End.
 
@@ -99,6 +124,6 @@ Problem
 
         {x' = v * dx, y' = v * dy, dx' = -w * dy, dy' = w * dx, beta'=w,
                       xo' = vxo, yo' = vyo, t' = 1 & (t <= ep & v >= 0)}
-      }*
-    ] (v > 0 -> ((x - xo)^2 + (y - yo)^2 > 0 | (!isVisible(visDeg) & (abs(beta) < GammA))) )
+      }*@invariant(loopinv(x, y, v, beta, visDeg, r, dx, dy, xo, yo))
+    ] ensure(v, x, y, xo, yo, visDeg, beta)
 End.

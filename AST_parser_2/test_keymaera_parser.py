@@ -435,6 +435,461 @@ assumptions(x, y, v, dx, dy, xo, yo) ->
 End.
     """
 
+    # --- Additional Sample KeYmaera Model Texts ---
+
+    SAMPLE_MODEL_IJRR17_T13 = """
+Theorem "IJRR17/Theorem 13: Passive safety with trajectory distance measurement"
+
+Definitions
+  Real ep;      /* time limit for control decisions */
+  Real b;       /* minimum braking capability of the robot */
+  Real A;       /* maximum acceleration -b <= a <= A */
+  Real W;       /* maximum steering */
+  Real V;       /* maximum obstacle velocity */
+
+  Real stopDist(Real v) = v^2 / (2*b) + V*v/b;
+  Real accelComp(Real v, Real a) = ((a/b + 1) * (a/2 * ep^2 + ep*(v+V)));
+  Real admissibleSeparationG(Real v, Real a) = stopDist(v) + accelComp(v,a);
+  Real admissibleSeparationL(Real v, Real a) = -v^2/(2*a)-V*v/a;
+  Real trajectoryDist(Real r, Real xo, Real xc, Real yo, Real yc) = abs(abs(r) - ((xo-xc)^2 + (yo-yc)^2)^(1/2));
+
+  Bool isWellformedDir(Real x, Real y, Real v, Real w, Real r, Real dx, Real dy, Real xc, Real yc) <->
+    r!=0 & r^2 = (x-xc)^2 + (y-yc)^2 & dx^2 + dy^2 = 1 & dx = -(y-yc)/r & dy = (x-xc)/r & w*r=v;
+
+  Bool bounds() <-> (                                                                  /* Bounds for global constants */
+      A >= 0                                                                                        /* Working engine */
+    & b > 0                                                                                         /* Working brakes */
+    & ep > 0                                                                              /* Controller reaction time */
+    & V >= 0
+  );
+  /* Stopped somewhere safe initially */
+  Bool initialState(Real x, Real y, Real v, Real w, Real r, Real dx, Real dy, Real xo, Real yo, Real xc, Real yc) <-> (
+    v = 0
+    & (x-xo)^2 + (y-yo)^2 > 0
+    & isWellformedDir(x, y, v, w, r, dx, dy, xc, yc)
+  );
+
+  /* Under these assumptions we guarantee safety */
+  Bool assumptions(Real x, Real y, Real v, Real w, Real r, Real dx, Real dy, Real xo, Real yo, Real xc, Real yc) <->
+    bounds() & initialState(x, y, v, w, r, dx, dy, xo, yo, xc, yc);
+
+  /* Conditions that are true on each loop iteration */
+  Bool loopinv(Real x, Real y, Real v, Real w, Real r, Real dx, Real dy, Real xo, Real yo, Real xc, Real yc) <-> (
+    v >= 0
+    & isWellformedDir(x, y, v, w, r, dx, dy, xc, yc)
+    & (v>0 -> abs(x-xo) > stopDist(v) | abs(y-yo) > stopDist(v) | abs(abs(r) - ((xo-xc)^2 + (yo-yc)^2)^(1/2)) > V*v/b)
+  );
+End.
+
+ProgramVariables
+  Real x;    /* robot position: x */
+  Real y;    /* robot position: y */
+  Real v;    /* robot translational velocity */
+  Real a;    /* robot translational acceleration */
+  Real dx;   /* robot orientation: x */
+  Real dy;   /* robot orientation: y */
+  Real w;    /* robot rotational velocity */
+  Real r;    /* robot curve radius */
+  Real xc;
+  Real yc;
+  Real xo;   /* position of closest obstacle on curve */
+  Real yo;
+  Real vxo;  /* velocity vector of obstacle */
+  Real vyo;
+  Real t;    /* time */
+End.
+
+Problem
+assumptions(x, y, v, w, r, dx, dy, xo, yo, xc, yc) ->
+  [
+    {
+      {
+        /* obstacle control */
+        {
+          vxo := *; vyo := *;
+          ?vxo^2+vyo^2<=V^2;
+        }
+        /* robot control */
+        {
+          /* brake on current curve or remain stopped */
+          { a := -b; }
+          ++
+          { ?v = 0; a := 0; w := 0; { dx:=-dx;dy:=-dy; ++ dx:=dx;dy:=dy; }; r := *; xc := *; yc := *;
+            ?(r!=0 & r^2 = (x-xc)^2+(y-yc)^2 & dx=-(y-yc)/r & dy=(x-xc)/r & r*w=v); }
+          ++
+          /* or choose a new safe curve */
+          { a := *; ?-b<=a & a<=A;
+            w := *; ?-W<=w & w<=W;       /* choose steering */
+            r := *;
+            xc := *; yc := *;
+
+            xo := *; yo := *;            /* measure closest obstacle on the curve */
+
+            /* admissible curve */
+            ?(r!=0 & r^2 = (x-xc)^2+(y-yc)^2 & dx=-(y-yc)/r & dy=(x-xc)/r & r*w=v);
+
+            /* use that curve, if it is a safe one (admissible velocities) */
+            if (v+a*ep>=0) { ?abs(x-xo) > admissibleSeparationG(v,a) | abs(y-yo) > admissibleSeparationG(v,a) | trajectoryDist(r,xo,xc,yo,yc) > V*(ep + (v+a*ep)/b); }
+            else           { ?abs(x-xo) > admissibleSeparationL(v,a) | abs(y-yo) > admissibleSeparationL(v,a) | trajectoryDist(r,xo,xc,yo,yc) > -V*v/a; }
+          }
+        };
+        t := 0;
+      }
+
+      /* dynamics */
+      { x' = v * dx, y' = v * dy, v' = a,        /* accelerate/decelerate and move */
+        dx' = -w * dy, dy' = w * dx, w' = a/r,   /* follow curve */
+        xo' = vxo, yo' = vyo,                    /* obstacle moves */
+        t' = 1 & t <= ep & v >= 0
+      }
+    }*@invariant(loopinv(x, y, v, w, r, dx, dy, xo, yo, xc, yc))
+  ](v>0 -> (x - xo)^2 + (y - yo)^2 > 0)
+End.
+    """
+
+    SAMPLE_MODEL_IJRR17_C2 = """
+ArchiveEntry "IJRR17/Corollary 2: Velocity-controlled passive orientation safety"
+Definitions
+  Real ep;      /* time limit for control decisions */
+  Real W;       /* maximum steering */
+  Real V;       /* maximum obstacle velocity */
+  Real GammA;   /* Sensor range in radian */
+
+  Real stopDist(Real v)   = 0;
+  Real stopMargin(Real v) = stopDist(v);
+  Real accelComp(Real v)  = ep*v;
+  Real accelMargin(Real v)  = accelComp(v) + ep*V;
+  Real admissibleSeparation(Real v) = stopMargin(v) + accelMargin(v);
+  Real admissibleTurnLength(Real v) = stopDist(v) + accelComp(v);
+
+  Bool isWellformedDir(Real dx, Real dy) <-> dx^2 + dy^2 = 1;       /* The orientation of the robot is a unit vector. */
+
+  Bool isVisible(Real x) <-> x>0;  /* Indicates whether or not the obstacle is visible for the robot at the decision. */
+
+  Bool bounds() <-> (                                                                  /* Bounds for global constants */
+      ep > 0                                                                              /* Controller reaction time */
+    & V >= 0
+    & GammA > 0
+  );
+
+  /* Stopped somewhere safe initially */
+  Bool initialState(Real x, Real y, Real v, Real beta, Real r, Real dx, Real dy, Real xo, Real yo) <-> (
+    v = 0
+    & beta = 0
+    & r != 0
+    & (x-xo)^2 + (y-yo)^2 > 0
+    & isWellformedDir(dx,dy)
+  );
+
+  /* Under these assumptions we guarantee safety */
+  Bool assumptions(Real x, Real y, Real v, Real beta, Real r, Real dx, Real dy, Real xo, Real yo) <->
+    bounds() & initialState(x, y, v, beta, r, dx, dy, xo, yo);
+
+  Bool loopinv(Real x, Real y, Real v, Real beta, Real visDeg, Real r, Real dx, Real dy, Real xo, Real yo) <-> (                                                /* Conditions that are true on each loop iteration */
+    v >= 0
+    & isWellformedDir(dx,dy)
+    & r != 0
+    & (v>0 -> ( (abs(x-xo) > stopMargin(v) | abs(y-yo) > stopMargin(v))
+              | (!isVisible(visDeg) & abs(beta) + stopDist(v)/abs(r) < GammA )) )
+  );
+End.
+
+ProgramVariables
+  Real x;    /* robot position: x */
+  Real y;    /* robot position: y */
+  Real v;    /* robot translational velocity */
+  Real a;    /* robot translational acceleration */
+  Real dx;   /* robot orientation: x */
+  Real dy;   /* robot orientation: y */
+  Real w;    /* robot rotational velocity */
+  Real r;    /* robot curve radius */
+  Real xo;   /* position of closest obstacle on curve */
+  Real yo;
+  Real vxo;  /* velocity vector of obstacle */
+  Real vyo;
+  Real t;    /* time */
+  Real beta; /* Angle that the robot traveled since it last chose a new curve */
+  Real visDeg; /* Indicates the "degree" to which the obstacle is visible to the robot (input to isVisible) */
+End.
+
+Problem
+  assumptions(x, y, v, beta, r, dx, dy, xo, yo) -> [
+      {
+        {
+        /* obstacle control */
+        {
+          vxo := *;
+          vyo := *;
+          ?vxo^2+vyo^2 <= V^2;
+        }
+
+        /* robot control */
+        {
+           /* brake on current curve. If the velocity is zero this just means that the robot remains stopped */
+           {v := 0; w := 0;}
+        ++ /* or choose a new safe curve */
+           {v := *;
+            beta := 0;
+            r :=*; ?r!=0;
+
+            /* measure obstacle position and whether or not it is visible to the robot */
+            xo := *; yo := *; visDeg := *;
+            ?(isVisible(visDeg) ->
+               ( abs(x-xo) > admissibleSeparation(v)
+               | abs(y-yo) > admissibleSeparation(v)) );
+            ?admissibleTurnLength(v) < GammA*abs(r);
+            }
+        }
+
+        /* Reset the clocks */
+        t := 0;
+        /* Set w according to physics (rigid body motion) */
+        w :=*; ?w*r = v;
+        }
+
+        {x' = v * dx, y' = v * dy, dx' = -w * dy, dy' = w * dx, beta'=w,
+                      xo' = vxo, yo' = vyo, t' = 1 & (t <= ep & v >= 0)}
+      }*
+    ] (v > 0 -> ((x - xo)^2 + (y - yo)^2 > 0 | (!isVisible(visDeg) & (abs(beta) < GammA))) )
+End.
+    """
+
+    SAMPLE_MODEL_IJRR17_T4 = """
+Theorem "IJRR17/Theorem 4: Passive orientation safety"
+Definitions
+  Real ep;      /* time limit for control decisions */
+  Real b;       /* minimum braking capability of the robot */
+  Real A;       /* maximum acceleration -b <= a <= A */
+  Real W;       /* maximum steering */
+  Real V;       /* maximum obstacle velocity */
+  Real GammA;   /* Sensor range in radian */
+
+  Real stopDist(Real v)   = v^2 / (2*b);
+  Real stopMargin(Real v) = stopDist(v) + V*v/b;
+  Real accelComp(Real v)  = ( (A/b + 1) * (A/2 * ep^2 + ep*v) );
+  Real accelMargin(Real v)  = accelComp(v) + (A/b + 1)*ep*V;
+  Real admissibleSeparation(Real v) = stopMargin(v) + accelMargin(v);
+  Real admissibleTurnLength(Real v) = stopDist(v) + accelComp(v);
+
+  Bool isWellformedDir(Real dx, Real dy) <-> dx^2 + dy^2 = 1;       /* The orientation of the robot is a unit vector. */
+
+  Bool isVisible(Real x) <-> x>0;  /* Indicates whether or not the obstacle is visible for the robot at the decision. */
+
+  Bool bounds() <-> (                                                                  /* Bounds for global constants */
+      A >= 0                                                                                        /* Working engine */
+    & b > 0                                                                                         /* Working brakes */
+    & ep > 0                                                                              /* Controller reaction time */
+    & V >= 0
+    & GammA > 0
+  );
+
+  /* Stopped somewhere safe initially */
+  Bool initialState(Real x, Real y, Real v, Real beta, Real r, Real dx, Real dy, Real xo, Real yo) <-> (
+    v = 0
+    & beta = 0
+    & r != 0
+    & (x-xo)^2 + (y-yo)^2 > 0
+    & isWellformedDir(dx,dy)
+  );
+
+  /* Under these assumptions we guarantee safety */
+  Bool assumptions(Real x, Real y, Real v, Real beta, Real r, Real dx, Real dy, Real xo, Real yo) <->
+    bounds() & initialState(x, y, v, beta, r, dx, dy, xo, yo);
+
+  /* Conditions that are true on each loop iteration */
+  Bool loopinv(Real x, Real y, Real v, Real beta, Real visDeg, Real r, Real dx, Real dy, Real xo, Real yo) <-> (
+    v >= 0
+    & isWellformedDir(dx,dy)
+    & r != 0
+    & (v>0 -> ( (abs(x-xo) > stopMargin(v) | abs(y-yo) > stopMargin(v))
+              | (!isVisible(visDeg) & abs(beta) + stopDist(v)/abs(r) < GammA )) )
+  );
+End.
+
+ProgramVariables
+  Real x;    /* robot position: x */
+  Real y;    /* robot position: y */
+  Real v;    /* robot translational velocity */
+  Real a;    /* robot translational acceleration */
+  Real dx;   /* robot orientation: x */
+  Real dy;   /* robot orientation: y */
+  Real w;    /* robot rotational velocity */
+  Real r;    /* robot curve radius */
+  Real xo;   /* position of closest obstacle on curve */
+  Real yo;
+  Real vxo;  /* velocity vector of obstacle */
+  Real vyo;
+  Real t;    /* time */
+  Real beta; /* Angle that the robot traveled since it last chose a new curve */
+  Real visDeg; /* Indicates the "degree" to which the obstacle is visible to the robot (input to isVisible) */
+End.
+
+Problem
+  assumptions(x, y, v, beta, r, dx, dy, xo, yo) -> [
+      {
+        {
+        /* obstacle control */
+        {
+          vxo := *;
+          vyo := *;
+          ?vxo^2+vyo^2 <= V^2;
+        }
+
+        /* robot control */
+        {
+           /* brake on current curve. If the velocity is zero this just means that the robot remains stopped */
+           {a := -b;}
+        ++ /* When we are stopped, both translational and rotational acceleration are 0 */
+           {?v=0; a := 0; w := 0;}
+        ++ /* or choose a new safe curve */
+           {a := A;
+            beta := 0;
+            r :=*; ?r!=0;
+
+            /* measure obstacle position and whether or not it is visible to the robot */
+            xo := *; yo := *; visDeg := *;
+            ?(isVisible(visDeg) ->
+               ( abs(x-xo) > admissibleSeparation(v)
+               | abs(y-yo) > admissibleSeparation(v)) );
+            ?admissibleTurnLength(v) < GammA*abs(r);
+            }
+        }
+
+        /* Reset the clocks */
+        t := 0;
+        /* Set w according to physics (rigid body motion) */
+        w :=*; ?w*r = v;
+        }
+
+        {x' = v * dx, y' = v * dy, dx' = -w * dy, dy' = w * dx, v' = a, w' = a/r, beta'=w,
+                      xo' = vxo, yo' = vyo, t' = 1 & (t <= ep & v >= 0)}
+      }*
+    ] (v > 0 -> ((x - xo)^2 + (y - yo)^2 > 0 | (!isVisible(visDeg) & (abs(beta) < GammA))) )
+End.
+    """
+
+    SAMPLE_MODEL_IJRR17_T3 = """
+Theorem "IJRR17/Theorem 3: Passive Friendly Safety"
+Definitions
+  Real ep;      /* time limit for control decisions */
+  Real tau;     /* time limit for obstacle reaction */
+  Real b;       /* minimum braking capability of the robot */
+  Real bo;      /* obstacle brakes */
+  Real A;       /* maximum acceleration -b <= a <= A */
+  Real W;       /* maximum steering */
+  Real V;       /* maximum obstacle velocity */
+
+  Real friendlyMargin(Real v) = v^2/(2*bo) + tau*v;
+  Real stopDist(Real v) = v^2 / (2*b) + V*v/b;
+  Real accelComp(Real v) = ((A/b + 1) * (A/2 * ep^2 + ep*(v+V)));
+  Real admissibleSeparation(Real v) = stopDist(v) + friendlyMargin(V) + accelComp(v);
+
+  Bool isWellformedDir(Real dx,Real dy) <-> dx^2 + dy^2 = 1;        /* The orientation of the robot is a unit vector. */
+
+  Bool bounds() <-> (                                                                  /* Bounds for global constants */
+      A >= 0                                                                                        /* Working engine */
+    & b > 0                                                                                         /* Working brakes */
+    & ep > 0                                                                              /* Controller reaction time */
+    & V >= 0
+    & tau >= 0
+    & bo > 0
+  );
+
+  /* Stopped somewhere safe initially */
+  Bool initialState(Real x, Real y, Real v, Real dx, Real dy, Real xo, Real yo, Real vxo, Real vyo) <-> (
+    v = 0
+    & (abs(x-xo) > friendlyMargin(V) | abs(y-yo) > friendlyMargin(V))
+    & vxo^2+vyo^2<=V^2
+    & isWellformedDir(dx,dy)
+  );
+
+  /* Under these assumptions we guarantee safety */
+  Bool assumptions(Real x, Real y, Real v, Real dx, Real dy, Real xo, Real yo, Real vxo, Real vyo) <->
+    bounds() & initialState(x, y, v, dx, dy, xo, yo, vxo, vyo);
+
+  /* Conditions that are true on each loop iteration */
+  Bool loopinv(Real x, Real y, Real v, Real dx, Real dy, Real xo, Real yo) <-> (
+    v >= 0
+    & isWellformedDir(dx,dy)
+    & (v>0 -> abs(x-xo) > stopDist(v)+friendlyMargin(V) | abs(y-yo) > stopDist(v)+friendlyMargin(V))
+  );
+End.
+
+ProgramVariables
+  Real x;    /* robot position: x */
+  Real y;    /* robot position: y */
+  Real v;    /* robot translational velocity */
+  Real a;    /* robot translational acceleration */
+  Real dx;   /* robot orientation: x */
+  Real dy;   /* robot orientation: y */
+  Real w;    /* robot rotational velocity */
+  Real r;    /* robot curve radius */
+  Real xo;   /* position of closest obstacle on curve */
+  Real yo;
+  Real vxo;  /* velocity vector of obstacle */
+  Real vyo;
+  Real vo;   /* refined obstacle: speed, acceleration, and direction */
+  Real ao;
+  Real dxo;
+  Real dyo;
+  Real t;    /* time */
+End.
+
+Problem
+assumptions(x, y, v, dx, dy, xo, yo, vxo, vyo) ->
+  [
+    {
+      {
+        /* obstacle control */
+        {
+          vxo := *; vyo := *;
+          ?vxo^2+vyo^2<=V^2;
+        }
+        /* robot control */
+        {
+          /* brake on current curve or remain stopped */
+          { a := -b; }
+          ++
+          { ?v = 0; a := 0; w := 0; }
+          ++
+          /* or choose a new safe curve */
+          { a := A;
+            w := *; ?-W<=w & w<=W;       /* choose steering */
+            r := *;
+            xo := *; yo := *;            /* measure closest obstacle on the curve */
+
+            /* admissible curve */
+            ?r!=0 & r*w = v;
+
+            /* use that curve, if it is a safe one (admissible velocities) */
+            ? abs(x-xo) > admissibleSeparation(v)
+            | abs(y-yo) > admissibleSeparation(v);
+          }
+        };
+        t := 0;
+      }
+
+      /* dynamics */
+      { x' = v * dx, y' = v * dy, v' = a,        /* accelerate/decelerate and move */
+        dx' = -w * dy, dy' = w * dx, w' = a/r,   /* follow curve */
+        xo' = vxo, yo' = vyo,                    /* obstacle moves */
+        t' = 1 & t <= ep & v >= 0
+      }
+    }*@invariant(loopinv(x, y, v, dx, dy, xo, yo))
+  ](  (v>0 -> (x - xo)^2 + (y - yo)^2 > (friendlyMargin(V))^2)                     /* robot ensures friendly margin */
+    & (  0<=vo & vo^2=vxo^2+vyo^2 & dxo*vo=vxo & dyo*vo=vyo                                      /* obstacle can stop */
+       & (x - xo)^2 + (y - yo)^2 > (friendlyMargin(V))^2
+       ->
+        <{
+          ao := *; ?-bo <= ao & vo + ao*ep <= V;
+          t := 0;
+          {xo'=vo*dxo, yo'=vo*dyo, vo'=ao, t'=1 & vo>=0 & t<=ep}
+         }*>((x-xo)^2 + (y-yo)^2 > 0 & vo=0))
+  )
+End.
+    """
+
+
     def test_parse_annotations(self):
         print("\nTesting parse_annotations...")
         annotation_line1 = '// @const: bound=[0.1:0.5]; def="time limit"; is_active=true'
@@ -453,68 +908,94 @@ End.
         print(f"Input: '{annotation_line3}' -> Output: {parsed_anno3}")
         print("parse_annotations tests passed.")
 
-    def test_parse_full_model_ijrr17_t14(self):
-        print("\n--- Parsing full sample KeYmaera model (IJRR17/T14) ---")
-        parser = KeYmaeraParser(self.SAMPLE_MODEL_IJRR17_T14)
+    def _run_full_model_test(self, model_text: str, expected_kind: str, expected_name: str, filename_prefix: str):
+        """Helper function to run full model parsing tests."""
+        parser = KeYmaeraParser(model_text)
         try:
             model_ast = parser.parse()
             self.assertIsInstance(model_ast, KeYmaeraModel)
-            self.assertEqual(model_ast.entries[0].kind, "IJRR17")
-            self.assertEqual(model_ast.entries[0].name, "Theorem 14: Reach waypoint with deadline")
+            # For ArchiveEntry, the first entry might be a Theorem or an ArchiveEntry
+            # We assume the first entry is always the main one we're testing.
+            self.assertEqual(model_ast.entries[0].kind, expected_kind)
+            self.assertEqual(model_ast.entries[0].name, expected_name)
             self.assertGreater(len(model_ast.entries[0].definitions.defs), 0)
             self.assertGreater(len(model_ast.entries[0].program_variables.vars), 0)
             self.assertIsInstance(model_ast.entries[0].problem.formula, Formula)
-            print("Full model (IJRR17/T14) parsing successful!")
+            print(f"Full model ({expected_kind}/{expected_name}) parsing successful!")
             if self._print_ast_output:
-                filename = "ijrr17_t14_ast.txt"
+                filename = f"{filename_prefix}_ast.txt"
                 with open(filename, "w") as f:
                     f.write(str(model_ast))
-                print(f"--- AST Output for IJRR17/T14 written to '{filename}' ---")
+                print(f"--- AST Output for {expected_kind}/{expected_name} written to '{filename}' ---")
                 print("----------------------------------------------------")
         except ValueError as e:
-            self.fail(f"Error parsing full model (IJRR17/T14): {e}")
+            self.fail(f"Error parsing full model ({expected_kind}/{expected_name}): {e}")
+
+    def test_parse_full_model_ijrr17_t14(self):
+        print("\n--- Parsing full sample KeYmaera model (IJRR17/T14) ---")
+        self._run_full_model_test(
+            self.SAMPLE_MODEL_IJRR17_T14,
+            "IJRR17",
+            "Theorem 14: Reach waypoint with deadline",
+            "ijrr17_t14"
+        )
 
     def test_parse_full_model_ijrr17_t15(self):
         print("\n--- Parsing full sample KeYmaera model (IJRR17/T15) ---")
-        parser = KeYmaeraParser(self.SAMPLE_MODEL_IJRR17_T15)
-        try:
-            model_ast = parser.parse()
-            self.assertIsInstance(model_ast, KeYmaeraModel)
-            self.assertEqual(model_ast.entries[0].kind, "IJRR17")
-            self.assertEqual(model_ast.entries[0].name, "Theorem 15: Cross intersection with deadline")
-            self.assertGreater(len(model_ast.entries[0].definitions.defs), 0)
-            self.assertGreater(len(model_ast.entries[0].program_variables.vars), 0)
-            self.assertIsInstance(model_ast.entries[0].problem.formula, Formula)
-            print("Full model (IJRR17/T15) parsing successful!")
-            if self._print_ast_output:
-                filename = "ijrr17_t15_ast.txt"
-                with open(filename, "w") as f:
-                    f.write(str(model_ast))
-                print(f"--- AST Output for IJRR17/T15 written to '{filename}' ---")
-                print("----------------------------------------------------")
-        except ValueError as e:
-            self.fail(f"Error parsing full model (IJRR17/T15): {e}")
+        self._run_full_model_test(
+            self.SAMPLE_MODEL_IJRR17_T15,
+            "IJRR17",
+            "Theorem 15: Cross intersection with deadline",
+            "ijrr17_t15"
+        )
 
     def test_parse_full_model_ijrr17_t1(self):
         print("\n--- Parsing full sample KeYmaera model (IJRR17/T1) ---")
-        parser = KeYmaeraParser(self.SAMPLE_MODEL_IJRR17_T1)
-        try:
-            model_ast = parser.parse()
-            self.assertIsInstance(model_ast, KeYmaeraModel)
-            self.assertEqual(model_ast.entries[0].kind, "IJRR17")
-            self.assertEqual(model_ast.entries[0].name, "Theorem 1: Static safety")
-            self.assertGreater(len(model_ast.entries[0].definitions.defs), 0)
-            self.assertGreater(len(model_ast.entries[0].program_variables.vars), 0)
-            self.assertIsInstance(model_ast.entries[0].problem.formula, Formula)
-            print("Full model (IJRR17/T1) parsing successful!")
-            if self._print_ast_output:
-                filename = "ijrr17_t1_ast.txt"
-                with open(filename, "w") as f:
-                    f.write(str(model_ast))
-                print(f"--- AST Output for IJRR17/T1 written to '{filename}' ---")
-                print("----------------------------------------------------")
-        except ValueError as e:
-            self.fail(f"Error parsing full model (IJRR17/T1): {e}")
+        self._run_full_model_test(
+            self.SAMPLE_MODEL_IJRR17_T1,
+            "IJRR17",
+            "Theorem 1: Static safety",
+            "ijrr17_t1"
+        )
+
+    # --- New tests for the additional models ---
+
+    def test_parse_full_model_ijrr17_t13(self):
+        print("\n--- Parsing full sample KeYmaera model (IJRR17/T13) ---")
+        self._run_full_model_test(
+            self.SAMPLE_MODEL_IJRR17_T13,
+            "IJRR17",
+            "Theorem 13: Passive safety with trajectory distance measurement",
+            "ijrr17_t13"
+        )
+
+    def test_parse_full_model_ijrr17_c2(self):
+        print("\n--- Parsing full sample KeYmaera model (IJRR17/C2) ---")
+        self._run_full_model_test(
+            self.SAMPLE_MODEL_IJRR17_C2,
+            "IJRR17", # ArchiveEntry still belongs to IJRR17 kind
+            "Corollary 2: Velocity-controlled passive orientation safety",
+            "ijrr17_c2"
+        )
+
+    def test_parse_full_model_ijrr17_t4(self):
+        print("\n--- Parsing full sample KeYmaera model (IJRR17/T4) ---")
+        self._run_full_model_test(
+            self.SAMPLE_MODEL_IJRR17_T4,
+            "IJRR17",
+            "Theorem 4: Passive orientation safety",
+            "ijrr17_t4"
+        )
+
+    def test_parse_full_model_ijrr17_t3(self):
+        print("\n--- Parsing full sample KeYmaera model (IJRR17/T3) ---")
+        self._run_full_model_test(
+            self.SAMPLE_MODEL_IJRR17_T3,
+            "IJRR17",
+            "Theorem 3: Passive Friendly Safety",
+            "ijrr17_t3"
+        )
+
 
     def test_parse_term_expressions(self):
         print("\n--- Testing parse_term ---")

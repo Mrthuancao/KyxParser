@@ -1,7 +1,4 @@
-/*
- *	Robot must safely cross an intersection.
- *  Theorem "IJRR17/Theorem 15: Cross intersection with deadline"
- */
+Theorem "IJRR17/Theorem 15: Cross intersection with deadline"
 
 Definitions
   // @const: bound=[0.01:0.1]; def="time limit for control decisions"

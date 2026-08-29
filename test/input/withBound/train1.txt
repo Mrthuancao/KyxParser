@@ -1,11 +1,18 @@
 Theorem "IJRR17/Theorem 3: Passive Friendly Safety"
 Definitions
+  // @const: bound=[0.1:0.5], def="time limit for control decisions"
   Real ep;      /* time limit for control decisions */
+  // @const: bound=[0.1:0.5], def="time limit for obstacle reaction"
   Real tau;     /* time limit for obstacle reaction */
+  // @const: bound=[0.5:5.0], def="minimum braking capability of the robot"
   Real b;       /* minimum braking capability of the robot */
+  // @const: bound=[0.5:5.0], def="obstacle brakes"
   Real bo;      /* obstacle brakes */
+  // @const: bound=[1.0:10.0], def="maximum acceleration"
   Real A;       /* maximum acceleration -b <= a <= A */
+  // @const: bound=[0.1:1.0], def="maximum steering (rotational velocity)"
   Real W;       /* maximum steering */
+  // @const: bound=[0.1:5.0], def="maximum obstacle velocity"
   Real V;       /* maximum obstacle velocity */
 
   Real friendlyMargin(Real v) = v^2/(2*bo) + tau*v;
@@ -13,6 +20,7 @@ Definitions
   Real accelComp(Real v) = ((A/b + 1) * (A/2 * ep^2 + ep*(v+V)));
   Real admissibleSeparation(Real v) = stopDist(v) + friendlyMargin(V) + accelComp(v);
 
+  // @progress: reward=10, shape={-((dx**2 + dy**2) - 1)**2}, on_success=continue:status=none, on_failure=continue:status=none
   Bool isWellformedDir(Real dx,Real dy) <-> dx^2 + dy^2 = 1;        /* The orientation of the robot is a unit vector. */
 
   Bool bounds() <-> (                                                                  /* Bounds for global constants */
@@ -36,31 +44,56 @@ Definitions
   Bool assumptions(Real x, Real y, Real v, Real dx, Real dy, Real xo, Real yo, Real vxo, Real vyo) <->
     bounds() & initialState(x, y, v, dx, dy, xo, yo, vxo, vyo);
 
+  // @safety: penalty=-1000, on_failure=truncate:status=failure, on_success=continue:status=none
   /* Conditions that are true on each loop iteration */
   Bool loopinv(Real x, Real y, Real v, Real dx, Real dy, Real xo, Real yo) <-> (
     v >= 0
     & isWellformedDir(dx,dy)
     & (v>0 -> abs(x-xo) > stopDist(v)+friendlyMargin(V) | abs(y-yo) > stopDist(v)+friendlyMargin(V))
   );
+
+  // @safety: penalty=-1000, on_failure=terminate:status=failure, on_success=continue:status=none
+  Bool finalSafety(Real xr, Real xo, Real T) <-> ( (xr=ixr -> xo!=ixo) & (T>=D -> RAfterX(xr)) );
+
+  // @progress: reward=1000, on_success=terminate:status=success, on_failure=terminate:status=failure
+  Bool ensure(Real v, Real x, Real y, Real xo, Real yo) <-> (v>0 -> (x - xo)^2 + (y - yo)^2 > 0);
+
 End.
 
 ProgramVariables
+  // @var: bound=[0:100], def="robot position: x"
   Real x;    /* robot position: x */
+  // @var: bound=[0:100], def="robot position: y"
   Real y;    /* robot position: y */
+  // @var: bound=[0:20], def="robot translational velocity"
   Real v;    /* robot translational velocity */
+  // @var: bound=[-10:10], def="robot translational acceleration"
   Real a;    /* robot translational acceleration */
+  // @var: bound=[-1:1], def="robot orientation: x component"
   Real dx;   /* robot orientation: x */
+  // @var: bound=[-1:1], def="robot orientation: y component"
   Real dy;   /* robot orientation: y */
+  // @var: bound=[-2:2], def="robot rotational velocity"
   Real w;    /* robot rotational velocity */
+  // @var: bound=[-1000:1000], def="robot curve radius"
   Real r;    /* robot curve radius */
+  // @var: bound=[0:100], def="position of closest obstacle on curve: x"
   Real xo;   /* position of closest obstacle on curve */
+  // @var: bound=[0:100], def="position of closest obstacle on curve: y"
   Real yo;
+  // @var: bound=[-5:5], def="obstacle velocity: x component"
   Real vxo;  /* velocity vector of obstacle */
+  // @var: bound=[-5:5], def="obstacle velocity: y component"
   Real vyo;
+  // @var: bound=[0:20], def="refined obstacle speed"
   Real vo;   /* refined obstacle: speed, acceleration, and direction */
+  // @var: bound=[-10:10], def="refined obstacle acceleration"
   Real ao;
+  // @var: bound=[-1:1], def="refined obstacle orientation: x component"
   Real dxo;
+  // @var: bound=[-1:1], def="refined obstacle orientation: y component"
   Real dyo;
+  // @var: bound=[0:1], def="time elapsed in current control step"
   Real t;    /* time */
 End.
 
