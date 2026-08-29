@@ -1,0 +1,118 @@
+Theorem "IJRR17/Theorem 3: Passive Friendly Safety"
+Definitions
+  Real ep;      /* time limit for control decisions */
+  Real tau;     /* time limit for obstacle reaction */
+  Real b;       /* minimum braking capability of the robot */
+  Real bo;      /* obstacle brakes */
+  Real A;       /* maximum acceleration -b <= a <= A */
+  Real W;       /* maximum steering */
+  Real V;       /* maximum obstacle velocity */
+
+  Real friendlyMargin(Real v) = v^2/(2*bo) + tau*v;
+  Real stopDist(Real v) = v^2 / (2*b) + V*v/b;
+  Real accelComp(Real v) = ((A/b + 1) * (A/2 * ep^2 + ep*(v+V)));
+  Real admissibleSeparation(Real v) = stopDist(v) + friendlyMargin(V) + accelComp(v);
+
+  Bool isWellformedDir(Real dx,Real dy) <-> dx^2 + dy^2 = 1;        /* The orientation of the robot is a unit vector. */
+
+  Bool bounds() <-> (                                                                  /* Bounds for global constants */
+      A >= 0                                                                                        /* Working engine */
+    & b > 0                                                                                         /* Working brakes */
+    & ep > 0                                                                              /* Controller reaction time */
+    & V >= 0
+    & tau >= 0
+    & bo > 0
+  );
+
+  /* Stopped somewhere safe initially */
+  Bool initialState(Real x, Real y, Real v, Real dx, Real dy, Real xo, Real yo, Real vxo, Real vyo) <-> (
+    v = 0
+    & (abs(x-xo) > friendlyMargin(V) | abs(y-yo) > friendlyMargin(V))
+    & vxo^2+vyo^2<=V^2
+    & isWellformedDir(dx,dy)
+  );
+
+  /* Under these assumptions we guarantee safety */
+  Bool assumptions(Real x, Real y, Real v, Real dx, Real dy, Real xo, Real yo, Real vxo, Real vyo) <->
+    bounds() & initialState(x, y, v, dx, dy, xo, yo, vxo, vyo);
+
+  /* Conditions that are true on each loop iteration */
+  Bool loopinv(Real x, Real y, Real v, Real dx, Real dy, Real xo, Real yo) <-> (
+    v >= 0
+    & isWellformedDir(dx,dy)
+    & (v>0 -> abs(x-xo) > stopDist(v)+friendlyMargin(V) | abs(y-yo) > stopDist(v)+friendlyMargin(V))
+  );
+End.
+
+ProgramVariables
+  Real x;    /* robot position: x */
+  Real y;    /* robot position: y */
+  Real v;    /* robot translational velocity */
+  Real a;    /* robot translational acceleration */
+  Real dx;   /* robot orientation: x */
+  Real dy;   /* robot orientation: y */
+  Real w;    /* robot rotational velocity */
+  Real r;    /* robot curve radius */
+  Real xo;   /* position of closest obstacle on curve */
+  Real yo;
+  Real vxo;  /* velocity vector of obstacle */
+  Real vyo;
+  Real vo;   /* refined obstacle: speed, acceleration, and direction */
+  Real ao;
+  Real dxo;
+  Real dyo;
+  Real t;    /* time */
+End.
+
+Problem
+assumptions(x, y, v, dx, dy, xo, yo, vxo, vyo) ->
+  [
+    {
+      {
+        /* obstacle control */
+        {
+          vxo := *; vyo := *;
+          ?vxo^2+vyo^2<=V^2;
+        }
+        /* robot control */
+        {
+          /* brake on current curve or remain stopped */
+          { a := -b; }
+          ++
+          { ?v = 0; a := 0; w := 0; }
+          ++
+          /* or choose a new safe curve */
+          { a := A;
+            w := *; ?-W<=w & w<=W;       /* choose steering */
+            r := *;
+            xo := *; yo := *;            /* measure closest obstacle on the curve */
+
+            /* admissible curve */
+            ?r!=0 & r*w = v;
+
+            /* use that curve, if it is a safe one (admissible velocities) */
+            ? abs(x-xo) > admissibleSeparation(v)
+            | abs(y-yo) > admissibleSeparation(v);
+          }
+        };
+        t := 0;
+      }
+
+      /* dynamics */
+      { x' = v * dx, y' = v * dy, v' = a,        /* accelerate/decelerate and move */
+        dx' = -w * dy, dy' = w * dx, w' = a/r,   /* follow curve */
+        xo' = vxo, yo' = vyo,                    /* obstacle moves */
+        t' = 1 & t <= ep & v >= 0
+      }
+    }*@invariant(loopinv(x, y, v, dx, dy, xo, yo))
+  ](  (v>0 -> (x - xo)^2 + (y - yo)^2 > (friendlyMargin(V))^2)                     /* robot ensures friendly margin */
+    & (  0<=vo & vo^2=vxo^2+vyo^2 & dxo*vo=vxo & dyo*vo=vyo                                      /* obstacle can stop */
+       & (x - xo)^2 + (y - yo)^2 > (friendlyMargin(V))^2
+       ->
+        <{
+          ao := *; ?-bo <= ao & vo + ao*ep <= V;
+          t := 0;
+          {xo'=vo*dxo, yo'=vo*dyo, vo'=ao, t'=1 & vo>=0 & t<=ep}
+         }*>((x-xo)^2 + (y-yo)^2 > 0 & vo=0))
+  )
+End.

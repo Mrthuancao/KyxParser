@@ -27,9 +27,11 @@ class KeYmaeraGymEnv(gym.Env):
         super().__init__()
         self.config = self._load_config(_ENV_CONFIG_JSON, config_override)
         
+        self.debug_mode = self.config.get('debug_mode', False)
+        
         # DEBUG PRINTS START
-        print(f"DEBUG: Initialized self.config['variables']: {self.config['variables']}")
-        print(f"DEBUG: Initialized self.config['constants']: {self.config['constants']}")
+        self._debug_print(f"Initialized self.config['variables']: {self.config['variables']}")
+        self._debug_print(f"Initialized self.config['constants']: {self.config['constants']}")
         # DEBUG PRINTS END
 
         self.environment_name = self.config['environment_name']
@@ -51,7 +53,7 @@ class KeYmaeraGymEnv(gym.Env):
         self.sympy_symbols = {}
         # Variables and constants need to be SymPy Symbols for ODE parsing
         for var_config in self.config['variables']:
-            print(f"DEBUG: Initializing sympy_symbols with variable: {var_config['name']}")
+            self._debug_print(f"DEBUG: Initializing sympy_symbols with variable: {var_config['name']}")
             self.sympy_symbols[var_config['name']] = sympy.Symbol(var_config['name'])
         for const_config in self.config['constants']:
             print(f"DEBUG: Initializing sympy_symbols with constant: {const_config['name']}")
@@ -80,6 +82,10 @@ class KeYmaeraGymEnv(gym.Env):
         self._setup_spaces()
         self._setup_initial_state_samplers()
         self._setup_hybrid_program()
+        
+    def _debug_print(self, message):
+        if self.debug_mode:
+            print(f"DEBUG: {message}")
 
     # User-defined functions from KeYmaera model
     def _waypointStartDist_impl(self, xg):
@@ -273,11 +279,11 @@ class KeYmaeraGymEnv(gym.Env):
 
     def _setup_constants(self):
         for const_config in self.config['constants']:
-            print(f"DEBUG: _setup_constants evaluating constant: {const_config['name']}")
+            self._debug_print(f"DEBUG: _setup_constants evaluating constant: {const_config['name']}")
             self.current_state[const_config['name']] = self._evaluate_expression(const_config['value'], {})
             # Ensure constants are also SymPy symbols if they are used in ODEs or other symbolic expressions
             if const_config['name'] not in self.sympy_symbols:
-                print(f"DEBUG: Adding constant to sympy_symbols (late): {const_config['name']}")
+                self._debug_print(f"DEBUG: Adding constant to sympy_symbols (late): {const_config['name']}")
                 self.sympy_symbols[const_config['name']] = sympy.Symbol(const_config['name'])
 
 
@@ -317,27 +323,27 @@ class KeYmaeraGymEnv(gym.Env):
         self.differential_equations = {}
         self.differential_domain_constraint = None
 
-        print(f"DEBUG: _setup_hybrid_program: ode_program_str = '{ode_program_str}'")
+        self._debug_print(f"DEBUG: _setup_hybrid_program: ode_program_str = '{ode_program_str}'")
 
         if ode_program_str.startswith('(') and ode_program_str.endswith(')'):
             ode_program_str = ode_program_str[1:-1]
 
-        print(f"DEBUG: _setup_hybrid_program: ode_program_str after paren removal = '{ode_program_str}'")
+        self._debug_print(f"DEBUG: _setup_hybrid_program: ode_program_str after paren removal = '{ode_program_str}'")
 
         # Split using the new distinct separator
         parts = ode_program_str.split('@@@DOMAIN_CONSTRAINT@@@', 1)
 
-        print(f"DEBUG: _setup_hybrid_program: parts = {parts}")
+        self._debug_print(f"DEBUG: _setup_hybrid_program: parts = {parts}")
 
         equations_str = parts[0].strip() # Ensure no leading/trailing whitespace
         if len(parts) > 1:
             self.differential_domain_constraint = parts[1].strip()
 
-        print(f"DEBUG: _setup_hybrid_program: equations_str = '{equations_str}'")
-        print(f"DEBUG: _setup_hybrid_program: differential_domain_constraint = '{self.differential_domain_constraint}'")
+        self._debug_print(f"DEBUG: _setup_hybrid_program: equations_str = '{equations_str}'")
+        self._debug_print(f"DEBUG: _setup_hybrid_program: differential_domain_constraint = '{self.differential_domain_constraint}'")
 
         equation_parts = [p.strip() for p in equations_str.split(',') if p.strip()]
-        print(f"DEBUG: _setup_hybrid_program: equation_parts (filtered) = {equation_parts}")
+        self._debug_print(f"DEBUG: _setup_hybrid_program: equation_parts (filtered) = {equation_parts}")
 
         # Prepare sympy_locals for ODE parsing: symbols + symbolic functions
         ode_sympy_locals = {k: v for k, v in self.sympy_symbols.items()}
@@ -360,7 +366,7 @@ class KeYmaeraGymEnv(gym.Env):
                 self.sympy_symbols[var] = sympy.Symbol(var)
 
     def _evaluate_expression(self, expression_str: str, context: Dict[str, Any]):
-        print(f"DEBUG: _evaluate_expression called for: {expression_str} (type: {type(expression_str)})")
+        self._debug_print(f"DEBUG: _evaluate_expression called for: {expression_str} (type: {type(expression_str)})")
 
         # Prepare the execution environment for eval()
         eval_globals = {
@@ -408,6 +414,49 @@ class KeYmaeraGymEnv(gym.Env):
         except Exception as e:
             raise RuntimeError(f"Error evaluating expression '{expression_str}': {e}")
 
+    def _evaluate_sympy_function_calls(self, sympy_expr_node, current_subs):
+        # Helper function to evaluate symbolic function calls within a SymPy expression.
+        # This is necessary because user-defined functions are Python callables, not SymPy's built-in functions.
+        # Base case 1: If it's a number (sympy.Float or sympy.Integer), return its Python float value.
+        # This handles direct numerical constants.
+        if isinstance(sympy_expr_node, (sympy.Float, sympy.Integer)):
+            return float(sympy_expr_node)
+
+        # Base case 2: If it's a simple sympy.Symbol, substitute its value directly.
+        # This must come BEFORE the `hasattr(sympy_expr_node, 'args')` check to prevent the Symbol() TypeError.
+        if isinstance(sympy_expr_node, sympy.Symbol):
+            # If the symbol has a numerical value in the substitution dictionary, use it.
+            if sympy_expr_node in current_subs:
+                return current_subs[sympy_expr_node]
+            # If not in subs_dict, it means it's a symbol that should remain symbolic.
+            # In contexts like ODE evaluation, all variables should ideally be numerical at this point.
+            # Returning the symbol itself might lead to further errors if the solver expects only numbers.
+            return sympy_expr_node
+
+        # If it's a SymPy Function and its name matches a user-defined function
+        if isinstance(sympy_expr_node, sympy.Function) and str(sympy_expr_node.func) in self.user_defined_functions:
+            func_name = str(sympy_expr_node.func)
+            # Recursively evaluate arguments before calling the Python function
+            evaluated_args = [self._evaluate_sympy_function_calls(arg, current_subs) for arg in sympy_expr_node.args]
+            # Call the actual Python implementation method (which uses _evaluate_expression)
+            # self.user_defined_functions stores the bound methods, so no need to pass 'self' explicitly.
+            return self.user_defined_functions[func_name](*evaluated_args) 
+        
+        # Recursively apply to arguments of other SymPy expressions (e.g., Add, Mul, Pow, etc.)
+        # This check should come after handling specific base types like Symbol, Float, Integer.
+        if hasattr(sympy_expr_node, 'args'): # Check if it's a SymPy expression with arguments
+            # Create a new expression with evaluated arguments
+            return sympy_expr_node.func(*[self._evaluate_sympy_function_calls(arg, current_subs) for arg in sympy_expr_node.args])
+        
+        # Fallback: If it's none of the above (e.g., a Python literal like an int/float that wasn't part of a SymPy expression,
+        # or a SymPy object that doesn't have args and wasn't caught by earlier checks like sympy.Number),
+        # attempt a final substitution or just return the node.
+        # The original `sympy_expr_node.subs(current_subs)` is generally robust for SymPy objects.
+        try:
+            return sympy_expr_node.subs(current_subs)
+        except AttributeError:
+            # If it's a pure Python object that doesn't have a .subs method, return it as is.
+            return sympy_expr_node
 
     def _get_ode_system(self, t_ode, y):
         # Map y (from solver) back to named variables
@@ -451,7 +500,7 @@ class KeYmaeraGymEnv(gym.Env):
             subs_dict = {self.sympy_symbols[k]: v for k, v in temp_state.items() if k in self.sympy_symbols}
             
             # Evaluate the ODE expression, handling symbolic function calls
-            evaluated_ode_expr = evaluate_sympy_function_calls_for_constraint(expr, subs_dict)
+            evaluated_ode_expr = self._evaluate_sympy_function_calls(expr, subs_dict)
             
             # The result should now be a numerical value or a simple SymPy expression
             # that can be converted to float.
@@ -495,6 +544,11 @@ class KeYmaeraGymEnv(gym.Env):
                 # The domain constraint is a SymPy expression string, needs SymPy evaluation
                 # Prepare locals for SymPy eval
                 ode_sympy_locals = {k: v for k, v in self.sympy_symbols.items()}
+                ode_sympy_locals['sympy'] = sympy 
+                ode_sympy_locals['And'] = sympy.And # Explicitly add common sympy functions
+                ode_sympy_locals['Le'] = sympy.Le
+                ode_sympy_locals['Ge'] = sympy.Ge
+                ode_sympy_locals['Float'] = sympy.Float
                 for func_name in self.user_defined_functions:
                     ode_sympy_locals[func_name] = sympy.Function(func_name)
                 
@@ -516,17 +570,17 @@ class KeYmaeraGymEnv(gym.Env):
                     return sympy_expr_node.subs(current_subs)
 
                 # Evaluate the constraint
-                constraint_met = evaluate_sympy_function_calls_for_constraint(constraint_sympy_expr, concrete_subs)
+                constraint_met = self._evaluate_sympy_function_calls(constraint_sympy_expr, concrete_subs)
 
                 if not bool(constraint_met): # Convert SymPy boolean to Python bool
                     print(f"Differential domain constraint violated: {self.differential_domain_constraint}")
-                    print(f"DEBUG: _run_continuous_dynamics returning True due to domain violation.")
+                    self._debug_print(f"DEBUG: _run_continuous_dynamics returning True due to domain violation.")
                     return True # Indicate episode should terminate due to violation
-            print(f"DEBUG: _run_continuous_dynamics returning False (solver success, no domain violation).")
+            self._debug_print(f"DEBUG: _run_continuous_dynamics returning False (solver success, no domain violation).")
             return False # Indicate episode continues
         else:
             print(f"ODE solver failed: {sol.message}")
-            print(f"DEBUG: _run_continuous_dynamics returning True due to solver failure.")
+            self._debug_print(f"DEBUG: _run_continuous_dynamics returning True due to solver failure.")
             return True # Indicate episode should terminate
 
 
@@ -540,23 +594,23 @@ class KeYmaeraGymEnv(gym.Env):
 
         # Run continuous dynamics (ODE integration)
         solver_failed = self._run_continuous_dynamics(action_to_apply)
-        print(f"DEBUG: step method: solver_failed = {solver_failed}")
+        self._debug_print(f"DEBUG: step method: solver_failed = {solver_failed}")
         if solver_failed:
             terminated = True # Terminate if ODE solver fails or domain constraint violated
 
         # Evaluate reward
         reward_expr = self.config.get('reward_function_body', '0.0')
-        print(f"DEBUG: step method: reward_expr before evaluation: '{reward_expr}' (type: {type(reward_expr)})")
+        self._debug_print(f"DEBUG: step method: reward_expr before evaluation: '{reward_expr}' (type: {type(reward_expr)})")
         reward = self._evaluate_expression(reward_expr, self.current_state)
 
         # Evaluate termination condition
         termination_expr = self.config.get('termination_condition_body', 'False')
-        print(f"DEBUG: step method: termination_expr for evaluation: '{termination_expr}'")
+        self._debug_print(f"DEBUG: step method: termination_expr for evaluation: '{termination_expr}'")
         if not terminated: # Only evaluate if not already terminated by solver failure
             evaluated_termination_cond = self._evaluate_expression(termination_expr, self.current_state)
-            print(f"DEBUG: step method: evaluated_termination_cond = {evaluated_termination_cond}")
+            self._debug_print(f"DEBUG: step method: evaluated_termination_cond = {evaluated_termination_cond}")
             terminated = bool(evaluated_termination_cond)
-        print(f"DEBUG: step method: final terminated status = {terminated}")
+        self._debug_print(f"DEBUG: step method: final terminated status = {terminated}")
 
         # Check for truncation (max steps or global time)
         self.current_step_count += 1

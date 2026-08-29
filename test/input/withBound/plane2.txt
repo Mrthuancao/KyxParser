@@ -1,0 +1,111 @@
+Theorem "IJRR17/Theorem 4: Passive orientation safety"
+Definitions
+  Real ep;      /* time limit for control decisions */
+  Real b;       /* minimum braking capability of the robot */
+  Real A;       /* maximum acceleration -b <= a <= A */
+  Real W;       /* maximum steering */
+  Real V;       /* maximum obstacle velocity */
+  Real GammA;   /* Sensor range in radian */
+
+  Real stopDist(Real v)   = v^2 / (2*b);
+  Real stopMargin(Real v) = stopDist(v) + V*v/b;
+  Real accelComp(Real v)  = ( (A/b + 1) * (A/2 * ep^2 + ep*v) );
+  Real accelMargin(Real v)  = accelComp(v) + (A/b + 1)*ep*V;
+  Real admissibleSeparation(Real v) = stopMargin(v) + accelMargin(v);
+  Real admissibleTurnLength(Real v) = stopDist(v) + accelComp(v);
+
+  Bool isWellformedDir(Real dx, Real dy) <-> dx^2 + dy^2 = 1;       /* The orientation of the robot is a unit vector. */
+
+  Bool isVisible(Real x) <-> x>0;  /* Indicates whether or not the obstacle is visible for the robot at the decision. */
+
+  Bool bounds() <-> (                                                                  /* Bounds for global constants */
+      A >= 0                                                                                        /* Working engine */
+    & b > 0                                                                                         /* Working brakes */
+    & ep > 0                                                                              /* Controller reaction time */
+    & V >= 0
+    & GammA > 0
+  );
+
+  /* Stopped somewhere safe initially */
+  Bool initialState(Real x, Real y, Real v, Real beta, Real r, Real dx, Real dy, Real xo, Real yo) <-> (
+    v = 0
+    & beta = 0
+    & r != 0
+    & (x-xo)^2 + (y-yo)^2 > 0
+    & isWellformedDir(dx,dy)
+  );
+
+  /* Under these assumptions we guarantee safety */
+  Bool assumptions(Real x, Real y, Real v, Real beta, Real r, Real dx, Real dy, Real xo, Real yo) <->
+    bounds() & initialState(x, y, v, beta, r, dx, dy, xo, yo);
+
+  /* Conditions that are true on each loop iteration */
+  Bool loopinv(Real x, Real y, Real v, Real beta, Real visDeg, Real r, Real dx, Real dy, Real xo, Real yo) <-> (
+    v >= 0
+    & isWellformedDir(dx,dy)
+    & r != 0
+    & (v>0 -> ( (abs(x-xo) > stopMargin(v) | abs(y-yo) > stopMargin(v))
+              | (!isVisible(visDeg) & abs(beta) + stopDist(v)/abs(r) < GammA )) )
+  );
+End.
+
+ProgramVariables
+  Real x;    /* robot position: x */
+  Real y;    /* robot position: y */
+  Real v;    /* robot translational velocity */
+  Real a;    /* robot translational acceleration */
+  Real dx;   /* robot orientation: x */
+  Real dy;   /* robot orientation: y */
+  Real w;    /* robot rotational velocity */
+  Real r;    /* robot curve radius */
+  Real xo;   /* position of closest obstacle on curve */
+  Real yo;
+  Real vxo;  /* velocity vector of obstacle */
+  Real vyo;
+  Real t;    /* time */
+  Real beta; /* Angle that the robot traveled since it last chose a new curve */
+  Real visDeg; /* Indicates the "degree" to which the obstacle is visible to the robot (input to isVisible) */
+End.
+
+Problem
+  assumptions(x, y, v, beta, r, dx, dy, xo, yo) -> [
+      {
+        {
+        /* obstacle control */
+        {
+          vxo := *;
+          vyo := *;
+          ?vxo^2+vyo^2 <= V^2;
+        }
+
+        /* robot control */
+        {
+           /* brake on current curve. If the velocity is zero this just means that the robot remains stopped */
+           {a := -b;}
+        ++ /* When we are stopped, both translational and rotational acceleration are 0 */
+           {?v=0; a := 0; w := 0;}
+        ++ /* or choose a new safe curve */
+           {a := A;
+            beta := 0;
+            r :=*; ?r!=0;
+
+            /* measure obstacle position and whether or not it is visible to the robot */
+            xo := *; yo := *; visDeg := *;
+            ?(isVisible(visDeg) ->
+               ( abs(x-xo) > admissibleSeparation(v)
+               | abs(y-yo) > admissibleSeparation(v)) );
+            ?admissibleTurnLength(v) < GammA*abs(r);
+            }
+        }
+
+        /* Reset the clocks */
+        t := 0;
+        /* Set w according to physics (rigid body motion) */
+        w :=*; ?w*r = v;
+        }
+
+        {x' = v * dx, y' = v * dy, dx' = -w * dy, dy' = w * dx, v' = a, w' = a/r, beta'=w,
+                      xo' = vxo, yo' = vyo, t' = 1 & (t <= ep & v >= 0)}
+      }*
+    ] (v > 0 -> ((x - xo)^2 + (y - yo)^2 > 0 | (!isVisible(visDeg) & (abs(beta) < GammA))) )
+End.
