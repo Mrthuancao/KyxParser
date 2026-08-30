@@ -1,0 +1,2614 @@
+{
+  "_type": "KeYmaeraModel",
+  "fields": {
+    "entries": [
+      {
+        "_type": "ArchiveEntry",
+        "fields": {
+          "kind": "IJRR17",
+          "name": "Theorem 14: Reach waypoint with deadline",
+          "definitions": {
+            "_type": "DefinitionsBlock",
+            "fields": {
+              "defs": [
+                {
+                  "_type": "FuncDef",
+                  "fields": {
+                    "name": "ep",
+                    "annotations": {
+                      "const": {
+                        "bound": [
+                          0.1,
+                          0.5
+                        ],
+                        "def": "time limit for control decisions"
+                      }
+                    },
+                    "type": "Real",
+                    "body": {
+                      "_type": "VarRef",
+                      "fields": {
+                        "name": "ep"
+                      }
+                    },
+                    "args": []
+                  }
+                },
+                {
+                  "_type": "FuncDef",
+                  "fields": {
+                    "name": "b",
+                    "annotations": {
+                      "const": {
+                        "bound": [
+                          0.5,
+                          5.0
+                        ],
+                        "def": "minimum braking capability of the robot"
+                      }
+                    },
+                    "type": "Real",
+                    "body": {
+                      "_type": "VarRef",
+                      "fields": {
+                        "name": "b"
+                      }
+                    },
+                    "args": []
+                  }
+                },
+                {
+                  "_type": "FuncDef",
+                  "fields": {
+                    "name": "A",
+                    "annotations": {
+                      "const": {
+                        "bound": [
+                          1.0,
+                          10.0
+                        ],
+                        "def": "maximum acceleration"
+                      }
+                    },
+                    "type": "Real",
+                    "body": {
+                      "_type": "VarRef",
+                      "fields": {
+                        "name": "A"
+                      }
+                    },
+                    "args": []
+                  }
+                },
+                {
+                  "_type": "FuncDef",
+                  "fields": {
+                    "name": "GDelta",
+                    "annotations": {
+                      "const": {
+                        "bound": [
+                          1.0,
+                          10.0
+                        ],
+                        "def": "goal area size"
+                      }
+                    },
+                    "type": "Real",
+                    "body": {
+                      "_type": "VarRef",
+                      "fields": {
+                        "name": "GDelta"
+                      }
+                    },
+                    "args": []
+                  }
+                },
+                {
+                  "_type": "FuncDef",
+                  "fields": {
+                    "name": "Vmax",
+                    "annotations": {
+                      "const": {
+                        "bound": [
+                          5.0,
+                          30.0
+                        ],
+                        "def": "maximum robot velocity"
+                      }
+                    },
+                    "type": "Real",
+                    "body": {
+                      "_type": "VarRef",
+                      "fields": {
+                        "name": "Vmax"
+                      }
+                    },
+                    "args": []
+                  }
+                },
+                {
+                  "_type": "FuncDef",
+                  "fields": {
+                    "name": "waypointStartDist",
+                    "annotations": {},
+                    "type": "Real",
+                    "body": {
+                      "_type": "BinaryTermOp",
+                      "fields": {
+                        "op": "-",
+                        "left": {
+                          "_type": "VarRef",
+                          "fields": {
+                            "name": "xg"
+                          }
+                        },
+                        "right": {
+                          "_type": "VarRef",
+                          "fields": {
+                            "name": "GDelta"
+                          }
+                        }
+                      }
+                    },
+                    "args": [
+                      {
+                        "_type": "VarRef",
+                        "fields": {
+                          "name": "xg"
+                        }
+                      }
+                    ]
+                  }
+                },
+                {
+                  "_type": "FuncDef",
+                  "fields": {
+                    "name": "waypointEndDist",
+                    "annotations": {},
+                    "type": "Real",
+                    "body": {
+                      "_type": "BinaryTermOp",
+                      "fields": {
+                        "op": "+",
+                        "left": {
+                          "_type": "VarRef",
+                          "fields": {
+                            "name": "xg"
+                          }
+                        },
+                        "right": {
+                          "_type": "VarRef",
+                          "fields": {
+                            "name": "GDelta"
+                          }
+                        }
+                      }
+                    },
+                    "args": [
+                      {
+                        "_type": "VarRef",
+                        "fields": {
+                          "name": "xg"
+                        }
+                      }
+                    ]
+                  }
+                },
+                {
+                  "_type": "FuncDef",
+                  "fields": {
+                    "name": "minV",
+                    "annotations": {},
+                    "type": "Real",
+                    "body": {
+                      "_type": "BinaryTermOp",
+                      "fields": {
+                        "op": "*",
+                        "left": {
+                          "_type": "VarRef",
+                          "fields": {
+                            "name": "A"
+                          }
+                        },
+                        "right": {
+                          "_type": "VarRef",
+                          "fields": {
+                            "name": "ep"
+                          }
+                        }
+                      }
+                    },
+                    "args": []
+                  }
+                },
+                {
+                  "_type": "FuncDef",
+                  "fields": {
+                    "name": "maxTravelTime",
+                    "annotations": {},
+                    "type": "Real",
+                    "body": {
+                      "_type": "BinaryTermOp",
+                      "fields": {
+                        "op": "/",
+                        "left": {
+                          "_type": "FunctionCall",
+                          "fields": {
+                            "name": "waypointStartDist",
+                            "args": [
+                              {
+                                "_type": "VarRef",
+                                "fields": {
+                                  "name": "g"
+                                }
+                              }
+                            ]
+                          }
+                        },
+                        "right": {
+                          "_type": "VarRef",
+                          "fields": {
+                            "name": "minV"
+                          }
+                        }
+                      }
+                    },
+                    "args": [
+                      {
+                        "_type": "VarRef",
+                        "fields": {
+                          "name": "g"
+                        }
+                      }
+                    ]
+                  }
+                },
+                {
+                  "_type": "FuncDef",
+                  "fields": {
+                    "name": "stopTime",
+                    "annotations": {},
+                    "type": "Real",
+                    "body": {
+                      "_type": "BinaryTermOp",
+                      "fields": {
+                        "op": "/",
+                        "left": {
+                          "_type": "VarRef",
+                          "fields": {
+                            "name": "v"
+                          }
+                        },
+                        "right": {
+                          "_type": "VarRef",
+                          "fields": {
+                            "name": "b"
+                          }
+                        }
+                      }
+                    },
+                    "args": [
+                      {
+                        "_type": "VarRef",
+                        "fields": {
+                          "name": "v"
+                        }
+                      }
+                    ]
+                  }
+                },
+                {
+                  "_type": "FuncDef",
+                  "fields": {
+                    "name": "speedUpTime",
+                    "annotations": {},
+                    "type": "Real",
+                    "body": {
+                      "_type": "BinaryTermOp",
+                      "fields": {
+                        "op": "-",
+                        "left": {
+                          "_type": "VarRef",
+                          "fields": {
+                            "name": "ep"
+                          }
+                        },
+                        "right": {
+                          "_type": "BinaryTermOp",
+                          "fields": {
+                            "op": "/",
+                            "left": {
+                              "_type": "VarRef",
+                              "fields": {
+                                "name": "v"
+                              }
+                            },
+                            "right": {
+                              "_type": "VarRef",
+                              "fields": {
+                                "name": "A"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "args": [
+                      {
+                        "_type": "VarRef",
+                        "fields": {
+                          "name": "v"
+                        }
+                      }
+                    ]
+                  }
+                },
+                {
+                  "_type": "FuncDef",
+                  "fields": {
+                    "name": "stopDist",
+                    "annotations": {},
+                    "type": "Real",
+                    "body": {
+                      "_type": "BinaryTermOp",
+                      "fields": {
+                        "op": "/",
+                        "left": {
+                          "_type": "BinaryTermOp",
+                          "fields": {
+                            "op": "^",
+                            "left": {
+                              "_type": "VarRef",
+                              "fields": {
+                                "name": "v"
+                              }
+                            },
+                            "right": {
+                              "_type": "Literal",
+                              "fields": {
+                                "value": 2.0
+                              }
+                            }
+                          }
+                        },
+                        "right": {
+                          "_type": "BinaryTermOp",
+                          "fields": {
+                            "op": "*",
+                            "left": {
+                              "_type": "Literal",
+                              "fields": {
+                                "value": 2.0
+                              }
+                            },
+                            "right": {
+                              "_type": "VarRef",
+                              "fields": {
+                                "name": "b"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "args": [
+                      {
+                        "_type": "VarRef",
+                        "fields": {
+                          "name": "v"
+                        }
+                      }
+                    ]
+                  }
+                },
+                {
+                  "_type": "FuncDef",
+                  "fields": {
+                    "name": "accComp",
+                    "annotations": {},
+                    "type": "Real",
+                    "body": {
+                      "_type": "BinaryTermOp",
+                      "fields": {
+                        "op": "*",
+                        "left": {
+                          "_type": "BinaryTermOp",
+                          "fields": {
+                            "op": "+",
+                            "left": {
+                              "_type": "BinaryTermOp",
+                              "fields": {
+                                "op": "/",
+                                "left": {
+                                  "_type": "VarRef",
+                                  "fields": {
+                                    "name": "A"
+                                  }
+                                },
+                                "right": {
+                                  "_type": "VarRef",
+                                  "fields": {
+                                    "name": "b"
+                                  }
+                                }
+                              }
+                            },
+                            "right": {
+                              "_type": "Literal",
+                              "fields": {
+                                "value": 1.0
+                              }
+                            }
+                          }
+                        },
+                        "right": {
+                          "_type": "BinaryTermOp",
+                          "fields": {
+                            "op": "+",
+                            "left": {
+                              "_type": "BinaryTermOp",
+                              "fields": {
+                                "op": "*",
+                                "left": {
+                                  "_type": "BinaryTermOp",
+                                  "fields": {
+                                    "op": "/",
+                                    "left": {
+                                      "_type": "VarRef",
+                                      "fields": {
+                                        "name": "A"
+                                      }
+                                    },
+                                    "right": {
+                                      "_type": "Literal",
+                                      "fields": {
+                                        "value": 2.0
+                                      }
+                                    }
+                                  }
+                                },
+                                "right": {
+                                  "_type": "BinaryTermOp",
+                                  "fields": {
+                                    "op": "^",
+                                    "left": {
+                                      "_type": "VarRef",
+                                      "fields": {
+                                        "name": "ep"
+                                      }
+                                    },
+                                    "right": {
+                                      "_type": "Literal",
+                                      "fields": {
+                                        "value": 2.0
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            },
+                            "right": {
+                              "_type": "BinaryTermOp",
+                              "fields": {
+                                "op": "*",
+                                "left": {
+                                  "_type": "VarRef",
+                                  "fields": {
+                                    "name": "ep"
+                                  }
+                                },
+                                "right": {
+                                  "_type": "VarRef",
+                                  "fields": {
+                                    "name": "v"
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "args": [
+                      {
+                        "_type": "VarRef",
+                        "fields": {
+                          "name": "v"
+                        }
+                      }
+                    ]
+                  }
+                },
+                {
+                  "_type": "PredDef",
+                  "fields": {
+                    "name": "bounds",
+                    "annotations": {},
+                    "type": "Bool",
+                    "body": {
+                      "_type": "BinaryFormulaOp",
+                      "fields": {
+                        "op": "&",
+                        "left": {
+                          "_type": "BinaryFormulaOp",
+                          "fields": {
+                            "op": "&",
+                            "left": {
+                              "_type": "BinaryFormulaOp",
+                              "fields": {
+                                "op": "&",
+                                "left": {
+                                  "_type": "BinaryFormulaOp",
+                                  "fields": {
+                                    "op": "&",
+                                    "left": {
+                                      "_type": "Comparison",
+                                      "fields": {
+                                        "op": ">",
+                                        "left": {
+                                          "_type": "VarRef",
+                                          "fields": {
+                                            "name": "A"
+                                          }
+                                        },
+                                        "right": {
+                                          "_type": "Literal",
+                                          "fields": {
+                                            "value": 0.0
+                                          }
+                                        }
+                                      }
+                                    },
+                                    "right": {
+                                      "_type": "Comparison",
+                                      "fields": {
+                                        "op": ">",
+                                        "left": {
+                                          "_type": "VarRef",
+                                          "fields": {
+                                            "name": "b"
+                                          }
+                                        },
+                                        "right": {
+                                          "_type": "Literal",
+                                          "fields": {
+                                            "value": 0.0
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                },
+                                "right": {
+                                  "_type": "Comparison",
+                                  "fields": {
+                                    "op": ">",
+                                    "left": {
+                                      "_type": "VarRef",
+                                      "fields": {
+                                        "name": "ep"
+                                      }
+                                    },
+                                    "right": {
+                                      "_type": "Literal",
+                                      "fields": {
+                                        "value": 0.0
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            },
+                            "right": {
+                              "_type": "Comparison",
+                              "fields": {
+                                "op": ">=",
+                                "left": {
+                                  "_type": "VarRef",
+                                  "fields": {
+                                    "name": "Vmax"
+                                  }
+                                },
+                                "right": {
+                                  "_type": "BinaryTermOp",
+                                  "fields": {
+                                    "op": "*",
+                                    "left": {
+                                      "_type": "BinaryTermOp",
+                                      "fields": {
+                                        "op": "*",
+                                        "left": {
+                                          "_type": "Literal",
+                                          "fields": {
+                                            "value": 2.0
+                                          }
+                                        },
+                                        "right": {
+                                          "_type": "VarRef",
+                                          "fields": {
+                                            "name": "A"
+                                          }
+                                        }
+                                      }
+                                    },
+                                    "right": {
+                                      "_type": "VarRef",
+                                      "fields": {
+                                        "name": "ep"
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        },
+                        "right": {
+                          "_type": "Comparison",
+                          "fields": {
+                            "op": ">",
+                            "left": {
+                              "_type": "VarRef",
+                              "fields": {
+                                "name": "GDelta"
+                              }
+                            },
+                            "right": {
+                              "_type": "BinaryTermOp",
+                              "fields": {
+                                "op": "+",
+                                "left": {
+                                  "_type": "BinaryTermOp",
+                                  "fields": {
+                                    "op": "*",
+                                    "left": {
+                                      "_type": "VarRef",
+                                      "fields": {
+                                        "name": "Vmax"
+                                      }
+                                    },
+                                    "right": {
+                                      "_type": "VarRef",
+                                      "fields": {
+                                        "name": "ep"
+                                      }
+                                    }
+                                  }
+                                },
+                                "right": {
+                                  "_type": "BinaryTermOp",
+                                  "fields": {
+                                    "op": "/",
+                                    "left": {
+                                      "_type": "BinaryTermOp",
+                                      "fields": {
+                                        "op": "^",
+                                        "left": {
+                                          "_type": "VarRef",
+                                          "fields": {
+                                            "name": "Vmax"
+                                          }
+                                        },
+                                        "right": {
+                                          "_type": "Literal",
+                                          "fields": {
+                                            "value": 2.0
+                                          }
+                                        }
+                                      }
+                                    },
+                                    "right": {
+                                      "_type": "BinaryTermOp",
+                                      "fields": {
+                                        "op": "*",
+                                        "left": {
+                                          "_type": "Literal",
+                                          "fields": {
+                                            "value": 2.0
+                                          }
+                                        },
+                                        "right": {
+                                          "_type": "VarRef",
+                                          "fields": {
+                                            "name": "b"
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "args": []
+                  }
+                },
+                {
+                  "_type": "PredDef",
+                  "fields": {
+                    "name": "initialState",
+                    "annotations": {},
+                    "type": "Bool",
+                    "body": {
+                      "_type": "BinaryFormulaOp",
+                      "fields": {
+                        "op": "&",
+                        "left": {
+                          "_type": "BinaryFormulaOp",
+                          "fields": {
+                            "op": "&",
+                            "left": {
+                              "_type": "Comparison",
+                              "fields": {
+                                "op": "=",
+                                "left": {
+                                  "_type": "VarRef",
+                                  "fields": {
+                                    "name": "vr"
+                                  }
+                                },
+                                "right": {
+                                  "_type": "Literal",
+                                  "fields": {
+                                    "value": 0.0
+                                  }
+                                }
+                              }
+                            },
+                            "right": {
+                              "_type": "Comparison",
+                              "fields": {
+                                "op": "<",
+                                "left": {
+                                  "_type": "VarRef",
+                                  "fields": {
+                                    "name": "xr"
+                                  }
+                                },
+                                "right": {
+                                  "_type": "FunctionCall",
+                                  "fields": {
+                                    "name": "waypointStartDist",
+                                    "args": [
+                                      {
+                                        "_type": "VarRef",
+                                        "fields": {
+                                          "name": "xg"
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        },
+                        "right": {
+                          "_type": "Comparison",
+                          "fields": {
+                            "op": ">",
+                            "left": {
+                              "_type": "VarRef",
+                              "fields": {
+                                "name": "T"
+                              }
+                            },
+                            "right": {
+                              "_type": "BinaryTermOp",
+                              "fields": {
+                                "op": "+",
+                                "left": {
+                                  "_type": "BinaryTermOp",
+                                  "fields": {
+                                    "op": "+",
+                                    "left": {
+                                      "_type": "BinaryTermOp",
+                                      "fields": {
+                                        "op": "+",
+                                        "left": {
+                                          "_type": "VarRef",
+                                          "fields": {
+                                            "name": "ep"
+                                          }
+                                        },
+                                        "right": {
+                                          "_type": "FunctionCall",
+                                          "fields": {
+                                            "name": "maxTravelTime",
+                                            "args": [
+                                              {
+                                                "_type": "BinaryTermOp",
+                                                "fields": {
+                                                  "op": "-",
+                                                  "left": {
+                                                    "_type": "VarRef",
+                                                    "fields": {
+                                                      "name": "xg"
+                                                    }
+                                                  },
+                                                  "right": {
+                                                    "_type": "VarRef",
+                                                    "fields": {
+                                                      "name": "xr"
+                                                    }
+                                                  }
+                                                }
+                                              }
+                                            ]
+                                          }
+                                        }
+                                      }
+                                    },
+                                    "right": {
+                                      "_type": "VarRef",
+                                      "fields": {
+                                        "name": "ep"
+                                      }
+                                    }
+                                  }
+                                },
+                                "right": {
+                                  "_type": "FunctionCall",
+                                  "fields": {
+                                    "name": "stopTime",
+                                    "args": [
+                                      {
+                                        "_type": "VarRef",
+                                        "fields": {
+                                          "name": "Vmax"
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "args": [
+                      {
+                        "_type": "VarRef",
+                        "fields": {
+                          "name": "xr"
+                        }
+                      },
+                      {
+                        "_type": "VarRef",
+                        "fields": {
+                          "name": "vr"
+                        }
+                      },
+                      {
+                        "_type": "VarRef",
+                        "fields": {
+                          "name": "xg"
+                        }
+                      },
+                      {
+                        "_type": "VarRef",
+                        "fields": {
+                          "name": "T"
+                        }
+                      }
+                    ]
+                  }
+                },
+                {
+                  "_type": "PredDef",
+                  "fields": {
+                    "name": "assumptions",
+                    "annotations": {},
+                    "type": "Bool",
+                    "body": {
+                      "_type": "BinaryFormulaOp",
+                      "fields": {
+                        "op": "&",
+                        "left": {
+                          "_type": "PredicateCall",
+                          "fields": {
+                            "name": "bounds",
+                            "args": []
+                          }
+                        },
+                        "right": {
+                          "_type": "PredicateCall",
+                          "fields": {
+                            "name": "initialState",
+                            "args": [
+                              {
+                                "_type": "VarRef",
+                                "fields": {
+                                  "name": "xr"
+                                }
+                              },
+                              {
+                                "_type": "VarRef",
+                                "fields": {
+                                  "name": "vr"
+                                }
+                              },
+                              {
+                                "_type": "VarRef",
+                                "fields": {
+                                  "name": "xg"
+                                }
+                              },
+                              {
+                                "_type": "VarRef",
+                                "fields": {
+                                  "name": "T"
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    },
+                    "args": [
+                      {
+                        "_type": "VarRef",
+                        "fields": {
+                          "name": "xr"
+                        }
+                      },
+                      {
+                        "_type": "VarRef",
+                        "fields": {
+                          "name": "vr"
+                        }
+                      },
+                      {
+                        "_type": "VarRef",
+                        "fields": {
+                          "name": "xg"
+                        }
+                      },
+                      {
+                        "_type": "VarRef",
+                        "fields": {
+                          "name": "T"
+                        }
+                      }
+                    ]
+                  }
+                },
+                {
+                  "_type": "PredDef",
+                  "fields": {
+                    "name": "loopinv",
+                    "annotations": {
+                      "safety": {
+                        "penalty": -1000,
+                        "on_failure": "truncate:status=failure"
+                      }
+                    },
+                    "type": "Bool",
+                    "body": {
+                      "_type": "BinaryFormulaOp",
+                      "fields": {
+                        "op": "&",
+                        "left": {
+                          "_type": "BinaryFormulaOp",
+                          "fields": {
+                            "op": "&",
+                            "left": {
+                              "_type": "BinaryFormulaOp",
+                              "fields": {
+                                "op": "&",
+                                "left": {
+                                  "_type": "BinaryFormulaOp",
+                                  "fields": {
+                                    "op": "&",
+                                    "left": {
+                                      "_type": "Comparison",
+                                      "fields": {
+                                        "op": "<=",
+                                        "left": {
+                                          "_type": "Literal",
+                                          "fields": {
+                                            "value": 0.0
+                                          }
+                                        },
+                                        "right": {
+                                          "_type": "VarRef",
+                                          "fields": {
+                                            "name": "vr"
+                                          }
+                                        }
+                                      }
+                                    },
+                                    "right": {
+                                      "_type": "Comparison",
+                                      "fields": {
+                                        "op": "<=",
+                                        "left": {
+                                          "_type": "VarRef",
+                                          "fields": {
+                                            "name": "vr"
+                                          }
+                                        },
+                                        "right": {
+                                          "_type": "VarRef",
+                                          "fields": {
+                                            "name": "Vmax"
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                },
+                                "right": {
+                                  "_type": "Comparison",
+                                  "fields": {
+                                    "op": "<",
+                                    "left": {
+                                      "_type": "BinaryTermOp",
+                                      "fields": {
+                                        "op": "+",
+                                        "left": {
+                                          "_type": "VarRef",
+                                          "fields": {
+                                            "name": "xr"
+                                          }
+                                        },
+                                        "right": {
+                                          "_type": "FunctionCall",
+                                          "fields": {
+                                            "name": "stopDist",
+                                            "args": [
+                                              {
+                                                "_type": "VarRef",
+                                                "fields": {
+                                                  "name": "vr"
+                                                }
+                                              }
+                                            ]
+                                          }
+                                        }
+                                      }
+                                    },
+                                    "right": {
+                                      "_type": "FunctionCall",
+                                      "fields": {
+                                        "name": "waypointEndDist",
+                                        "args": [
+                                          {
+                                            "_type": "VarRef",
+                                            "fields": {
+                                              "name": "xg"
+                                            }
+                                          }
+                                        ]
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            },
+                            "right": {
+                              "_type": "BinaryFormulaOp",
+                              "fields": {
+                                "op": "->",
+                                "left": {
+                                  "_type": "Comparison",
+                                  "fields": {
+                                    "op": "<",
+                                    "left": {
+                                      "_type": "FunctionCall",
+                                      "fields": {
+                                        "name": "waypointStartDist",
+                                        "args": [
+                                          {
+                                            "_type": "VarRef",
+                                            "fields": {
+                                              "name": "xg"
+                                            }
+                                          }
+                                        ]
+                                      }
+                                    },
+                                    "right": {
+                                      "_type": "VarRef",
+                                      "fields": {
+                                        "name": "xr"
+                                      }
+                                    }
+                                  }
+                                },
+                                "right": {
+                                  "_type": "BinaryFormulaOp",
+                                  "fields": {
+                                    "op": "|",
+                                    "left": {
+                                      "_type": "Comparison",
+                                      "fields": {
+                                        "op": "=",
+                                        "left": {
+                                          "_type": "VarRef",
+                                          "fields": {
+                                            "name": "vr"
+                                          }
+                                        },
+                                        "right": {
+                                          "_type": "Literal",
+                                          "fields": {
+                                            "value": 0.0
+                                          }
+                                        }
+                                      }
+                                    },
+                                    "right": {
+                                      "_type": "Comparison",
+                                      "fields": {
+                                        "op": ">=",
+                                        "left": {
+                                          "_type": "VarRef",
+                                          "fields": {
+                                            "name": "T"
+                                          }
+                                        },
+                                        "right": {
+                                          "_type": "FunctionCall",
+                                          "fields": {
+                                            "name": "stopTime",
+                                            "args": [
+                                              {
+                                                "_type": "VarRef",
+                                                "fields": {
+                                                  "name": "vr"
+                                                }
+                                              }
+                                            ]
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        },
+                        "right": {
+                          "_type": "BinaryFormulaOp",
+                          "fields": {
+                            "op": "->",
+                            "left": {
+                              "_type": "Comparison",
+                              "fields": {
+                                "op": "<=",
+                                "left": {
+                                  "_type": "VarRef",
+                                  "fields": {
+                                    "name": "xr"
+                                  }
+                                },
+                                "right": {
+                                  "_type": "FunctionCall",
+                                  "fields": {
+                                    "name": "waypointStartDist",
+                                    "args": [
+                                      {
+                                        "_type": "VarRef",
+                                        "fields": {
+                                          "name": "xg"
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              }
+                            },
+                            "right": {
+                              "_type": "BinaryFormulaOp",
+                              "fields": {
+                                "op": "|",
+                                "left": {
+                                  "_type": "BinaryFormulaOp",
+                                  "fields": {
+                                    "op": "&",
+                                    "left": {
+                                      "_type": "Comparison",
+                                      "fields": {
+                                        "op": ">=",
+                                        "left": {
+                                          "_type": "VarRef",
+                                          "fields": {
+                                            "name": "vr"
+                                          }
+                                        },
+                                        "right": {
+                                          "_type": "VarRef",
+                                          "fields": {
+                                            "name": "minV"
+                                          }
+                                        }
+                                      }
+                                    },
+                                    "right": {
+                                      "_type": "Comparison",
+                                      "fields": {
+                                        "op": ">",
+                                        "left": {
+                                          "_type": "VarRef",
+                                          "fields": {
+                                            "name": "T"
+                                          }
+                                        },
+                                        "right": {
+                                          "_type": "BinaryTermOp",
+                                          "fields": {
+                                            "op": "+",
+                                            "left": {
+                                              "_type": "BinaryTermOp",
+                                              "fields": {
+                                                "op": "+",
+                                                "left": {
+                                                  "_type": "FunctionCall",
+                                                  "fields": {
+                                                    "name": "maxTravelTime",
+                                                    "args": [
+                                                      {
+                                                        "_type": "BinaryTermOp",
+                                                        "fields": {
+                                                          "op": "-",
+                                                          "left": {
+                                                            "_type": "VarRef",
+                                                            "fields": {
+                                                              "name": "xg"
+                                                            }
+                                                          },
+                                                          "right": {
+                                                            "_type": "VarRef",
+                                                            "fields": {
+                                                              "name": "xr"
+                                                            }
+                                                          }
+                                                        }
+                                                      }
+                                                    ]
+                                                  }
+                                                },
+                                                "right": {
+                                                  "_type": "VarRef",
+                                                  "fields": {
+                                                    "name": "ep"
+                                                  }
+                                                }
+                                              }
+                                            },
+                                            "right": {
+                                              "_type": "FunctionCall",
+                                              "fields": {
+                                                "name": "stopTime",
+                                                "args": [
+                                                  {
+                                                    "_type": "VarRef",
+                                                    "fields": {
+                                                      "name": "Vmax"
+                                                    }
+                                                  }
+                                                ]
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                },
+                                "right": {
+                                  "_type": "BinaryFormulaOp",
+                                  "fields": {
+                                    "op": "&",
+                                    "left": {
+                                      "_type": "Comparison",
+                                      "fields": {
+                                        "op": "<=",
+                                        "left": {
+                                          "_type": "VarRef",
+                                          "fields": {
+                                            "name": "vr"
+                                          }
+                                        },
+                                        "right": {
+                                          "_type": "VarRef",
+                                          "fields": {
+                                            "name": "minV"
+                                          }
+                                        }
+                                      }
+                                    },
+                                    "right": {
+                                      "_type": "Comparison",
+                                      "fields": {
+                                        "op": ">",
+                                        "left": {
+                                          "_type": "VarRef",
+                                          "fields": {
+                                            "name": "T"
+                                          }
+                                        },
+                                        "right": {
+                                          "_type": "BinaryTermOp",
+                                          "fields": {
+                                            "op": "+",
+                                            "left": {
+                                              "_type": "BinaryTermOp",
+                                              "fields": {
+                                                "op": "+",
+                                                "left": {
+                                                  "_type": "BinaryTermOp",
+                                                  "fields": {
+                                                    "op": "+",
+                                                    "left": {
+                                                      "_type": "FunctionCall",
+                                                      "fields": {
+                                                        "name": "speedUpTime",
+                                                        "args": [
+                                                          {
+                                                            "_type": "VarRef",
+                                                            "fields": {
+                                                              "name": "vr"
+                                                            }
+                                                          }
+                                                        ]
+                                                      }
+                                                    },
+                                                    "right": {
+                                                      "_type": "FunctionCall",
+                                                      "fields": {
+                                                        "name": "maxTravelTime",
+                                                        "args": [
+                                                          {
+                                                            "_type": "BinaryTermOp",
+                                                            "fields": {
+                                                              "op": "-",
+                                                              "left": {
+                                                                "_type": "VarRef",
+                                                                "fields": {
+                                                                  "name": "xg"
+                                                                }
+                                                              },
+                                                              "right": {
+                                                                "_type": "VarRef",
+                                                                "fields": {
+                                                                  "name": "xr"
+                                                                }
+                                                              }
+                                                            }
+                                                          }
+                                                        ]
+                                                      }
+                                                    }
+                                                  }
+                                                },
+                                                "right": {
+                                                  "_type": "VarRef",
+                                                  "fields": {
+                                                    "name": "ep"
+                                                  }
+                                                }
+                                              }
+                                            },
+                                            "right": {
+                                              "_type": "FunctionCall",
+                                              "fields": {
+                                                "name": "stopTime",
+                                                "args": [
+                                                  {
+                                                    "_type": "VarRef",
+                                                    "fields": {
+                                                      "name": "Vmax"
+                                                    }
+                                                  }
+                                                ]
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "args": [
+                      {
+                        "_type": "VarRef",
+                        "fields": {
+                          "name": "xr"
+                        }
+                      },
+                      {
+                        "_type": "VarRef",
+                        "fields": {
+                          "name": "vr"
+                        }
+                      },
+                      {
+                        "_type": "VarRef",
+                        "fields": {
+                          "name": "xg"
+                        }
+                      },
+                      {
+                        "_type": "VarRef",
+                        "fields": {
+                          "name": "T"
+                        }
+                      }
+                    ]
+                  }
+                },
+                {
+                  "_type": "HPDef",
+                  "fields": {
+                    "name": "controlFunc",
+                    "annotations": {},
+                    "body": {
+                      "_type": "HPBlock",
+                      "fields": {
+                        "program": {
+                          "_type": "Choice",
+                          "fields": {
+                            "left": {
+                              "_type": "HPBlock",
+                              "fields": {
+                                "program": {
+                                  "_type": "Sequence",
+                                  "fields": {
+                                    "programs": [
+                                      {
+                                        "_type": "Test",
+                                        "fields": {
+                                          "condition": {
+                                            "_type": "Comparison",
+                                            "fields": {
+                                              "op": ">",
+                                              "left": {
+                                                "_type": "VarRef",
+                                                "fields": {
+                                                  "name": "xr"
+                                                }
+                                              },
+                                              "right": {
+                                                "_type": "FunctionCall",
+                                                "fields": {
+                                                  "name": "waypointStartDist",
+                                                  "args": [
+                                                    {
+                                                      "_type": "VarRef",
+                                                      "fields": {
+                                                        "name": "xg"
+                                                      }
+                                                    }
+                                                  ]
+                                                }
+                                              }
+                                            }
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "_type": "Assignment",
+                                        "fields": {
+                                          "var": {
+                                            "_type": "VarRef",
+                                            "fields": {
+                                              "name": "ar"
+                                            }
+                                          },
+                                          "expr": {
+                                            "_type": "UnaryTermOp",
+                                            "fields": {
+                                              "op": "-",
+                                              "operand": {
+                                                "_type": "VarRef",
+                                                "fields": {
+                                                  "name": "b"
+                                                }
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              }
+                            },
+                            "right": {
+                              "_type": "Choice",
+                              "fields": {
+                                "left": {
+                                  "_type": "HPBlock",
+                                  "fields": {
+                                    "program": {
+                                      "_type": "Sequence",
+                                      "fields": {
+                                        "programs": [
+                                          {
+                                            "_type": "Test",
+                                            "fields": {
+                                              "condition": {
+                                                "_type": "BinaryFormulaOp",
+                                                "fields": {
+                                                  "op": "&",
+                                                  "left": {
+                                                    "_type": "Comparison",
+                                                    "fields": {
+                                                      "op": ">",
+                                                      "left": {
+                                                        "_type": "VarRef",
+                                                        "fields": {
+                                                          "name": "xr"
+                                                        }
+                                                      },
+                                                      "right": {
+                                                        "_type": "FunctionCall",
+                                                        "fields": {
+                                                          "name": "waypointStartDist",
+                                                          "args": [
+                                                            {
+                                                              "_type": "VarRef",
+                                                              "fields": {
+                                                                "name": "xg"
+                                                              }
+                                                            }
+                                                          ]
+                                                        }
+                                                      }
+                                                    }
+                                                  },
+                                                  "right": {
+                                                    "_type": "Comparison",
+                                                    "fields": {
+                                                      "op": "=",
+                                                      "left": {
+                                                        "_type": "VarRef",
+                                                        "fields": {
+                                                          "name": "vr"
+                                                        }
+                                                      },
+                                                      "right": {
+                                                        "_type": "Literal",
+                                                        "fields": {
+                                                          "value": 0.0
+                                                        }
+                                                      }
+                                                    }
+                                                  }
+                                                }
+                                              }
+                                            }
+                                          },
+                                          {
+                                            "_type": "Assignment",
+                                            "fields": {
+                                              "var": {
+                                                "_type": "VarRef",
+                                                "fields": {
+                                                  "name": "ar"
+                                                }
+                                              },
+                                              "expr": {
+                                                "_type": "Literal",
+                                                "fields": {
+                                                  "value": 0.0
+                                                }
+                                              }
+                                            }
+                                          }
+                                        ]
+                                      }
+                                    }
+                                  }
+                                },
+                                "right": {
+                                  "_type": "Choice",
+                                  "fields": {
+                                    "left": {
+                                      "_type": "HPBlock",
+                                      "fields": {
+                                        "program": {
+                                          "_type": "Sequence",
+                                          "fields": {
+                                            "programs": [
+                                              {
+                                                "_type": "Test",
+                                                "fields": {
+                                                  "condition": {
+                                                    "_type": "BinaryFormulaOp",
+                                                    "fields": {
+                                                      "op": "&",
+                                                      "left": {
+                                                        "_type": "Comparison",
+                                                        "fields": {
+                                                          "op": "<=",
+                                                          "left": {
+                                                            "_type": "VarRef",
+                                                            "fields": {
+                                                              "name": "xr"
+                                                            }
+                                                          },
+                                                          "right": {
+                                                            "_type": "FunctionCall",
+                                                            "fields": {
+                                                              "name": "waypointStartDist",
+                                                              "args": [
+                                                                {
+                                                                  "_type": "VarRef",
+                                                                  "fields": {
+                                                                    "name": "xg"
+                                                                  }
+                                                                }
+                                                              ]
+                                                            }
+                                                          }
+                                                        }
+                                                      },
+                                                      "right": {
+                                                        "_type": "BinaryFormulaOp",
+                                                        "fields": {
+                                                          "op": "&",
+                                                          "left": {
+                                                            "_type": "Comparison",
+                                                            "fields": {
+                                                              "op": "<",
+                                                              "left": {
+                                                                "_type": "BinaryTermOp",
+                                                                "fields": {
+                                                                  "op": "+",
+                                                                  "left": {
+                                                                    "_type": "BinaryTermOp",
+                                                                    "fields": {
+                                                                      "op": "+",
+                                                                      "left": {
+                                                                        "_type": "VarRef",
+                                                                        "fields": {
+                                                                          "name": "xr"
+                                                                        }
+                                                                      },
+                                                                      "right": {
+                                                                        "_type": "FunctionCall",
+                                                                        "fields": {
+                                                                          "name": "stopDist",
+                                                                          "args": [
+                                                                            {
+                                                                              "_type": "VarRef",
+                                                                              "fields": {
+                                                                                "name": "vr"
+                                                                              }
+                                                                            }
+                                                                          ]
+                                                                        }
+                                                                      }
+                                                                    }
+                                                                  },
+                                                                  "right": {
+                                                                    "_type": "FunctionCall",
+                                                                    "fields": {
+                                                                      "name": "accComp",
+                                                                      "args": [
+                                                                        {
+                                                                          "_type": "VarRef",
+                                                                          "fields": {
+                                                                            "name": "vr"
+                                                                          }
+                                                                        }
+                                                                      ]
+                                                                    }
+                                                                  }
+                                                                }
+                                                              },
+                                                              "right": {
+                                                                "_type": "FunctionCall",
+                                                                "fields": {
+                                                                  "name": "waypointEndDist",
+                                                                  "args": [
+                                                                    {
+                                                                      "_type": "VarRef",
+                                                                      "fields": {
+                                                                        "name": "xg"
+                                                                      }
+                                                                    }
+                                                                  ]
+                                                                }
+                                                              }
+                                                            }
+                                                          },
+                                                          "right": {
+                                                            "_type": "Comparison",
+                                                            "fields": {
+                                                              "op": "<=",
+                                                              "left": {
+                                                                "_type": "BinaryTermOp",
+                                                                "fields": {
+                                                                  "op": "+",
+                                                                  "left": {
+                                                                    "_type": "VarRef",
+                                                                    "fields": {
+                                                                      "name": "vr"
+                                                                    }
+                                                                  },
+                                                                  "right": {
+                                                                    "_type": "BinaryTermOp",
+                                                                    "fields": {
+                                                                      "op": "*",
+                                                                      "left": {
+                                                                        "_type": "VarRef",
+                                                                        "fields": {
+                                                                          "name": "A"
+                                                                        }
+                                                                      },
+                                                                      "right": {
+                                                                        "_type": "VarRef",
+                                                                        "fields": {
+                                                                          "name": "ep"
+                                                                        }
+                                                                      }
+                                                                    }
+                                                                  }
+                                                                }
+                                                              },
+                                                              "right": {
+                                                                "_type": "VarRef",
+                                                                "fields": {
+                                                                  "name": "Vmax"
+                                                                }
+                                                              }
+                                                            }
+                                                          }
+                                                        }
+                                                      }
+                                                    }
+                                                  }
+                                                }
+                                              },
+                                              {
+                                                "_type": "Assignment",
+                                                "fields": {
+                                                  "var": {
+                                                    "_type": "VarRef",
+                                                    "fields": {
+                                                      "name": "ar"
+                                                    }
+                                                  },
+                                                  "expr": {
+                                                    "_type": "VarRef",
+                                                    "fields": {
+                                                      "name": "A"
+                                                    }
+                                                  }
+                                                }
+                                              }
+                                            ]
+                                          }
+                                        }
+                                      }
+                                    },
+                                    "right": {
+                                      "_type": "HPBlock",
+                                      "fields": {
+                                        "program": {
+                                          "_type": "Sequence",
+                                          "fields": {
+                                            "programs": [
+                                              {
+                                                "_type": "Test",
+                                                "fields": {
+                                                  "condition": {
+                                                    "_type": "BinaryFormulaOp",
+                                                    "fields": {
+                                                      "op": "&",
+                                                      "left": {
+                                                        "_type": "Comparison",
+                                                        "fields": {
+                                                          "op": "<=",
+                                                          "left": {
+                                                            "_type": "VarRef",
+                                                            "fields": {
+                                                              "name": "xr"
+                                                            }
+                                                          },
+                                                          "right": {
+                                                            "_type": "FunctionCall",
+                                                            "fields": {
+                                                              "name": "waypointStartDist",
+                                                              "args": [
+                                                                {
+                                                                  "_type": "VarRef",
+                                                                  "fields": {
+                                                                    "name": "xg"
+                                                                  }
+                                                                }
+                                                              ]
+                                                            }
+                                                          }
+                                                        }
+                                                      },
+                                                      "right": {
+                                                        "_type": "UnaryFormulaOp",
+                                                        "fields": {
+                                                          "op": "!",
+                                                          "operand": {
+                                                            "_type": "BinaryFormulaOp",
+                                                            "fields": {
+                                                              "op": "&",
+                                                              "left": {
+                                                                "_type": "Comparison",
+                                                                "fields": {
+                                                                  "op": "<",
+                                                                  "left": {
+                                                                    "_type": "BinaryTermOp",
+                                                                    "fields": {
+                                                                      "op": "+",
+                                                                      "left": {
+                                                                        "_type": "BinaryTermOp",
+                                                                        "fields": {
+                                                                          "op": "+",
+                                                                          "left": {
+                                                                            "_type": "VarRef",
+                                                                            "fields": {
+                                                                              "name": "xr"
+                                                                            }
+                                                                          },
+                                                                          "right": {
+                                                                            "_type": "FunctionCall",
+                                                                            "fields": {
+                                                                              "name": "stopDist",
+                                                                              "args": [
+                                                                                {
+                                                                                  "_type": "VarRef",
+                                                                                  "fields": {
+                                                                                    "name": "vr"
+                                                                                  }
+                                                                                }
+                                                                              ]
+                                                                            }
+                                                                          }
+                                                                        }
+                                                                      },
+                                                                      "right": {
+                                                                        "_type": "FunctionCall",
+                                                                        "fields": {
+                                                                          "name": "accComp",
+                                                                          "args": [
+                                                                            {
+                                                                              "_type": "VarRef",
+                                                                              "fields": {
+                                                                                "name": "vr"
+                                                                              }
+                                                                            }
+                                                                          ]
+                                                                        }
+                                                                      }
+                                                                    }
+                                                                  },
+                                                                  "right": {
+                                                                    "_type": "FunctionCall",
+                                                                    "fields": {
+                                                                      "name": "waypointEndDist",
+                                                                      "args": [
+                                                                        {
+                                                                          "_type": "VarRef",
+                                                                          "fields": {
+                                                                            "name": "xg"
+                                                                          }
+                                                                        }
+                                                                      ]
+                                                                    }
+                                                                  }
+                                                                }
+                                                              },
+                                                              "right": {
+                                                                "_type": "Comparison",
+                                                                "fields": {
+                                                                  "op": "<=",
+                                                                  "left": {
+                                                                    "_type": "BinaryTermOp",
+                                                                    "fields": {
+                                                                      "op": "+",
+                                                                      "left": {
+                                                                        "_type": "VarRef",
+                                                                        "fields": {
+                                                                          "name": "vr"
+                                                                        }
+                                                                      },
+                                                                      "right": {
+                                                                        "_type": "BinaryTermOp",
+                                                                        "fields": {
+                                                                          "op": "*",
+                                                                          "left": {
+                                                                            "_type": "VarRef",
+                                                                            "fields": {
+                                                                              "name": "A"
+                                                                            }
+                                                                          },
+                                                                          "right": {
+                                                                            "_type": "VarRef",
+                                                                            "fields": {
+                                                                              "name": "ep"
+                                                                            }
+                                                                          }
+                                                                        }
+                                                                      }
+                                                                    }
+                                                                  },
+                                                                  "right": {
+                                                                    "_type": "VarRef",
+                                                                    "fields": {
+                                                                      "name": "Vmax"
+                                                                    }
+                                                                  }
+                                                                }
+                                                              }
+                                                            }
+                                                          }
+                                                        }
+                                                      }
+                                                    }
+                                                  }
+                                                }
+                                              },
+                                              {
+                                                "_type": "Assignment",
+                                                "fields": {
+                                                  "var": {
+                                                    "_type": "VarRef",
+                                                    "fields": {
+                                                      "name": "ar"
+                                                    }
+                                                  },
+                                                  "expr": {
+                                                    "_type": "Literal",
+                                                    "fields": {
+                                                      "value": 0.0
+                                                    }
+                                                  }
+                                                }
+                                              }
+                                            ]
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "_type": "HPDef",
+                  "fields": {
+                    "name": "stepFunc",
+                    "annotations": {},
+                    "body": {
+                      "_type": "HPBlock",
+                      "fields": {
+                        "program": {
+                          "_type": "ODE",
+                          "fields": {
+                            "equations": [
+                              {
+                                "_type": "ODEEquation",
+                                "fields": {
+                                  "var": {
+                                    "_type": "VarRef",
+                                    "fields": {
+                                      "name": "xr"
+                                    }
+                                  },
+                                  "expr": {
+                                    "_type": "VarRef",
+                                    "fields": {
+                                      "name": "vr"
+                                    }
+                                  }
+                                }
+                              },
+                              {
+                                "_type": "ODEEquation",
+                                "fields": {
+                                  "var": {
+                                    "_type": "VarRef",
+                                    "fields": {
+                                      "name": "vr"
+                                    }
+                                  },
+                                  "expr": {
+                                    "_type": "VarRef",
+                                    "fields": {
+                                      "name": "ar"
+                                    }
+                                  }
+                                }
+                              },
+                              {
+                                "_type": "ODEEquation",
+                                "fields": {
+                                  "var": {
+                                    "_type": "VarRef",
+                                    "fields": {
+                                      "name": "t"
+                                    }
+                                  },
+                                  "expr": {
+                                    "_type": "Literal",
+                                    "fields": {
+                                      "value": 1.0
+                                    }
+                                  }
+                                }
+                              },
+                              {
+                                "_type": "ODEEquation",
+                                "fields": {
+                                  "var": {
+                                    "_type": "VarRef",
+                                    "fields": {
+                                      "name": "T"
+                                    }
+                                  },
+                                  "expr": {
+                                    "_type": "UnaryTermOp",
+                                    "fields": {
+                                      "op": "-",
+                                      "operand": {
+                                        "_type": "Literal",
+                                        "fields": {
+                                          "value": 1.0
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            ],
+                            "domain_constraint": {
+                              "_type": "BinaryFormulaOp",
+                              "fields": {
+                                "op": "&",
+                                "left": {
+                                  "_type": "Comparison",
+                                  "fields": {
+                                    "op": "<=",
+                                    "left": {
+                                      "_type": "VarRef",
+                                      "fields": {
+                                        "name": "t"
+                                      }
+                                    },
+                                    "right": {
+                                      "_type": "VarRef",
+                                      "fields": {
+                                        "name": "ep"
+                                      }
+                                    }
+                                  }
+                                },
+                                "right": {
+                                  "_type": "Comparison",
+                                  "fields": {
+                                    "op": ">=",
+                                    "left": {
+                                      "_type": "VarRef",
+                                      "fields": {
+                                        "name": "vr"
+                                      }
+                                    },
+                                    "right": {
+                                      "_type": "Literal",
+                                      "fields": {
+                                        "value": 0.0
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "_type": "HPDef",
+                  "fields": {
+                    "name": "dwwpdl",
+                    "annotations": {},
+                    "body": {
+                      "_type": "HPBlock",
+                      "fields": {
+                        "program": {
+                          "_type": "Iteration",
+                          "fields": {
+                            "program": {
+                              "_type": "HPBlock",
+                              "fields": {
+                                "program": {
+                                  "_type": "Sequence",
+                                  "fields": {
+                                    "programs": [
+                                      {
+                                        "_type": "HPBlock",
+                                        "fields": {
+                                          "program": {
+                                            "_type": "Sequence",
+                                            "fields": {
+                                              "programs": [
+                                                {
+                                                  "_type": "VarRef",
+                                                  "fields": {
+                                                    "name": "controlFunc"
+                                                  }
+                                                },
+                                                {
+                                                  "_type": "Assignment",
+                                                  "fields": {
+                                                    "var": {
+                                                      "_type": "VarRef",
+                                                      "fields": {
+                                                        "name": "t"
+                                                      }
+                                                    },
+                                                    "expr": {
+                                                      "_type": "Literal",
+                                                      "fields": {
+                                                        "value": 0.0
+                                                      }
+                                                    }
+                                                  }
+                                                }
+                                              ]
+                                            }
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "_type": "HPBlock",
+                                        "fields": {
+                                          "program": {
+                                            "_type": "VarRef",
+                                            "fields": {
+                                              "name": "stepFunc"
+                                            }
+                                          }
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              }
+                            },
+                            "invariant": {
+                              "_type": "PredicateCall",
+                              "fields": {
+                                "name": "loopinv",
+                                "args": [
+                                  {
+                                    "_type": "VarRef",
+                                    "fields": {
+                                      "name": "xr"
+                                    }
+                                  },
+                                  {
+                                    "_type": "VarRef",
+                                    "fields": {
+                                      "name": "vr"
+                                    }
+                                  },
+                                  {
+                                    "_type": "VarRef",
+                                    "fields": {
+                                      "name": "xg"
+                                    }
+                                  },
+                                  {
+                                    "_type": "VarRef",
+                                    "fields": {
+                                      "name": "T"
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "_type": "PredDef",
+                  "fields": {
+                    "name": "ensure",
+                    "annotations": {
+                      "progress": {
+                        "reward": 1000,
+                        "on_success": "terminate:status=success",
+                        "on_failure": "terminate:status=failure"
+                      }
+                    },
+                    "type": "Bool",
+                    "body": {
+                      "_type": "BinaryFormulaOp",
+                      "fields": {
+                        "op": "&",
+                        "left": {
+                          "_type": "Comparison",
+                          "fields": {
+                            "op": "<",
+                            "left": {
+                              "_type": "FunctionCall",
+                              "fields": {
+                                "name": "waypointStartDist",
+                                "args": [
+                                  {
+                                    "_type": "VarRef",
+                                    "fields": {
+                                      "name": "xg"
+                                    }
+                                  }
+                                ]
+                              }
+                            },
+                            "right": {
+                              "_type": "VarRef",
+                              "fields": {
+                                "name": "xr"
+                              }
+                            }
+                          }
+                        },
+                        "right": {
+                          "_type": "Comparison",
+                          "fields": {
+                            "op": "=",
+                            "left": {
+                              "_type": "VarRef",
+                              "fields": {
+                                "name": "vr"
+                              }
+                            },
+                            "right": {
+                              "_type": "Literal",
+                              "fields": {
+                                "value": 0.0
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "args": [
+                      {
+                        "_type": "VarRef",
+                        "fields": {
+                          "name": "xr"
+                        }
+                      },
+                      {
+                        "_type": "VarRef",
+                        "fields": {
+                          "name": "vr"
+                        }
+                      },
+                      {
+                        "_type": "VarRef",
+                        "fields": {
+                          "name": "xg"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "program_variables": {
+            "_type": "ProgramVariablesBlock",
+            "fields": {
+              "vars": [
+                {
+                  "_type": "ProgramVariableDecl",
+                  "fields": {
+                    "type": "Real",
+                    "name": "xr",
+                    "annotations": {
+                      "var": {
+                        "bound": [
+                          0.0,
+                          100.0
+                        ],
+                        "def": "robot position: x"
+                      }
+                    }
+                  }
+                },
+                {
+                  "_type": "ProgramVariableDecl",
+                  "fields": {
+                    "type": "Real",
+                    "name": "vr",
+                    "annotations": {
+                      "var": {
+                        "bound": [
+                          0.0,
+                          20.0
+                        ],
+                        "def": "robot translational velocity"
+                      }
+                    }
+                  }
+                },
+                {
+                  "_type": "ProgramVariableDecl",
+                  "fields": {
+                    "type": "Real",
+                    "name": "ar",
+                    "annotations": {
+                      "var": {
+                        "bound": [
+                          -10.0,
+                          10.0
+                        ],
+                        "def": "robot translational acceleration"
+                      }
+                    }
+                  }
+                },
+                {
+                  "_type": "ProgramVariableDecl",
+                  "fields": {
+                    "type": "Real",
+                    "name": "xg",
+                    "annotations": {
+                      "var": {
+                        "bound": [
+                          0.0,
+                          100.0
+                        ],
+                        "def": "goal position: x"
+                      }
+                    }
+                  }
+                },
+                {
+                  "_type": "ProgramVariableDecl",
+                  "fields": {
+                    "type": "Real",
+                    "name": "t",
+                    "annotations": {
+                      "var": {
+                        "bound": [
+                          0.0,
+                          1.0
+                        ],
+                        "def": "time elapsed in current control step"
+                      }
+                    }
+                  }
+                },
+                {
+                  "_type": "ProgramVariableDecl",
+                  "fields": {
+                    "type": "Real",
+                    "name": "T",
+                    "annotations": {
+                      "var": {
+                        "bound": [
+                          0.0,
+                          1000.0
+                        ],
+                        "def": "global time remaining until deadline"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "problem": {
+            "_type": "ProblemBlock",
+            "fields": {
+              "formula": {
+                "_type": "BinaryFormulaOp",
+                "fields": {
+                  "op": "->",
+                  "left": {
+                    "_type": "PredicateCall",
+                    "fields": {
+                      "name": "assumptions",
+                      "args": [
+                        {
+                          "_type": "VarRef",
+                          "fields": {
+                            "name": "xr"
+                          }
+                        },
+                        {
+                          "_type": "VarRef",
+                          "fields": {
+                            "name": "vr"
+                          }
+                        },
+                        {
+                          "_type": "VarRef",
+                          "fields": {
+                            "name": "xg"
+                          }
+                        },
+                        {
+                          "_type": "VarRef",
+                          "fields": {
+                            "name": "T"
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  "right": {
+                    "_type": "ModalFormula",
+                    "fields": {
+                      "modality": "box",
+                      "program": {
+                        "_type": "VarRef",
+                        "fields": {
+                          "name": "dwwpdl"
+                        }
+                      },
+                      "formula": {
+                        "_type": "BinaryFormulaOp",
+                        "fields": {
+                          "op": "&",
+                          "left": {
+                            "_type": "BinaryFormulaOp",
+                            "fields": {
+                              "op": "&",
+                              "left": {
+                                "_type": "Comparison",
+                                "fields": {
+                                  "op": "<",
+                                  "left": {
+                                    "_type": "VarRef",
+                                    "fields": {
+                                      "name": "xr"
+                                    }
+                                  },
+                                  "right": {
+                                    "_type": "FunctionCall",
+                                    "fields": {
+                                      "name": "waypointEndDist",
+                                      "args": [
+                                        {
+                                          "_type": "VarRef",
+                                          "fields": {
+                                            "name": "xg"
+                                          }
+                                        }
+                                      ]
+                                    }
+                                  }
+                                }
+                              },
+                              "right": {
+                                "_type": "BinaryFormulaOp",
+                                "fields": {
+                                  "op": "->",
+                                  "left": {
+                                    "_type": "Comparison",
+                                    "fields": {
+                                      "op": "<=",
+                                      "left": {
+                                        "_type": "VarRef",
+                                        "fields": {
+                                          "name": "T"
+                                        }
+                                      },
+                                      "right": {
+                                        "_type": "Literal",
+                                        "fields": {
+                                          "value": 0.0
+                                        }
+                                      }
+                                    }
+                                  },
+                                  "right": {
+                                    "_type": "PredicateCall",
+                                    "fields": {
+                                      "name": "ensure",
+                                      "args": [
+                                        {
+                                          "_type": "VarRef",
+                                          "fields": {
+                                            "name": "xr"
+                                          }
+                                        },
+                                        {
+                                          "_type": "VarRef",
+                                          "fields": {
+                                            "name": "vr"
+                                          }
+                                        },
+                                        {
+                                          "_type": "VarRef",
+                                          "fields": {
+                                            "name": "xg"
+                                          }
+                                        }
+                                      ]
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          },
+                          "right": {
+                            "_type": "ModalFormula",
+                            "fields": {
+                              "modality": "diamond",
+                              "program": {
+                                "_type": "VarRef",
+                                "fields": {
+                                  "name": "dwwpdl"
+                                }
+                              },
+                              "formula": {
+                                "_type": "PredicateCall",
+                                "fields": {
+                                  "name": "ensure",
+                                  "args": [
+                                    {
+                                      "_type": "VarRef",
+                                      "fields": {
+                                        "name": "xr"
+                                      }
+                                    },
+                                    {
+                                      "_type": "VarRef",
+                                      "fields": {
+                                        "name": "vr"
+                                      }
+                                    },
+                                    {
+                                      "_type": "VarRef",
+                                      "fields": {
+                                        "name": "xg"
+                                      }
+                                    }
+                                  ]
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "tactics": []
+        }
+      }
+    ]
+  }
+}

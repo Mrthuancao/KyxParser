@@ -288,10 +288,10 @@ class KeYmaeraGymEnv(gym.Env):
             self.action_variable_names = ['control_choice']
             self._debug_print(f"DEBUG: Action space set to Discrete(1) based on controlFunc (not a Choice).")
         else: # Fallback to continuous if no controlFunc or it's not interpretable
-            action_space_type = self.config.get('action_space_type', 'continuous')
+            self.action_space_type = self.config.get('action_space_type', 'continuous')
             action_bounds = self.config.get('action_space_bounds', {})
 
-            if action_space_type == 'continuous':
+            if self.action_space_type == 'continuous':
                 lows = []
                 highs = []
                 self.action_variable_names = []
@@ -302,12 +302,12 @@ class KeYmaeraGymEnv(gym.Env):
                 self.action_space = spaces.Box(low=np.array(lows, dtype=np.float32),
                                                high=np.array(highs, dtype=np.float32),
                                                dtype=np.float32)
-            elif action_space_type == 'discrete':
+            elif self.action_space_type == 'discrete':
                 n = action_bounds.get('n', 1)
                 self.action_space = spaces.Discrete(n)
                 self.action_variable_names = [] # No specific variable names for generic discrete
             else:
-                raise ValueError(f"Unsupported action space type: {{action_space_type}}")
+                raise ValueError(f"Unsupported action space type: {{self.action_space_type}}")
 
         observation_space_type = self.config.get('observation_space_type', 'continuous')
         observation_bounds = self.config.get('observation_space_bounds', {})
