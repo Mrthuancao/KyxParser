@@ -1,4 +1,4 @@
-ArchiveEntry "IJRR17/Corollary 2: Velocity-controlled passive orientation safety"
+Theorem "IJRR17/Corollary 2: Velocity-controlled passive orientation safety"
 Definitions
   // @const: bound=[0.1:0.5], def="time limit for control decisions"
   Real ep;      /* time limit for control decisions */

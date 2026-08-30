@@ -141,10 +141,7 @@ End.
     """
 
     SAMPLE_MODEL_IJRR17_T15 = """
-/*
- *	Robot must safely cross an intersection.
- *  Theorem "IJRR17/Theorem 15: Cross intersection with deadline"
- */
+Theorem "IJRR17/Theorem 15: Cross intersection with deadline"
 
 Definitions
   // @const: bound=[0.01:0.1]; def="time limit for control decisions"
@@ -162,7 +159,7 @@ Definitions
 
   Real minV = A*ep;
 
-  Real stopDist(Real v) = v^2 / (2*b);
+  Real stopDist(Real v) = v^2/(2*b);
   Real accComp(Real v)  = ( (A/b + 1)*(A/2*ep^2 + ep*v) );
 
   Bool OAfterX(Real xo) <-> xo>ixo;
@@ -441,18 +438,24 @@ End.
 Theorem "IJRR17/Theorem 13: Passive safety with trajectory distance measurement"
 
 Definitions
+  // @const: bound=[0.1:0.5], def="time limit for control decisions"
   Real ep;      /* time limit for control decisions */
+  // @const: bound=[0.5:5.0], def="minimum braking capability of the robot"
   Real b;       /* minimum braking capability of the robot */
+  // @const: bound=[1.0:10.0], def="maximum acceleration"
   Real A;       /* maximum acceleration -b <= a <= A */
+  // @const: bound=[0.1:1.0], def="maximum steering (rotational velocity)"
   Real W;       /* maximum steering */
+  // @const: bound=[0.1:5.0], def="maximum obstacle velocity"
   Real V;       /* maximum obstacle velocity */
 
   Real stopDist(Real v) = v^2 / (2*b) + V*v/b;
-  Real accelComp(Real v, Real a) = ((a/b + 1) * (a/2 * ep^2 + ep*(v+V)));
+  Real accelComp(Real v, Real a) = ((a/b + 1) * (A/2 * ep^2 + ep*(v+V)));
   Real admissibleSeparationG(Real v, Real a) = stopDist(v) + accelComp(v,a);
   Real admissibleSeparationL(Real v, Real a) = -v^2/(2*a)-V*v/a;
   Real trajectoryDist(Real r, Real xo, Real xc, Real yo, Real yc) = abs(abs(r) - ((xo-xc)^2 + (yo-yc)^2)^(1/2));
 
+  // @progress: reward=10, shape={-((dx**2 + dy**2) - 1)**2 - ((r**2 - ((x-xc)**2 + (y-yc)**2)))**2}, on_success=continue:status=none, on_failure=continue:status=none
   Bool isWellformedDir(Real x, Real y, Real v, Real w, Real r, Real dx, Real dy, Real xc, Real yc) <->
     r!=0 & r^2 = (x-xc)^2 + (y-yc)^2 & dx^2 + dy^2 = 1 & dx = -(y-yc)/r & dy = (x-xc)/r & w*r=v;
 
@@ -473,29 +476,49 @@ Definitions
   Bool assumptions(Real x, Real y, Real v, Real w, Real r, Real dx, Real dy, Real xo, Real yo, Real xc, Real yc) <->
     bounds() & initialState(x, y, v, w, r, dx, dy, xo, yo, xc, yc);
 
+  // @safety: penalty=-1000, on_failure=truncate:status=failure, on_success=continue:status=none
   /* Conditions that are true on each loop iteration */
   Bool loopinv(Real x, Real y, Real v, Real w, Real r, Real dx, Real dy, Real xo, Real yo, Real xc, Real yc) <-> (
     v >= 0
     & isWellformedDir(x, y, v, w, r, dx, dy, xc, yc)
     & (v>0 -> abs(x-xo) > stopDist(v) | abs(y-yo) > stopDist(v) | abs(abs(r) - ((xo-xc)^2 + (yo-yc)^2)^(1/2)) > V*v/b)
   );
+
+  // @progress: reward=1000, on_success=terminate:status=success, on_failure=terminate:status=failure
+  Bool ensure(Real v, Real x, Real y, Real xo, Real yo) <-> (v>0 -> (x - xo)^2 + (y - yo)^2 > 0);
+
 End.
 
 ProgramVariables
+  // @var: bound=[0:100], def="robot position: x"
   Real x;    /* robot position: x */
+  // @var: bound=[0:100], def="robot position: y"
   Real y;    /* robot position: y */
+  // @var: bound=[0:20], def="robot translational velocity"
   Real v;    /* robot translational velocity */
+  // @var: bound=[-10:10], def="robot translational acceleration"
   Real a;    /* robot translational acceleration */
+  // @var: bound=[-1:1], def="robot orientation: x component"
   Real dx;   /* robot orientation: x */
+  // @var: bound=[-1:1], def="robot orientation: y component"
   Real dy;   /* robot orientation: y */
+  // @var: bound=[-2:2], def="robot rotational velocity"
   Real w;    /* robot rotational velocity */
+  // @var: bound=[-1000:1000], def="robot curve radius (r!=0)"
   Real r;    /* robot curve radius */
+  // @var: bound=[0:100], def="center of curvature: x"
   Real xc;
+  // @var: bound=[0:100], def="center of curvature: y"
   Real yc;
+  // @var: bound=[0:100], def="position of closest obstacle on curve: x"
   Real xo;   /* position of closest obstacle on curve */
+  // @var: bound=[0:100], def="position of closest obstacle on curve: y"
   Real yo;
+  // @var: bound=[-5:5], def="obstacle velocity: x component"
   Real vxo;  /* velocity vector of obstacle */
+  // @var: bound=[-5:5], def="obstacle velocity: y component"
   Real vyo;
+  // @var: bound=[0:1], def="time elapsed in current control step"
   Real t;    /* time */
 End.
 
@@ -529,8 +552,15 @@ assumptions(x, y, v, w, r, dx, dy, xo, yo, xc, yc) ->
             ?(r!=0 & r^2 = (x-xc)^2+(y-yc)^2 & dx=-(y-yc)/r & dy=(x-xc)/r & r*w=v);
 
             /* use that curve, if it is a safe one (admissible velocities) */
-            if (v+a*ep>=0) { ?abs(x-xo) > admissibleSeparationG(v,a) | abs(y-yo) > admissibleSeparationG(v,a) | trajectoryDist(r,xo,xc,yo,yc) > V*(ep + (v+a*ep)/b); }
-            else           { ?abs(x-xo) > admissibleSeparationL(v,a) | abs(y-yo) > admissibleSeparationL(v,a) | trajectoryDist(r,xo,xc,yo,yc) > -V*v/a; }
+            {
+              ?(v+a*ep>=0);
+              ?abs(x-xo) > admissibleSeparationG(v,a) | abs(y-yo) > admissibleSeparationG(v,a) | trajectoryDist(r,xo,xc,yo,yc) > V*(ep + (v+a*ep)/b);
+            }
+            ++
+            {
+              ?!(v+a*ep>=0);
+              ?abs(x-xo) > admissibleSeparationL(v,a) | abs(y-yo) > admissibleSeparationL(v,a) | trajectoryDist(r,xo,xc,yo,yc) > -V*v/a;
+            }
           }
         };
         t := 0;
@@ -543,16 +573,20 @@ assumptions(x, y, v, w, r, dx, dy, xo, yo, xc, yc) ->
         t' = 1 & t <= ep & v >= 0
       }
     }*@invariant(loopinv(x, y, v, w, r, dx, dy, xo, yo, xc, yc))
-  ](v>0 -> (x - xo)^2 + (y - yo)^2 > 0)
+  ]ensure(v, x, y, xo, yo)
 End.
     """
 
     SAMPLE_MODEL_IJRR17_C2 = """
-ArchiveEntry "IJRR17/Corollary 2: Velocity-controlled passive orientation safety"
+Theorem "IJRR17/Corollary 2: Velocity-controlled passive orientation safety"
 Definitions
+  // @const: bound=[0.1:0.5], def="time limit for control decisions"
   Real ep;      /* time limit for control decisions */
+  // @const: bound=[0.1:1.0], def="maximum steering (rotational velocity)"
   Real W;       /* maximum steering */
+  // @const: bound=[0.1:5.0], def="maximum obstacle velocity"
   Real V;       /* maximum obstacle velocity */
+  // @const: bound=[0.1:PI/2], def="Sensor range in radian"
   Real GammA;   /* Sensor range in radian */
 
   Real stopDist(Real v)   = 0;
@@ -562,6 +596,7 @@ Definitions
   Real admissibleSeparation(Real v) = stopMargin(v) + accelMargin(v);
   Real admissibleTurnLength(Real v) = stopDist(v) + accelComp(v);
 
+  // @progress: reward=10, shape={-((dx**2 + dy**2) - 1)**2}, on_success=continue:status=none, on_failure=continue:status=none
   Bool isWellformedDir(Real dx, Real dy) <-> dx^2 + dy^2 = 1;       /* The orientation of the robot is a unit vector. */
 
   Bool isVisible(Real x) <-> x>0;  /* Indicates whether or not the obstacle is visible for the robot at the decision. */
@@ -585,6 +620,7 @@ Definitions
   Bool assumptions(Real x, Real y, Real v, Real beta, Real r, Real dx, Real dy, Real xo, Real yo) <->
     bounds() & initialState(x, y, v, beta, r, dx, dy, xo, yo);
 
+  // @safety: penalty=-1000, on_failure=truncate:status=failure, on_success=continue:status=none
   Bool loopinv(Real x, Real y, Real v, Real beta, Real visDeg, Real r, Real dx, Real dy, Real xo, Real yo) <-> (                                                /* Conditions that are true on each loop iteration */
     v >= 0
     & isWellformedDir(dx,dy)
@@ -592,23 +628,42 @@ Definitions
     & (v>0 -> ( (abs(x-xo) > stopMargin(v) | abs(y-yo) > stopMargin(v))
               | (!isVisible(visDeg) & abs(beta) + stopDist(v)/abs(r) < GammA )) )
   );
+
+  // @progress: reward=1000, on_success=terminate:status=success, on_failure=terminate:status=failure
+  Bool ensure(Real v, Real x, Real y, Real xo, Real yo, Real visDeg, Real beta) <-> (v > 0 -> ((x - xo)^2 + (y - yo)^2 > 0 | (!isVisible(visDeg) & (abs(beta) < GammA))) );
+
 End.
 
 ProgramVariables
+  // @var: bound=[0:100], def="robot position: x"
   Real x;    /* robot position: x */
+  // @var: bound=[0:100], def="robot position: y"
   Real y;    /* robot position: y */
+  // @var: bound=[0:20], def="robot translational velocity"
   Real v;    /* robot translational velocity */
+  // @var: bound=[-10:10], def="robot translational acceleration (not a program variable here, but conceptually exists)"
   Real a;    /* robot translational acceleration */
+  // @var: bound=[-1:1], def="robot orientation: x component"
   Real dx;   /* robot orientation: x */
+  // @var: bound=[-1:1], def="robot orientation: y component"
   Real dy;   /* robot orientation: y */
+  // @var: bound=[-2:2], def="robot rotational velocity"
   Real w;    /* robot rotational velocity */
+  // @var: bound=[-1000:1000], def="robot curve radius (r!=0)"
   Real r;    /* robot curve radius */
+  // @var: bound=[0:100], def="position of closest obstacle on curve: x"
   Real xo;   /* position of closest obstacle on curve */
+  // @var: bound=[0:100], def="position of closest obstacle on curve: y"
   Real yo;
+  // @var: bound=[-5:5], def="obstacle velocity: x component"
   Real vxo;  /* velocity vector of obstacle */
+  // @var: bound=[-5:5], def="obstacle velocity: y component"
   Real vyo;
+  // @var: bound=[0:1], def="time elapsed in current control step"
   Real t;    /* time */
+  // @var: bound=[-PI:PI], def="Angle that the robot traveled since it last chose a new curve"
   Real beta; /* Angle that the robot traveled since it last chose a new curve */
+  // @var: bound=[-1:1], def="Indicates the 'degree' to which the obstacle is visible to the robot (input to isVisible)"
   Real visDeg; /* Indicates the "degree" to which the obstacle is visible to the robot (input to isVisible) */
 End.
 
@@ -649,19 +704,25 @@ Problem
 
         {x' = v * dx, y' = v * dy, dx' = -w * dy, dy' = w * dx, beta'=w,
                       xo' = vxo, yo' = vyo, t' = 1 & (t <= ep & v >= 0)}
-      }*
-    ] (v > 0 -> ((x - xo)^2 + (y - yo)^2 > 0 | (!isVisible(visDeg) & (abs(beta) < GammA))) )
+      }*@invariant(loopinv(x, y, v, beta, visDeg, r, dx, dy, xo, yo))
+    ] ensure(v, x, y, xo, yo, visDeg, beta)
 End.
     """
 
     SAMPLE_MODEL_IJRR17_T4 = """
 Theorem "IJRR17/Theorem 4: Passive orientation safety"
 Definitions
+  // @const: bound=[0.1:0.5], def="time limit for control decisions"
   Real ep;      /* time limit for control decisions */
+  // @const: bound=[1.0:5.0], def="minimum braking capability of the robot"
   Real b;       /* minimum braking capability of the robot */
+  // @const: bound=[1.0:10.0], def="maximum acceleration -b <= a <= A"
   Real A;       /* maximum acceleration -b <= a <= A */
+  // @const: bound=[0.1:1.0], def="maximum steering (rotational velocity)"
   Real W;       /* maximum steering */
+  // @const: bound=[0.1:5.0], def="maximum obstacle velocity"
   Real V;       /* maximum obstacle velocity */
+  // @const: bound=[0.1:PI/2], def="Sensor range in radian"
   Real GammA;   /* Sensor range in radian */
 
   Real stopDist(Real v)   = v^2 / (2*b);
@@ -671,6 +732,7 @@ Definitions
   Real admissibleSeparation(Real v) = stopMargin(v) + accelMargin(v);
   Real admissibleTurnLength(Real v) = stopDist(v) + accelComp(v);
 
+  // @progress: reward=10, shape={-((dx**2 + dy**2) - 1)**2}, on_success=continue:status=none, on_failure=continue:status=none
   Bool isWellformedDir(Real dx, Real dy) <-> dx^2 + dy^2 = 1;       /* The orientation of the robot is a unit vector. */
 
   Bool isVisible(Real x) <-> x>0;  /* Indicates whether or not the obstacle is visible for the robot at the decision. */
@@ -696,31 +758,49 @@ Definitions
   Bool assumptions(Real x, Real y, Real v, Real beta, Real r, Real dx, Real dy, Real xo, Real yo) <->
     bounds() & initialState(x, y, v, beta, r, dx, dy, xo, yo);
 
-  /* Conditions that are true on each loop iteration */
-  Bool loopinv(Real x, Real y, Real v, Real beta, Real visDeg, Real r, Real dx, Real dy, Real xo, Real yo) <-> (
+  // @safety: penalty=-1000, on_failure=truncate:status=failure, on_success=continue:status=none
+  Bool loopinv(Real x, Real y, Real v, Real beta, Real visDeg, Real r, Real dx, Real dy, Real xo, Real yo) <-> (                                                /* Conditions that are true on each loop iteration */
     v >= 0
     & isWellformedDir(dx,dy)
     & r != 0
     & (v>0 -> ( (abs(x-xo) > stopMargin(v) | abs(y-yo) > stopMargin(v))
               | (!isVisible(visDeg) & abs(beta) + stopDist(v)/abs(r) < GammA )) )
   );
+
+  // @progress: reward=1000, on_success=terminate:status=success, on_failure=terminate:status=failure
+  Bool ensure(Real v, Real x, Real y, Real xo, Real yo, Real visDeg, Real beta) <-> (v > 0 -> ((x - xo)^2 + (y - yo)^2 > 0 | (!isVisible(visDeg) & (abs(beta) < GammA))) );
 End.
 
 ProgramVariables
+  // @var: bound=[0:100], def="robot position: x"
   Real x;    /* robot position: x */
+  // @var: bound=[0:100], def="robot position: y"
   Real y;    /* robot position: y */
+  // @var: bound=[0:20], def="robot translational velocity"
   Real v;    /* robot translational velocity */
+  // @var: bound=[-10:10], def="robot translational acceleration"
   Real a;    /* robot translational acceleration */
+  // @var: bound=[-1:1], def="robot orientation: x component"
   Real dx;   /* robot orientation: x */
+  // @var: bound=[-1:1], def="robot orientation: y component"
   Real dy;   /* robot orientation: y */
+  // @var: bound=[-2:2], def="robot rotational velocity"
   Real w;    /* robot rotational velocity */
+  // @var: bound=[-1000:1000], def="robot curve radius (r!=0)"
   Real r;    /* robot curve radius */
+  // @var: bound=[0:100], def="position of closest obstacle on curve: x"
   Real xo;   /* position of closest obstacle on curve */
+  // @var: bound=[0:100], def="position of closest obstacle on curve: y"
   Real yo;
+  // @var: bound=[-5:5], def="obstacle velocity: x component"
   Real vxo;  /* velocity vector of obstacle */
+  // @var: bound=[-5:5], def="obstacle velocity: y component"
   Real vyo;
+  // @var: bound=[0:1], def="time elapsed in current control step"
   Real t;    /* time */
+  // @var: bound=[-PI:PI], def="Angle that the robot traveled since it last chose a new curve"
   Real beta; /* Angle that the robot traveled since it last chose a new curve */
+  // @var: bound=[-1:1], def="Indicates the 'degree' to which the obstacle is visible to the robot (input to isVisible)"
   Real visDeg; /* Indicates the "degree" to which the obstacle is visible to the robot (input to isVisible) */
 End.
 
@@ -763,20 +843,27 @@ Problem
 
         {x' = v * dx, y' = v * dy, dx' = -w * dy, dy' = w * dx, v' = a, w' = a/r, beta'=w,
                       xo' = vxo, yo' = vyo, t' = 1 & (t <= ep & v >= 0)}
-      }*
-    ] (v > 0 -> ((x - xo)^2 + (y - yo)^2 > 0 | (!isVisible(visDeg) & (abs(beta) < GammA))) )
+      }*@invariant(loopinv(x, y, v, beta, visDeg, r, dx, dy, xo, yo))
+    ] ensure(v, x, y, xo, yo, visDeg, beta)
 End.
     """
 
     SAMPLE_MODEL_IJRR17_T3 = """
 Theorem "IJRR17/Theorem 3: Passive Friendly Safety"
 Definitions
+  // @const: bound=[0.1:0.5], def="time limit for control decisions"
   Real ep;      /* time limit for control decisions */
+  // @const: bound=[0.1:0.5], def="time limit for obstacle reaction"
   Real tau;     /* time limit for obstacle reaction */
+  // @const: bound=[0.5:5.0], def="minimum braking capability of the robot"
   Real b;       /* minimum braking capability of the robot */
+  // @const: bound=[0.5:5.0], def="obstacle brakes"
   Real bo;      /* obstacle brakes */
+  // @const: bound=[1.0:10.0], def="maximum acceleration"
   Real A;       /* maximum acceleration -b <= a <= A */
+  // @const: bound=[0.1:1.0], def="maximum steering (rotational velocity)"
   Real W;       /* maximum steering */
+  // @const: bound=[0.1:5.0], def="maximum obstacle velocity"
   Real V;       /* maximum obstacle velocity */
 
   Real friendlyMargin(Real v) = v^2/(2*bo) + tau*v;
@@ -784,6 +871,7 @@ Definitions
   Real accelComp(Real v) = ((A/b + 1) * (A/2 * ep^2 + ep*(v+V)));
   Real admissibleSeparation(Real v) = stopDist(v) + friendlyMargin(V) + accelComp(v);
 
+  // @progress: reward=10, shape={-((dx**2 + dy**2) - 1)**2}, on_success=continue:status=none, on_failure=continue:status=none
   Bool isWellformedDir(Real dx,Real dy) <-> dx^2 + dy^2 = 1;        /* The orientation of the robot is a unit vector. */
 
   Bool bounds() <-> (                                                                  /* Bounds for global constants */
@@ -807,31 +895,56 @@ Definitions
   Bool assumptions(Real x, Real y, Real v, Real dx, Real dy, Real xo, Real yo, Real vxo, Real vyo) <->
     bounds() & initialState(x, y, v, dx, dy, xo, yo, vxo, vyo);
 
+  // @safety: penalty=-1000, on_failure=truncate:status=failure, on_success=continue:status=none
   /* Conditions that are true on each loop iteration */
   Bool loopinv(Real x, Real y, Real v, Real dx, Real dy, Real xo, Real yo) <-> (
     v >= 0
     & isWellformedDir(dx,dy)
     & (v>0 -> abs(x-xo) > stopDist(v)+friendlyMargin(V) | abs(y-yo) > stopDist(v)+friendlyMargin(V))
   );
+
+  // @safety: penalty=-1000, on_failure=terminate:status=failure, on_success=continue:status=none
+  Bool finalSafety(Real xr, Real xo, Real T) <-> ( (xr=ixr -> xo!=ixo) & (T>=D -> RAfterX(xr)) );
+
+  // @progress: reward=1000, on_success=terminate:status=success, on_failure=terminate:status=failure
+  Bool ensure(Real v, Real x, Real y, Real xo, Real yo) <-> (v>0 -> (x - xo)^2 + (y - yo)^2 > 0);
+
 End.
 
 ProgramVariables
+  // @var: bound=[0:100], def="robot position: x"
   Real x;    /* robot position: x */
+  // @var: bound=[0:100], def="robot position: y"
   Real y;    /* robot position: y */
+  // @var: bound=[0:20], def="robot translational velocity"
   Real v;    /* robot translational velocity */
+  // @var: bound=[-10:10], def="robot translational acceleration"
   Real a;    /* robot translational acceleration */
+  // @var: bound=[-1:1], def="robot orientation: x component"
   Real dx;   /* robot orientation: x */
+  // @var: bound=[-1:1], def="robot orientation: y component"
   Real dy;   /* robot orientation: y */
+  // @var: bound=[-2:2], def="robot rotational velocity"
   Real w;    /* robot rotational velocity */
+  // @var: bound=[-1000:1000], def="robot curve radius"
   Real r;    /* robot curve radius */
+  // @var: bound=[0:100], def="position of closest obstacle on curve: x"
   Real xo;   /* position of closest obstacle on curve */
+  // @var: bound=[0:100], def="position of closest obstacle on curve: y"
   Real yo;
+  // @var: bound=[-5:5], def="obstacle velocity: x component"
   Real vxo;  /* velocity vector of obstacle */
+  // @var: bound=[-5:5], def="obstacle velocity: y component"
   Real vyo;
+  // @var: bound=[0:20], def="refined obstacle speed"
   Real vo;   /* refined obstacle: speed, acceleration, and direction */
+  // @var: bound=[-10:10], def="refined obstacle acceleration"
   Real ao;
+  // @var: bound=[-1:1], def="refined obstacle orientation: x component"
   Real dxo;
+  // @var: bound=[-1:1], def="refined obstacle orientation: y component"
   Real dyo;
+  // @var: bound=[0:1], def="time elapsed in current control step"
   Real t;    /* time */
 End.
 

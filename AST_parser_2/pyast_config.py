@@ -1,7 +1,7 @@
 # file description: This file contains the configuration dataclasses for the Gym environment, including variable declarations, constant definitions, function definitions, hybrid program definitions, and the overall problem configuration.
 # name: pyast_config.py
 from dataclasses import dataclass, field
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union # Added Union for action/observation bounds
 
 @dataclass
 class VariableDeclarationConfig:
@@ -65,3 +65,11 @@ class GymEnvironmentConfig:
     })
     # Add any other configuration parameters needed for the environment
     # e.g., for reward shaping, logging, etc.
+
+    # New field for initial state buffer configuration
+    initial_state_buffer_config: Dict[str, Any] = field(default_factory=lambda: {
+        "enabled": False,
+        "capacity": 100,
+        "populate_on_init": True,
+        "max_populate_attempts": 1000
+    })

@@ -7,7 +7,7 @@ import numpy as np
 import json
 from scipy.integrate import solve_ivp
 import sympy
-from collections import OrderedDict
+from collections import OrderedDict, deque # Added deque
 import copy
 import re
 import math # Added for eval() context
@@ -19,7 +19,7 @@ _ENV_CONFIG_JSON = {embedded_config_json_str}
 class KeYmaeraGymEnv(gym.Env):
     metadata = {metadata}
 
-    def __init__(self, render_mode=None, config_override=None): # <--- FIX IS HERE
+    def __init__(self, render_mode=None, config_override=None):
         super().__init__()
         self.config = self._load_config(_ENV_CONFIG_JSON, config_override)
         
@@ -78,6 +78,13 @@ class KeYmaeraGymEnv(gym.Env):
         self._setup_spaces()
         self._setup_initial_state_samplers()
         self._setup_hybrid_program()
+        
+        # Initial State Buffer (ISB) setup
+        self.initial_state_buffer_config = self.config.get('initial_state_buffer_config', {})
+        self.initial_state_buffer = deque(maxlen=self.initial_state_buffer_config.get('capacity', 100))
+        
+        if self.initial_state_buffer_config.get('enabled', False) and self.initial_state_buffer_config.get('populate_on_init', True):
+            self._populate_initial_state_buffer()
         
     def _debug_print(self, message):
         if self.debug_mode:
@@ -256,7 +263,7 @@ class KeYmaeraGymEnv(gym.Env):
         # Add current state variables and constants to locals
         eval_locals = {{}}
         eval_locals.update(self.current_state)
-        eval_locals.update(context) # Context variables (e.g., function arguments)
+        eval_locals.update(context) # Context variables (e.g., function arguments) - these override self.current_state values
 
         try:
             result = eval(expression_str, eval_globals, eval_locals)
@@ -497,6 +504,80 @@ class KeYmaeraGymEnv(gym.Env):
 
         return observation, reward, terminated, truncated, self._get_info()
 
+    def _generate_valid_initial_state(self, max_attempts=None):
+        # Generates a single initial state that satisfies the initial_condition.
+        # Returns a dictionary of sampled variable values, 't', and 'T'.
+        # Raises RuntimeError if a valid state cannot be found within max_attempts.
+        if max_attempts is None:
+            max_attempts = self.initial_state_buffer_config.get('max_populate_attempts', 1000)
+
+        initial_cond_expr = self.config['problem']['initial_condition']
+        
+        for attempt in range(max_attempts):
+            sampled_vars = {{}}
+            # Sample values for variables
+            for var_config in self.config['variables']:
+                var_name = var_config['name']
+                if var_name in self.initial_state_samplers:
+                    sampled_vars[var_name] = self.initial_state_samplers[var_name]()
+                else:
+                    sampled_vars[var_name] = 0.0 # Default if no sampler
+
+            # Prepare a full state dictionary for evaluation (constants + sampled vars + t, T)
+            # Start with current constants (which are in self.current_state after _setup_constants)
+            temp_eval_state = copy.copy(self.current_state) 
+            temp_eval_state.update(sampled_vars) # Overlay sampled variables
+
+            # Set 't' for initial condition evaluation
+            temp_eval_state['t'] = 0.0
+            # Ensure 'T' is present for evaluation. If it's a variable, its sampled value is used.
+            # If it's a constant, its value is already in temp_eval_state.
+            # If it's neither, provide a default.
+            if 'T' not in temp_eval_state:
+                temp_eval_state['T'] = 10.0 # Default global time remaining
+
+            # Evaluate initial_condition using this temporary state
+            initial_cond_met = self._evaluate_expression(initial_cond_expr, temp_eval_state)
+            
+            if initial_cond_met:
+                # Return only the parts that need to be set into self.current_state
+                # after constants are already loaded.
+                result_state_update = {{k: v for k, v in sampled_vars.items()}}
+                result_state_update['t'] = 0.0
+                result_state_update['T'] = temp_eval_state['T'] # Use the T that was used for evaluation
+                return result_state_update
+
+        raise RuntimeError(f"Failed to find a valid initial state after {{max_attempts}} attempts "
+                           f"for initial condition: '{{initial_cond_expr}}'")
+
+    def _populate_initial_state_buffer(self):
+        # Populates the initial state buffer with valid initial states.
+        isb_config = self.initial_state_buffer_config
+        capacity = isb_config.get('capacity', 100)
+        max_populate_attempts_total = isb_config.get('max_populate_attempts', 1000) # Total attempts for population
+
+        self._debug_print(f"DEBUG: Populating initial state buffer (capacity: {{capacity}}, max_attempts_total: {{max_populate_attempts_total}})")
+
+        attempts_made = 0
+        while len(self.initial_state_buffer) < capacity and attempts_made < max_populate_attempts_total:
+            try:
+                # _generate_valid_initial_state will handle its own max_attempts per state
+                valid_state_update = self._generate_valid_initial_state(max_attempts=100) # Limit individual state generation attempts
+                
+                # Store the full state (constants + variables + t, T) in the buffer
+                full_state_to_store = OrderedDict()
+                full_state_to_store.update(self.current_state) # Start with constants
+                full_state_to_store.update(valid_state_update) # Overlay sampled vars, t, T
+                
+                self.initial_state_buffer.append(full_state_to_store)
+                self._debug_print(f"DEBUG: Added state to buffer. Buffer size: {{len(self.initial_state_buffer)}}")
+            except RuntimeError as e:
+                self._debug_print(f"DEBUG: Failed to generate a valid state during population: {{e}}. Continuing attempts.")
+            attempts_made += 1
+        
+        if len(self.initial_state_buffer) < capacity:
+            print(f"Warning: Initial state buffer could only be filled to {{len(self.initial_state_buffer)}}/{{capacity}} after {{attempts_made}} attempts.")
+
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
         self.current_step_count = 0
@@ -506,15 +587,37 @@ class KeYmaeraGymEnv(gym.Env):
         self._setup_constants()
 
         # Ensure functions are set up for _evaluate_expression calls during reset
-        self._setup_functions() # ADDED THIS CALL HERE FOR RESET
+        self._setup_functions()
 
-        # Initialize variables based on sampling config
-        for var_config in self.config['variables']:
-            var_name = var_config['name']
-            if var_name in self.initial_state_samplers:
-                self.current_state[var_name] = self.initial_state_samplers[var_name]()
-            else:
-                self.current_state[var_name] = 0.0 # Default if no sampler
+        isb_enabled = self.initial_state_buffer_config.get('enabled', False)
+        
+        if isb_enabled and len(self.initial_state_buffer) > 0:
+            # Use a state from the buffer
+            self.current_state = self.initial_state_buffer.popleft()
+            self._debug_print(f"DEBUG: Resetting from initial state buffer. Buffer size: {{len(self.initial_state_buffer)}}")
+        else:
+            # Generate a new initial state
+            try:
+                # This will return a dict of sampled variables, 't', and 'T'
+                new_state_update = self._generate_valid_initial_state()
+                self.current_state.update(new_state_update) # Merge sampled vars, t, T into current_state (which has constants)
+                self._debug_print(f"DEBUG: Generated new initial state.")
+
+                # If ISB is enabled, add this newly generated state to the buffer
+                if isb_enabled:
+                    # Store the full current_state
+                    self.initial_state_buffer.append(copy.deepcopy(self.current_state))
+                    self._debug_print(f"DEBUG: Added newly generated state to buffer. Buffer size: {{len(self.initial_state_buffer)}}")
+
+            except RuntimeError as e:
+                print(f"Error during reset: {{e}}. Using default initial state (all zeros for variables).")
+                # Fallback: if generation fails, initialize variables to 0.0
+                for var_config in self.config['variables']:
+                    var_name = var_config['name']
+                    if var_name not in self.current_state: # Don't overwrite constants
+                        self.current_state[var_name] = 0.0
+                self.current_state['t'] = 0.0
+                self.current_state['T'] = 10.0 # Default if not set
 
         # Ensure 'ep' (time_step) is correctly set from constants if available
         ep_value = None
@@ -529,24 +632,8 @@ class KeYmaeraGymEnv(gym.Env):
         if ep_value is not None:
             self.time_step = ep_value
         
-        # Initialize global_time_remaining (T) from current_state
-        if 'T' in self.current_state:
-            self.global_time_remaining = self.current_state['T']
-        else:
-            # Fallback if T is not explicitly sampled or set in initial_state_sampling_config
-            self.global_time_remaining = 10.0 # Default value if not found
-
-        # Initialize 't' (time elapsed in current control step)
-        self.current_state['t'] = 0.0
-
-        # Evaluate initial_condition to ensure initial state is valid
-        initial_cond_expr = self.config['problem']['initial_condition']
-        initial_cond_met = self._evaluate_expression(initial_cond_expr, self.current_state)
-        if not initial_cond_met:
-            print(f"Warning: Initial state does not satisfy initial condition: {{initial_cond_expr}}. "
-                  f"Current state: {{self.current_state}}")
-            # In a real environment, you might want to resample or raise an error here.
-            # For now, we proceed, but this might lead to immediate termination or bad behavior.
+        # Ensure global_time_remaining is updated from the state
+        self.global_time_remaining = self.current_state.get('T', 0.0)
 
         observation = self._get_observation()
         info = self._get_info()

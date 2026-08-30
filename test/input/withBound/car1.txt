@@ -13,7 +13,7 @@ Definitions
   Real V;       /* maximum obstacle velocity */
 
   Real stopDist(Real v) = v^2 / (2*b) + V*v/b;
-  Real accelComp(Real v, Real a) = ((a/b + 1) * (a/2 * ep^2 + ep*(v+V)));
+  Real accelComp(Real v, Real a) = ((a/b + 1) * (A/2 * ep^2 + ep*(v+V)));
   Real admissibleSeparationG(Real v, Real a) = stopDist(v) + accelComp(v,a);
   Real admissibleSeparationL(Real v, Real a) = -v^2/(2*a)-V*v/a;
   Real trajectoryDist(Real r, Real xo, Real xc, Real yo, Real yc) = abs(abs(r) - ((xo-xc)^2 + (yo-yc)^2)^(1/2));
@@ -115,8 +115,15 @@ assumptions(x, y, v, w, r, dx, dy, xo, yo, xc, yc) ->
             ?(r!=0 & r^2 = (x-xc)^2+(y-yc)^2 & dx=-(y-yc)/r & dy=(x-xc)/r & r*w=v);
 
             /* use that curve, if it is a safe one (admissible velocities) */
-            if (v+a*ep>=0) { ?abs(x-xo) > admissibleSeparationG(v,a) | abs(y-yo) > admissibleSeparationG(v,a) | trajectoryDist(r,xo,xc,yo,yc) > V*(ep + (v+a*ep)/b); }
-            else           { ?abs(x-xo) > admissibleSeparationL(v,a) | abs(y-yo) > admissibleSeparationL(v,a) | trajectoryDist(r,xo,xc,yo,yc) > -V*v/a; }
+            {
+              ?(v+a*ep>=0);
+              ?abs(x-xo) > admissibleSeparationG(v,a) | abs(y-yo) > admissibleSeparationG(v,a) | trajectoryDist(r,xo,xc,yo,yc) > V*(ep + (v+a*ep)/b);
+            }
+            ++
+            {
+              ?!(v+a*ep>=0);
+              ?abs(x-xo) > admissibleSeparationL(v,a) | abs(y-yo) > admissibleSeparationL(v,a) | trajectoryDist(r,xo,xc,yo,yc) > -V*v/a;
+            }
           }
         };
         t := 0;
