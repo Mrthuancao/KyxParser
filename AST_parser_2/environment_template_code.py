@@ -7,14 +7,24 @@ import numpy as np
 import json
 from scipy.integrate import solve_ivp
 import sympy
-from collections import OrderedDict, deque # Added deque
+from collections import OrderedDict, deque
 import copy
 import re
-import math # Added for eval() context
-from typing import Dict, Any
+import math
+from typing import Dict, Any, Optional, Union, List
 
-# Configuration for the environment, generated from the KeYmaera model
+from ast_config import (
+    ASTNode, Term, Formula,
+    Literal, VarRef, BinaryTermOp, UnaryTermOp, FunctionCall,
+    BooleanLiteral, BinaryFormulaOp, UnaryFormulaOp, Comparison, PredicateCall,
+    Assignment, NondetAssignment, Test, Sequence, Choice, Iteration,
+    ODE, ODEEquation, HPBlock, ModalFormula, Quantifier, C_Formula,
+    HybridProgram
+)
+
+# Embedded environment config (generator will replace the placeholder)
 _ENV_CONFIG_JSON = {embedded_config_json_str}
+
 
 class KeYmaeraGymEnv(gym.Env):
     metadata = {metadata}
@@ -26,8 +36,8 @@ class KeYmaeraGymEnv(gym.Env):
         self.debug_mode = self.config.get('debug_mode', False)
         
         # DEBUG PRINTS START
-        self._debug_print(f"Initialized self.config['variables']: {{self.config['variables']}}")
-        self._debug_print(f"Initialized self.config['constants']: {{self.config['constants']}}")
+        self._debug_print(f"Initialized self.config['variables']: {self.config['variables']}")
+        self._debug_print(f"Initialized self.config['constants']: {self.config['constants']}")
         # DEBUG PRINTS END
 
         self.environment_name = self.config['environment_name']
@@ -46,17 +56,17 @@ class KeYmaeraGymEnv(gym.Env):
         self.ode_solver_tolerance = self.config.get('ode_solver_tolerance', 1e-6)
 
         # SymPy symbols for dynamic evaluation of ODEs
-        self.sympy_symbols = {{}}
+        self.sympy_symbols = {}
         # Variables and constants need to be SymPy Symbols for ODE parsing
         for var_config in self.config['variables']:
-            self._debug_print(f"DEBUG: Initializing sympy_symbols with variable: {{var_config['name']}}")
+            self._debug_print(f"DEBUG: Initializing sympy_symbols with variable: {var_config['name']}")
             self.sympy_symbols[var_config['name']] = sympy.Symbol(var_config['name'])
         for const_config in self.config['constants']:
-            print(f"DEBUG: Initializing sympy_symbols with constant: {{const_config['name']}}")
+            self._debug_print(f"DEBUG: Initializing sympy_symbols with constant: {const_config['name']}")
             self.sympy_symbols[const_config['name']] = sympy.Symbol(const_config['name'])
 
         # Initialize user_defined_functions before _setup_constants calls _evaluate_expression
-        self.user_defined_functions = {{}} 
+        self.user_defined_functions = {} 
 
         self._setup_constants()
         self._setup_functions() 
@@ -75,6 +85,11 @@ class KeYmaeraGymEnv(gym.Env):
         if ep_value is not None:
             self.time_step = ep_value
 
+        self.control_flow_program_ast: Optional[HybridProgram] = None
+        if self.config.get('control_flow_program_ast_json'):
+            self.control_flow_program_ast = self._deserialize_ast_node(self.config['control_flow_program_ast_json'])
+            self._debug_print(f"DEBUG: Deserialized control_flow_program_ast: {{self.control_flow_program_ast._repr_indented(0)}}")
+
         self._setup_spaces()
         self._setup_initial_state_samplers()
         self._setup_hybrid_program()
@@ -88,10 +103,126 @@ class KeYmaeraGymEnv(gym.Env):
         
     def _debug_print(self, message):
         if self.debug_mode:
-            print(f"DEBUG: {{message}}")
+            print(f"DEBUG: {message}")
 
     # User-defined functions from KeYmaera model
 {user_defined_methods_code_str}
+
+    # --- AST Deserialization ---
+    def _deserialize_ast_node(self, data: Dict[str, Any]) -> ASTNode:
+        if data is None:
+            return None
+        
+        node_type = data["_type"]
+        if node_type == "Literal":
+            return Literal(data["value"])
+        elif node_type == "VarRef":
+            return VarRef(data["name"])
+        elif node_type == "BinaryTermOp":
+            return BinaryTermOp(data["op"], self._deserialize_ast_node(data["left"]), self._deserialize_ast_node(data["right"]))
+        elif node_type == "UnaryTermOp":
+            return UnaryTermOp(data["op"], self._deserialize_ast_node(data["operand"]))
+        elif node_type == "FunctionCall":
+            return FunctionCall(data["name"], [self._deserialize_ast_node(arg) for arg in data["args"]])
+        elif node_type == "BooleanLiteral":
+            return BooleanLiteral(data["value"])
+        elif node_type == "BinaryFormulaOp":
+            return BinaryFormulaOp(data["op"], self._deserialize_ast_node(data["left"]), self._deserialize_ast_node(data["right"]))
+        elif node_type == "UnaryFormulaOp":
+            return UnaryFormulaOp(data["op"], self._deserialize_ast_node(data["operand"]))
+        elif node_type == "Comparison":
+            return Comparison(data["op"], self._deserialize_ast_node(data["left"]), self._deserialize_ast_node(data["right"]))
+        elif node_type == "PredicateCall":
+            return PredicateCall(data["name"], [self._deserialize_ast_node(arg) for arg in data["args"]])
+        elif node_type == "Assignment":
+            return Assignment(self._deserialize_ast_node(data["var"]), self._deserialize_ast_node(data["expr"]))
+        elif node_type == "NondetAssignment":
+            return NondetAssignment(self._deserialize_ast_node(data["var"]))
+        elif node_type == "Test":
+            return Test(self._deserialize_ast_node(data["condition"]))
+        elif node_type == "Sequence":
+            return Sequence([self._deserialize_ast_node(p) for p in data["programs"]])
+        elif node_type == "Choice":
+            return Choice(self._deserialize_ast_node(data["left"]), self._deserialize_ast_node(data["right"]))
+        elif node_type == "Iteration":
+            return Iteration(self._deserialize_ast_node(data["program"]), self._deserialize_ast_node(data["invariant"]))
+        elif node_type == "ODE":
+            return ODE([self._deserialize_ast_node(eq) for eq in data["equations"]], self._deserialize_ast_node(data["domain_constraint"]))
+        elif node_type == "ODEEquation":
+            return ODEEquation(self._deserialize_ast_node(data["var"]), self._deserialize_ast_node(data["expr"]))
+        elif node_type == "HPBlock":
+            return HPBlock(self._deserialize_ast_node(data["program"]))
+        elif node_type == "ModalFormula":
+            return ModalFormula(data["modality"], self._deserialize_ast_node(data["program"]), self._deserialize_ast_node(data["formula"]))
+        elif node_type == "Quantifier":
+            return Quantifier(data["quantifier_type"], [self._deserialize_ast_node(v) for v in data["variables"]], self._deserialize_ast_node(data["body"]))
+        elif node_type == "C_Formula":
+            return C_Formula(self._deserialize_ast_node(data["formula"]))
+        else:
+            raise ValueError(f"Unknown AST node type for deserialization: {{node_type}}")
+
+    # --- Python Eval String Conversion for Environment's ASTs ---
+    _PYTHON_TERM_OPS = {'+': '+', '-': '-', '*': '*', '/': '/', '^': '**'}
+    _PYTHON_FORMULA_OPS = {
+        '=': '==', '!=': '!=', '>': '>', '<': '<', '>=': '>=', '<=': '<=',
+        '&&': 'and', '&': 'and', '|': 'or'
+    }
+
+    def _term_to_python_eval_str_env(self, term: ASTNode) -> str:
+        \"\"\"Converts an AST Term node to its string representation for Python eval() within the environment.\"\"\"
+        if isinstance(term, Literal):
+            return str(term.value)
+        elif isinstance(term, VarRef):
+            # Access variable from current_state
+            return f"self.current_state['{term.name}']"
+        elif isinstance(term, BinaryTermOp):
+            left_str = self._term_to_python_eval_str_env(term.left)
+            right_str = self._term_to_python_eval_str_env(term.right)
+            op = self._PYTHON_TERM_OPS.get(term.op, term.op)
+            return f"({left_str} {op} {right_str})"
+        elif isinstance(term, UnaryTermOp):
+            operand_str = self._term_to_python_eval_str_env(term.operand)
+            if term.op == "'":
+                raise ValueError(f"Derivative operator '{term.op}' not supported in Python term evaluation in environment: {term}")
+                return f"{term.op}({operand_str})"
+        elif isinstance(term, FunctionCall):
+            args_str = ", ".join(self._term_to_python_eval_str_env(arg) for arg in term.args)
+            # Call the bound method from user_defined_functions
+            return f"self.user_defined_functions['{term.name}']({args_str})"
+        else:
+            raise ValueError(f"Unsupported Term type for Python eval in environment: {{type(term)}}")
+
+    def _formula_to_python_eval_str_env(self, formula: ASTNode) -> str:
+        \"\"\"Converts an AST Formula node to its string representation for Python eval() within the environment.\"\"\"
+        if isinstance(formula, BooleanLiteral):
+            return str(formula.value)
+        elif isinstance(formula, Comparison):
+            left_str = self._term_to_python_eval_str_env(formula.left)
+            right_str = self._term_to_python_eval_str_env(formula.right)
+            op = self._PYTHON_FORMULA_OPS.get(formula.op, formula.op)
+            return f"({left_str} {op} {right_str})"
+        elif isinstance(formula, BinaryFormulaOp):
+            left_str = self._formula_to_python_eval_str_env(formula.left)
+            right_str = self._formula_to_python_eval_str_env(formula.right)
+            if formula.op == "->":
+                return f"(not ({left_str}) or ({right_str}))"
+            elif formula.op == "<->":
+                return f"((({left_str}) and ({right_str})) or (not ({left_str}) and not ({right_str})))"
+            op = self._PYTHON_FORMULA_OPS.get(formula.op, formula.op)
+            return f"({left_str} {op} {right_str})"
+        elif isinstance(formula, UnaryFormulaOp):
+            operand_str = self._formula_to_python_eval_str_env(formula.operand)
+            if formula.op == "!":
+                return f"(not ({operand_str}))"
+            return f"{formula.op}({operand_str})"
+        elif isinstance(formula, PredicateCall):
+            args_str = ", ".join(self._term_to_python_eval_str_env(arg) for arg in formula.args)
+            return f"self.user_defined_functions['{formula.name}']({args_str})"
+        elif isinstance(formula, (ModalFormula, Quantifier, C_Formula)):
+            raise ValueError(f"Formula type {type(formula)} cannot be directly converted to Python for evaluation in environment: {formula}")
+        else:
+            raise ValueError(f"Unsupported Formula type for Python eval in environment: {type(formula)}")
+
 
     def _load_config(self, config_json_str, config_override):
         config = json.loads(config_json_str)
@@ -99,7 +230,7 @@ class KeYmaeraGymEnv(gym.Env):
             for key, override_value in config_override.items():
                 if key == 'constants' and isinstance(override_value, list):
                     # Merge constants list by name
-                    existing_constants_map = {{c['name']: c for c in config['constants']}}
+                    existing_constants_map = {c['name']: c for c in config.get('constants', [])}
                     for ov_const in override_value:
                         if ov_const['name'] in existing_constants_map:
                             existing_constants_map[ov_const['name']].update(ov_const)
@@ -108,7 +239,7 @@ class KeYmaeraGymEnv(gym.Env):
                     config['constants'] = list(existing_constants_map.values())
                 elif key == 'variables' and isinstance(override_value, list):
                     # Merge variables list by name
-                    existing_variables_map = {{v['name']: v for v in config['variables']}}
+                    existing_variables_map = {v['name']: v for v in config.get('variables', [])}
                     for ov_var in override_value:
                         if ov_var['name'] in existing_variables_map:
                             existing_variables_map[ov_var['name']].update(ov_var)
@@ -124,29 +255,62 @@ class KeYmaeraGymEnv(gym.Env):
         return config
 
     def _setup_spaces(self):
-        action_space_type = self.config.get('action_space_type', 'continuous')
-        action_bounds = self.config.get('action_space_bounds', {{}})
+        # Determine action space based on controlFunc AST if available
+        if self.control_flow_program_ast and isinstance(self.control_flow_program_ast, Choice):
+            # Assuming Choice between HPBlocks, each representing a distinct action branch
+            # We need to count the number of distinct choices.
+            # The example controlFunc is nested: ((A) ++ (B)) ++ ((C) ++ (D)).
+            # We need a BFS to find the leaf branches.
+            num_choices = 0
+            q = deque([self.control_flow_program_ast])
+            while q:
+                node = q.popleft()
+                if isinstance(node, Choice):
+                    # Add right branch first to process left-to-right from popleft
+                    q.append(node.right)
+                    q.append(node.left)
+                else: # This is a leaf branch (e.g., HPBlock, Assignment, Test, Sequence)
+                    num_choices += 1
+            
+            if num_choices > 0:
+                self.action_space_type = 'discrete'
+                self.action_space = spaces.Discrete(num_choices)
+                self.action_variable_names = ['control_choice'] # Placeholder name for discrete action
+                self._debug_print(f"DEBUG: Action space set to Discrete({{num_choices}}) based on controlFunc.")
+            else:
+                raise ValueError("controlFunc is a Choice but no valid branches found.")
+        elif self.control_flow_program_ast:
+            # If controlFunc is present but not a Choice, it's a single, fixed discrete action.
+            # Or it could be a NondetAssignment, which is more complex.
+            # For now, if it's not a Choice, assume it's a single "action" that executes the HP.
+            self.action_space_type = 'discrete'
+            self.action_space = spaces.Discrete(1)
+            self.action_variable_names = ['control_choice']
+            self._debug_print(f"DEBUG: Action space set to Discrete(1) based on controlFunc (not a Choice).")
+        else: # Fallback to continuous if no controlFunc or it's not interpretable
+            action_space_type = self.config.get('action_space_type', 'continuous')
+            action_bounds = self.config.get('action_space_bounds', {})
 
-        if action_space_type == 'continuous':
-            lows = []
-            highs = []
-            self.action_variable_names = []
-            for var_name, bounds in action_bounds.items():
-                self.action_variable_names.append(var_name)
-                lows.append(self._evaluate_expression(bounds['min'], {{}}))
-                highs.append(self._evaluate_expression(bounds['max'], {{}}))
-            self.action_space = spaces.Box(low=np.array(lows, dtype=np.float32),
-                                           high=np.array(highs, dtype=np.float32),
-                                           dtype=np.float32)
-        elif action_space_type == 'discrete':
-            n = action_bounds.get('n', 1)
-            self.action_space = spaces.Discrete(n)
-            self.action_variable_names = []
-        else:
-            raise ValueError(f"Unsupported action space type: {{action_space_type}}")
+            if action_space_type == 'continuous':
+                lows = []
+                highs = []
+                self.action_variable_names = []
+                for var_name, bounds in action_bounds.items():
+                    self.action_variable_names.append(var_name)
+                    lows.append(self._evaluate_expression(bounds['min'], {}))
+                    highs.append(self._evaluate_expression(bounds['max'], {}))
+                self.action_space = spaces.Box(low=np.array(lows, dtype=np.float32),
+                                               high=np.array(highs, dtype=np.float32),
+                                               dtype=np.float32)
+            elif action_space_type == 'discrete':
+                n = action_bounds.get('n', 1)
+                self.action_space = spaces.Discrete(n)
+                self.action_variable_names = [] # No specific variable names for generic discrete
+            else:
+                raise ValueError(f"Unsupported action space type: {{action_space_type}}")
 
         observation_space_type = self.config.get('observation_space_type', 'continuous')
-        observation_bounds = self.config.get('observation_space_bounds', {{}})
+        observation_bounds = self.config.get('observation_space_bounds', {})
 
         if observation_space_type == 'continuous':
             lows = []
@@ -154,8 +318,8 @@ class KeYmaeraGymEnv(gym.Env):
             self.observation_variable_names = []
             for var_name, bounds in observation_bounds.items():
                 self.observation_variable_names.append(var_name)
-                lows.append(self._evaluate_expression(bounds['min'], {{}}))
-                highs.append(self._evaluate_expression(bounds['max'], {{}}))
+                lows.append(self._evaluate_expression(bounds['min'], {}))
+                highs.append(self._evaluate_expression(bounds['max'], {}))
             self.observation_space = spaces.Box(low=np.array(lows, dtype=np.float32),
                                                 high=np.array(highs, dtype=np.float32),
                                                 dtype=np.float32)
@@ -240,8 +404,19 @@ class KeYmaeraGymEnv(gym.Env):
             if var not in self.sympy_symbols:
                 self.sympy_symbols[var] = sympy.Symbol(var)
 
-    def _evaluate_expression(self, expression_str: str, context: Dict[str, Any]):
-        self._debug_print(f"DEBUG: _evaluate_expression called for: {{expression_str}} (type: {{type(expression_str)}})")
+    def _evaluate_expression(self, expression: Union[str, ASTNode], context: Dict[str, Any]):
+        self._debug_print(f"DEBUG: _evaluate_expression called for: {{expression}} (type: {{type(expression)}})")
+
+        if isinstance(expression, ASTNode):
+            if isinstance(expression, Term):
+                expression_str = self._term_to_python_eval_str_env(expression)
+            elif isinstance(expression, Formula):
+                expression_str = self._formula_to_python_eval_str_env(expression)
+            else:
+                raise ValueError(f"Unsupported AST node type for evaluation: {{type(expression)}}")
+            self._debug_print(f"DEBUG: Converted AST to expression_str: '{{expression_str}}'")
+        else: # Assume it's already a string
+            expression_str = expression
 
         # Prepare the execution environment for eval()
         eval_globals = {{
@@ -349,12 +524,9 @@ class KeYmaeraGymEnv(gym.Env):
         # Helper function to evaluate symbolic function calls within a SymPy expression
         # This is necessary because user-defined functions are Python callables, not SymPy's built-in functions.
         def evaluate_sympy_function_calls_for_ode(sympy_expr_node, current_subs):
-            # If it's a SymPy Function and its name matches a user-defined function
             if isinstance(sympy_expr_node, sympy.Function) and str(sympy_expr_node.func) in self.user_defined_functions:
                 func_name = str(sympy_expr_node.func)
-                # Recursively evaluate arguments before calling the Python function
                 evaluated_args = [evaluate_sympy_function_calls_for_ode(arg, current_subs) for arg in sympy_expr_node.args]
-                # Call the actual Python implementation method (which uses _evaluate_expression)
                 # self.user_defined_functions stores the bound methods, so no need to pass 'self' explicitly.
                 return self.user_defined_functions[func_name](*evaluated_args) 
             
@@ -382,10 +554,14 @@ class KeYmaeraGymEnv(gym.Env):
             derivs.append(float(evaluated_ode_expr))
         return derivs
 
-    def _run_continuous_dynamics(self, action):
+    def _run_continuous_dynamics(self, action_to_apply):
         # Apply action to relevant variables before ODE integration
-        for i, var_name in enumerate(self.action_variable_names):
-            self.current_state[var_name] = action[i]
+        # This block is now only relevant if action_space_type is 'continuous'
+        # and controlFunc is NOT being used to set variables.
+        # If controlFunc is active, the variables like 'ar' are already set in self.current_state.
+        if self.action_space_type == 'continuous' and self.action_variable_names:
+            for i, var_name in enumerate(self.action_variable_names):
+                self.current_state[var_name] = action_to_apply[i]
 
         # Set dL 't' (time elapsed in current control step) to 0 at start of each step
         # This is implicitly handled by the ODE solver's t_span starting from 0.
@@ -458,30 +634,188 @@ class KeYmaeraGymEnv(gym.Env):
             self._debug_print(f"DEBUG: _run_continuous_dynamics returning True due to solver failure.")
             return True # Indicate episode should terminate
 
+    def _execute_control_flow(self, action_choice: int) -> Dict[str, Any]:
+        \"\"\"
+        Executes the discrete control flow logic defined by the controlFunc AST.
+        Modifies self.current_state based on assignments and checks conditions.
+        Returns a dictionary with execution status (e.g., 'terminated', 'reward_delta').
+        \"\"\"
+        status = {"terminated": False, "reward_delta": 0.0, "info": ""}
+
+        if not self.control_flow_program_ast:
+            self._debug_print("DEBUG: _execute_control_flow called but no control_flow_program_ast defined.")
+            status["info"] = "no_control_flow_program"
+            return status
+
+        # For a discrete action space, the agent provides an integer representing the choice.
+        # We need to map this integer to the correct branch in the Choice AST.
+        # The example controlFunc is nested: ((A) ++ (B)) ++ ((C) ++ (D)).
+        # We need a BFS to find the Nth leaf branch.
+        
+        selected_branch = None
+        current_choice_index = 0
+        q = deque([self.control_flow_program_ast])
+        
+        while q and selected_branch is None:
+            node = q.popleft()
+            if isinstance(node, Choice):
+                # Add right branch first to process left-to-right from popleft
+                q.append(node.right)
+                q.append(node.left)
+            else: # This is a leaf branch
+                if current_choice_index == action_choice:
+                    selected_branch = node
+                current_choice_index += 1
+        
+        if selected_branch is None:
+            self._debug_print(f"ERROR: Invalid action_choice {{action_choice}} for controlFunc. Max choices: {{current_choice_index}}.")
+            status["terminated"] = True
+            status["reward_delta"] = -100.0 # Penalty for invalid choice
+            status["info"] = "invalid_control_choice"
+            return status
+
+        self._debug_print(f"DEBUG: Executing selected control branch: {{selected_branch._repr_indented(0)}}")
+        
+        # Now execute the selected_branch
+        return self._execute_hp_node(selected_branch)
+
+    def _execute_hp_node(self, hp_node: HybridProgram) -> Dict[str, Any]:
+        \"\"\"
+        Recursively executes a hybrid program node.
+        Returns execution status, potentially modifying self.current_state.
+        \"\"\"
+        status = {"terminated": False, "reward_delta": 0.0, "info": ""}
+
+        if isinstance(hp_node, HPBlock):
+            # Execute the program inside the block
+            return self._execute_hp_node(hp_node.program)
+        
+        elif isinstance(hp_node, Sequence):
+            for program in hp_node.programs:
+                sub_status = self._execute_hp_node(program)
+                status["terminated"] = status["terminated"] or sub_status["terminated"]
+                status["reward_delta"] += sub_status["reward_delta"]
+                if status["terminated"]: # If any part of sequence terminates, the whole sequence terminates
+                    status["info"] = "sequence_terminated"
+                    break
+            return status
+
+        elif isinstance(hp_node, Choice):
+            # This should ideally not be reached if _execute_control_flow already picked a branch.
+            # But if it is, it indicates a problem or a complex nested choice not handled by simple action_choice.
+            self._debug_print("WARNING: _execute_hp_node encountered a Choice node. This should be handled by _execute_control_flow.")
+            status["terminated"] = True
+            status["reward_delta"] = -100.0
+            status["info"] = "unexpected_choice_node"
+            return status
+        
+        elif isinstance(hp_node, Test):
+            condition_met = self._evaluate_expression(hp_node.condition, self.current_state)
+            if not condition_met:
+                self._debug_print(f"DEBUG: Test condition '{{hp_node.condition._repr_indented(0)}}' failed. Terminating.")
+                status["terminated"] = True
+                status["reward_delta"] = -100.0 # Penalty for failing a test
+                status["info"] = "test_condition_failed"
+            return status
+
+        elif isinstance(hp_node, Assignment):
+            var_name = hp_node.var.name
+            expr_value = self._evaluate_expression(hp_node.expr, self.current_state)
+            self.current_state[var_name] = expr_value
+            self._debug_print(f"DEBUG: Assignment: {{var_name}} := {{expr_value}}")
+            return status
+
+        elif isinstance(hp_node, NondetAssignment):
+            # This is more complex. For now, we'll raise an error or apply a default.
+            # A proper implementation would sample from the allowed range.
+            self._debug_print(f"ERROR: Nondeterministic assignment '{{hp_node.var.name}} := *' not yet fully supported. Defaulting to 0.0.")
+            self.current_state[hp_node.var.name] = 0.0 # Default fallback
+            status["info"] = "nondet_assignment_defaulted"
+            return status
+
+        elif isinstance(hp_node, Iteration):
+            self._debug_print("WARNING: Iteration node encountered in controlFunc. Iterations are typically handled by the RL loop, not directly executed here.")
+            # If an iteration is part of controlFunc, it implies the agent decides to loop.
+            # This is usually a higher-level concept. For now, treat as a single execution.
+            return self._execute_hp_node(hp_node.program)
+
+        elif isinstance(hp_node, VarRef):
+            # If the HP is just a reference to another HPDef, resolve and execute it.
+            # We need to look up the HPDef by name.
+            # This requires a map of HPDef names to their bodies.
+            # For simplicity, we'll assume the generator only passes the 'controlFunc' AST directly.
+            # If other HP references are expected in controlFunc, the environment needs a way to resolve them.
+            self._debug_print(f"ERROR: HP VarRef '{{hp_node.name}}' encountered in control flow. Direct HP references within controlFunc are not yet supported for recursive execution.")
+            status["terminated"] = True
+            status["reward_delta"] = -100.0
+            status["info"] = "unsupported_hp_varref_in_control_flow"
+            return status
+        
+        elif isinstance(hp_node, ODE):
+            self._debug_print("WARNING: ODE node encountered in controlFunc. ODEs are handled by _run_continuous_dynamics, not discrete control flow.")
+            # This indicates a malformed controlFunc if it directly contains an ODE.
+            status["terminated"] = True
+            status["reward_delta"] = -100.0
+            status["info"] = "unexpected_ode_in_control_flow"
+            return status
+
+        else:
+            self._debug_print(f"ERROR: Unsupported HybridProgram node type in _execute_hp_node: {{type(hp_node)}}")
+            status["terminated"] = True
+            status["reward_delta"] = -100.0
+            status["info"] = "unsupported_hp_node_type"
+            return status
+
 
     def step(self, action):
         terminated = False
         truncated = False
+        reward = 0.0 # Initialize reward
 
-        # Apply action to relevant variables before ODE integration
-        # This is already done in _run_continuous_dynamics, but let's ensure action_to_apply is correctly set.
-        action_to_apply = action
-
+        # Execute discrete control flow based on agent's action
+        if self.control_flow_program_ast:
+            control_flow_status = self._execute_control_flow(action)
+            terminated = control_flow_status["terminated"]
+            reward += control_flow_status["reward_delta"]
+            if terminated:
+                self._debug_print(f"DEBUG: step method: Terminated by control flow: {{control_flow_status['info']}}")
+                observation = self._get_observation()
+                info = self._get_info()
+                info["control_flow_info"] = control_flow_status["info"]
+                if self.render_mode == "human":
+                    self._render_frame()
+                return observation, reward, terminated, truncated, info
+        else:
+            # If no controlFunc, then the action is directly applied to continuous variables
+            # This path is for environments without a controlFunc or where it's ignored
+            # and action is directly continuous values for ODE variables.
+            if self.action_space_type == 'continuous':
+                action_to_apply = action
+            else:
+                # This case should ideally not be reached if action_space_type is discrete
+                # but control_flow_program_ast is None.
+                # If it is reached, it means a discrete action was given without a controlFunc to interpret it.
+                self._debug_print(f"WARNING: Discrete action received but no controlFunc to interpret it. Action: {{action}}")
+                action_to_apply = [] # No direct action for ODEs
+        
         # Run continuous dynamics (ODE integration)
-        solver_failed = self._run_continuous_dynamics(action_to_apply)
+        # If controlFunc was active, it would have set the control variables in self.current_state.
+        # So, _run_continuous_dynamics will pick them up. action_to_apply will be empty in this case.
+        solver_failed = self._run_continuous_dynamics(action if self.action_space_type == 'continuous' else [])
         self._debug_print(f"DEBUG: step method: solver_failed = {{solver_failed}}")
         if solver_failed:
             terminated = True # Terminate if ODE solver fails or domain constraint violated
+            reward += -100.0 # Penalty for ODE failure
 
-        # Evaluate reward
+        # Evaluate reward (from problem definition)
         reward_expr = self.config.get('reward_function_body', '0.0')
         self._debug_print(f"DEBUG: step method: reward_expr before evaluation: '{{reward_expr}}' (type: {{type(reward_expr)}})")
-        reward = self._evaluate_expression(reward_expr, self.current_state)
+        reward += self._evaluate_expression(reward_expr, self.current_state) # Add to existing reward
 
-        # Evaluate termination condition
+        # Evaluate termination condition (from problem definition)
         termination_expr = self.config.get('termination_condition_body', 'False')
         self._debug_print(f"DEBUG: step method: termination_expr for evaluation: '{{termination_expr}}'")
-        if not terminated: # Only evaluate if not already terminated by solver failure
+        if not terminated: # Only evaluate if not already terminated by solver failure or control flow
             evaluated_termination_cond = self._evaluate_expression(termination_expr, self.current_state)
             self._debug_print(f"DEBUG: step method: evaluated_termination_cond = {{evaluated_termination_cond}}")
             terminated = bool(evaluated_termination_cond)

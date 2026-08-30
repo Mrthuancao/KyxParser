@@ -73,3 +73,5 @@ class GymEnvironmentConfig:
         "populate_on_init": True,
         "max_populate_attempts": 1000
     })
+    # New field to store the serialized controlFunc AST
+    control_flow_program_ast_json: Optional[Dict[str, Any]] = None
