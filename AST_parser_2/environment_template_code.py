@@ -7,10 +7,12 @@ import numpy as np
 import json
 from scipy.integrate import solve_ivp
 import sympy
+import z3
 from collections import OrderedDict, deque
 import copy
 import re
 import math
+import ast
 from typing import Dict, Any, Optional, Union, List
 
 from ast_config import (
@@ -96,6 +98,7 @@ class KeYmaeraGymEnv(gym.Env):
         
         # Initial State Buffer (ISB) setup
         self.initial_state_buffer_config = self.config.get('initial_state_buffer_config', {})
+        self.initial_state_buffer_strategy = self.initial_state_buffer_config.get('strategy', 'random')
         self.initial_state_buffer = deque(maxlen=self.initial_state_buffer_config.get('capacity', 100))
         
         if self.initial_state_buffer_config.get('enabled', False) and self.initial_state_buffer_config.get('populate_on_init', True):
@@ -884,9 +887,338 @@ class KeYmaeraGymEnv(gym.Env):
         raise RuntimeError(f"Failed to find a valid initial state after {{max_attempts}} attempts "
                            f"for initial condition: '{{initial_cond_expr}}'")
 
+    def _build_initial_state_sample_ranges(self):
+        sample_ranges = {{}
+        for var_name, sampling_config in self.config.get('initial_state_sampling_config', {{}}).items():
+            if 'value' in sampling_config:
+                value = self._evaluate_expression(sampling_config['value'], {{}})
+                sample_ranges[var_name] = (float(value), float(value))
+            elif 'min' in sampling_config and 'max' in sampling_config:
+                low = self._evaluate_expression(sampling_config['min'], {{}})
+                high = self._evaluate_expression(sampling_config['max'], {{}})
+                sample_ranges[var_name] = (float(low), float(high))
+            else:
+                sample_ranges[var_name] = (-100.0, 100.0)
+        return sample_ranges
+
+    def _expr_to_z3(self, expr: str, z3_symbols: Dict[str, z3.ArithRef], fixed_constants_map: Dict[str, float]):
+        expr = expr.strip()
+        if not expr:
+            return z3.BoolVal(True)
+
+        def find_function_body(function_name: str):
+            for func_config in self.config.get('function_definitions', []):
+                if func_config.get('name') == function_name:
+                    return func_config
+            return None
+
+        def is_boolean_function_definition(function_name: str):
+            func_def = find_function_body(function_name)
+            if func_def is None:
+                return False
+            body = func_def.get('body')
+            if not isinstance(body, str):
+                return False
+            try:
+                parsed = ast.parse(body, mode='eval').body
+            except SyntaxError:
+                return False
+            if isinstance(parsed, ast.BoolOp):
+                return True
+            if isinstance(parsed, ast.Compare):
+                return True
+            if isinstance(parsed, ast.UnaryOp) and isinstance(parsed.op, ast.Not):
+                return True
+            if isinstance(parsed, ast.Call):
+                func = parsed.func
+                if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name) and func.value.id == 'self':
+                    return is_boolean_function_definition(func.attr.replace('_impl', '').lstrip('_'))
+                if isinstance(func, ast.Name):
+                    return is_boolean_function_definition(func.id)
+            if isinstance(parsed, ast.Name):
+                return parsed.id in ('True', 'False')
+            return False
+
+        def convert(node, local_bindings=None):
+            local_bindings = {} if local_bindings is None else local_bindings
+
+            if isinstance(node, ast.Expression):
+                return convert(node.body, local_bindings)
+            if isinstance(node, ast.BoolOp):
+                if isinstance(node.op, ast.And):
+                    return z3.And(*[convert(v, local_bindings) for v in node.values])
+                if isinstance(node.op, ast.Or):
+                    return z3.Or(*[convert(v, local_bindings) for v in node.values])
+            if isinstance(node, ast.UnaryOp):
+                operand = convert(node.operand, local_bindings)
+                if isinstance(node.op, ast.Not):
+                    return z3.Not(operand)
+                if isinstance(node.op, ast.USub):
+                    return -operand
+                if isinstance(node.op, ast.UAdd):
+                    return operand
+            if isinstance(node, ast.BinOp):
+                left = convert(node.left, local_bindings)
+                right = convert(node.right, local_bindings)
+                if isinstance(node.op, ast.Add):
+                    return left + right
+                if isinstance(node.op, ast.Sub):
+                    return left - right
+                if isinstance(node.op, ast.Mult):
+                    return left * right
+                if isinstance(node.op, ast.Div):
+                    return left / right
+                if isinstance(node.op, ast.Pow):
+                    return left ** right
+                if isinstance(node.op, ast.Mod):
+                    return left % right
+                raise ValueError(f"Unsupported binary operator in initial condition: {{type(node.op).__name__}}")
+            if isinstance(node, ast.Compare):
+                left = convert(node.left, local_bindings)
+                comparisons = []
+                for op, comp in zip(node.ops, node.comparators):
+                    right = convert(comp, local_bindings)
+                    if isinstance(op, ast.Gt):
+                        comparisons.append(left > right)
+                    elif isinstance(op, ast.GtE):
+                        comparisons.append(left >= right)
+                    elif isinstance(op, ast.Lt):
+                        comparisons.append(left < right)
+                    elif isinstance(op, ast.LtE):
+                        comparisons.append(left <= right)
+                    elif isinstance(op, ast.Eq):
+                        comparisons.append(left == right)
+                    elif isinstance(op, ast.NotEq):
+                        comparisons.append(left != right)
+                    else:
+                        raise ValueError(f"Unsupported comparison operator in initial condition: {{type(op).__name__}}")
+                    left = right
+                if not comparisons:
+                    return z3.BoolVal(True)
+                if len(comparisons) == 1:
+                    return comparisons[0]
+                return z3.And(*comparisons)
+            if isinstance(node, ast.Attribute):
+                if isinstance(node.value, ast.Name) and node.value.id == 'self':
+                    attr_name = node.attr
+                    if attr_name.endswith('_impl'):
+                        attr_name = attr_name[:-5]
+                    attr_name = attr_name.lstrip('_')
+                    if attr_name in local_bindings:
+                        return local_bindings[attr_name]
+                    if attr_name in z3_symbols:
+                        return z3_symbols[attr_name]
+                    if attr_name in fixed_constants_map:
+                        return z3.RealVal(str(fixed_constants_map[attr_name]))
+                    if attr_name in ('True', 'False'):
+                        return z3.BoolVal(attr_name == 'True')
+                    return z3.Real(attr_name)
+                raise ValueError(f"Unsupported attribute access in initial condition: {{ast.dump(node)}}")
+            if isinstance(node, ast.Name):
+                if node.id in local_bindings:
+                    return local_bindings[node.id]
+                if node.id in z3_symbols:
+                    return z3_symbols[node.id]
+                if node.id in fixed_constants_map:
+                    return z3.RealVal(str(fixed_constants_map[node.id]))
+                if node.id in ('True', 'False'):
+                    return z3.BoolVal(node.id == 'True')
+                return z3.Real(node.id)
+            if isinstance(node, ast.Constant):
+                if isinstance(node.value, bool):
+                    return z3.BoolVal(node.value)
+                if isinstance(node.value, (int, float)):
+                    return z3.RealVal(str(node.value))
+                return z3.RealVal(str(node.value))
+            if isinstance(node, ast.Num):
+                return z3.RealVal(str(node.n))
+            if isinstance(node, ast.Call):
+                if isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name) and node.func.value.id == 'self':
+                    method_name = node.func.attr
+                    if method_name.endswith('_impl'):
+                        method_name = method_name[:-5]
+                    method_name = method_name.lstrip('_')
+                    func_def = find_function_body(method_name)
+                    if func_def is not None:
+                        arg_names = func_def.get('args', [])
+                        if not node.args and not arg_names:
+                            return convert(ast.parse(func_def['body'], mode='eval').body, local_bindings)
+                        new_local_bindings = dict(local_bindings)
+                        for arg_name, arg_node in zip(arg_names, node.args):
+                            new_local_bindings[arg_name] = convert(arg_node, local_bindings)
+                        return convert(ast.parse(func_def['body'], mode='eval').body, new_local_bindings)
+
+                    if not node.args:
+                        if method_name in local_bindings:
+                            return local_bindings[method_name]
+                        if method_name in z3_symbols:
+                            return z3_symbols[method_name]
+                        if method_name in fixed_constants_map:
+                            return z3.RealVal(str(fixed_constants_map[method_name]))
+                        if is_boolean_function_definition(method_name):
+                            return z3.Bool(method_name)
+                        return z3.Real(method_name)
+
+                    if method_name in ('min', 'max'):
+                        values = [convert(arg, local_bindings) for arg in node.args]
+                        if len(values) == 2:
+                            a, b = values
+                            return z3.If(a <= b, a, b) if method_name == 'min' else z3.If(a >= b, a, b)
+                        return values[0]
+
+                    raise ValueError(f"Unsupported method call in initial condition: {{method_name}}")
+
+                if isinstance(node.func, ast.Name):
+                    func_name = node.func.id
+                    func_def = find_function_body(func_name)
+                    if func_def is not None:
+                        arg_names = func_def.get('args', [])
+                        if not node.args and not arg_names:
+                            return convert(ast.parse(func_def['body'], mode='eval').body, local_bindings)
+                        new_local_bindings = dict(local_bindings)
+                        for arg_name, arg_node in zip(arg_names, node.args):
+                            new_local_bindings[arg_name] = convert(arg_node, local_bindings)
+                        return convert(ast.parse(func_def['body'], mode='eval').body, new_local_bindings)
+
+                    if func_name in ('min', 'max'):
+                        values = [convert(arg, local_bindings) for arg in node.args]
+                        if len(values) == 2:
+                            a, b = values
+                            return z3.If(a <= b, a, b) if func_name == 'min' else z3.If(a >= b, a, b)
+                        if values:
+                            return values[0]
+                    if func_name == 'pow' and len(node.args) == 2:
+                        base, exp = [convert(arg, local_bindings) for arg in node.args]
+                        return base ** exp
+                    if func_name in ('float', 'int', 'bool') and len(node.args) == 1:
+                        return convert(node.args[0], local_bindings)
+                    # Treat unknown function calls as a symbolic placeholder for the function name.
+                    if not node.args:
+                        if is_boolean_function_definition(func_name):
+                            return z3.Bool(func_name)
+                        return z3.Real(func_name)
+                    return z3.Bool(func_name)
+
+                raise ValueError(f"Unsupported call in initial condition: {{ast.dump(node)}}")
+            raise ValueError(f"Unsupported expression node in initial condition: {{type(node).__name__}}")
+
+        try:
+            parsed = ast.parse(expr, mode='eval')
+            return convert(parsed)
+        except Exception as exc:
+            raise ValueError(f"Failed to translate initial condition to Z3: {{expr}} -> {{exc}}") from exc
+
+    def _populate_initial_state_buffer_diverse_z3(self):
+        # Populate a diverse set of valid initial states using Z3 optimizer.
+        capacity = self.initial_state_buffer_config.get('capacity', 100)
+        max_populate_attempts_total = self.initial_state_buffer_config.get('max_populate_attempts', 1000)
+        self._debug_print(f"DEBUG: Populating diverse Z3 initial state buffer (capacity: {{capacity}}, max_attempts_total: {{max_populate_attempts_total}})")
+
+        sample_ranges = self._build_initial_state_sample_ranges()
+        z3_symbols = {}
+        fixed_constants_map = {}
+
+        for var_config in self.config.get('variables', []):
+            var_name = var_config['name']
+            z3_symbols[var_name] = z3.Real(var_name)
+        for const_config in self.config.get('constants', []):
+            const_name = const_config['name']
+            const_value = const_config.get('value')
+            if const_value is not None and isinstance(const_value, (int, float)):
+                fixed_constants_map[const_name] = float(const_value)
+            elif const_value is not None:
+                try:
+                    numeric_value = float(const_value)
+                    fixed_constants_map[const_name] = numeric_value
+                except (TypeError, ValueError):
+                    z3_symbols[const_name] = z3.Real(const_name)
+
+        opt = z3.Optimize()
+        opt.set(timeout=10000)
+
+        initial_condition_expr = self.config.get('problem', {{}}).get('initial_condition', 'True')
+        try:
+            z3_initial_condition = self._expr_to_z3(initial_condition_expr, z3_symbols, fixed_constants_map)
+            opt.add(z3_initial_condition)
+        except ValueError as e:
+            print(f"CRITICAL ERROR: Failed to convert initial condition to Z3 during CISB population: {{e}}")
+            return
+
+        for var_name, z3_var in z3_symbols.items():
+            low, high = sample_ranges.get(var_name, (-100.0, 100.0))
+            opt.add(z3_var >= low, z3_var <= high)
+
+        attempts_made = 0
+        while len(self.initial_state_buffer) < capacity and attempts_made < max_populate_attempts_total:
+            attempts_made += 1
+            opt.push()
+
+            soft_constraints_added = False
+            for var_name, z3_var in z3_symbols.items():
+                if var_name in fixed_constants_map:
+                    continue
+                low, high = sample_ranges.get(var_name, (-100.0, 100.0))
+                if low == high:
+                    continue
+                target = self.np_random.uniform(low, high)
+                opt.add_soft(z3_var == target, weight=1)
+                soft_constraints_added = True
+
+            check_result = opt.check()
+            if check_result == z3.sat:
+                model = opt.model()
+                solved_values = {{}}
+                for k, v in z3_symbols.items():
+                    evaluated_val = model.evaluate(v, model_completion=True)
+                    if evaluated_val is not None:
+                        if hasattr(evaluated_val, 'as_fraction'):
+                            solved_values[k] = float(evaluated_val.as_fraction())
+                        elif hasattr(evaluated_val, 'as_long'):
+                            solved_values[k] = float(evaluated_val.as_long())
+                        else:
+                            solved_values[k] = float(str(evaluated_val))
+                solved_values.update(fixed_constants_map)
+
+                if 't' not in solved_values:
+                    solved_values['t'] = 0.0
+                if 'T' not in solved_values:
+                    solved_values['T'] = 10.0
+
+                full_state_to_store = OrderedDict()
+                full_state_to_store.update(self.current_state)
+                full_state_to_store.update(solved_values)
+                self.initial_state_buffer.append(copy.deepcopy(full_state_to_store))
+                self._debug_print(f"DEBUG: Added diverse Z3-generated state to buffer. Buffer size: {{len(self.initial_state_buffer)}}")
+
+                blocking_conditions = []
+                for var_name, z3_var in z3_symbols.items():
+                    val = solved_values.get(var_name)
+                    if val is not None:
+                        diversity_epsilon = 0.1
+                        blocking_conditions.append(z3.Or(z3_var < val - diversity_epsilon, z3_var > val + diversity_epsilon))
+
+                if blocking_conditions:
+                    opt.add(z3.Or(blocking_conditions))
+                opt.pop()
+            elif check_result == z3.unsat:
+                print(f"DEBUG: Z3 UNSAT during diverse buffer population. No more states available.")
+                opt.pop()
+                break
+            else:
+                print(f"DEBUG: Z3 UNKNOWN during diverse buffer population. Retrying with new soft constraints.")
+                opt.pop()
+
+        if len(self.initial_state_buffer) < capacity:
+            print(f"Warning: Diverse initial state buffer could only be filled to {{len(self.initial_state_buffer)}}/{{capacity}} after {{attempts_made}} attempts.")
+
     def _populate_initial_state_buffer(self):
         # Populates the initial state buffer with valid initial states.
         isb_config = self.initial_state_buffer_config
+        strategy = isb_config.get('strategy', 'random')
+        if strategy == 'z3_diverse':
+            self._populate_initial_state_buffer_diverse_z3()
+            return
+
         capacity = isb_config.get('capacity', 100)
         max_populate_attempts_total = isb_config.get('max_populate_attempts', 1000) # Total attempts for population
 
@@ -895,14 +1227,10 @@ class KeYmaeraGymEnv(gym.Env):
         attempts_made = 0
         while len(self.initial_state_buffer) < capacity and attempts_made < max_populate_attempts_total:
             try:
-                # _generate_valid_initial_state will handle its own max_attempts per state
-                valid_state_update = self._generate_valid_initial_state(max_attempts=100) # Limit individual state generation attempts
-                
-                # Store the full state (constants + variables + t, T) in the buffer
+                valid_state_update = self._generate_valid_initial_state(max_attempts=100)
                 full_state_to_store = OrderedDict()
-                full_state_to_store.update(self.current_state) # Start with constants
-                full_state_to_store.update(valid_state_update) # Overlay sampled vars, t, T
-                
+                full_state_to_store.update(self.current_state)
+                full_state_to_store.update(valid_state_update)
                 self.initial_state_buffer.append(full_state_to_store)
                 self._debug_print(f"DEBUG: Added state to buffer. Buffer size: {{len(self.initial_state_buffer)}}")
             except RuntimeError as e:

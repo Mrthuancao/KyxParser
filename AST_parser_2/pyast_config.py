@@ -71,7 +71,8 @@ class GymEnvironmentConfig:
         "enabled": False,
         "capacity": 100,
         "populate_on_init": True,
-        "max_populate_attempts": 1000
+        "max_populate_attempts": 1000,
+        "strategy": "random"  # "random" or "z3_diverse"
     })
     # New field to store the serialized controlFunc AST
     control_flow_program_ast_json: Optional[Dict[str, Any]] = None

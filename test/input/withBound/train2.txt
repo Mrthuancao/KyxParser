@@ -115,13 +115,13 @@ Definitions
 End.
 
 ProgramVariables
-  // @var: bound=[0:100]; def="robot position: x"
+  // @var: bound=[-100:100]; def="robot position: x"
   Real xr;
   // @var: bound=[0:20]; def="robot translational velocity"
   Real vr;
   // @var: bound=[-10:10]; def="robot translational acceleration"
   Real ar;
-  // @var: bound=[0:100]; def="obstacle position: x"
+  // @var: bound=[-100:100]; def="obstacle position: x"
   Real xo;
   // @var: bound=[0:20]; def="obstacle velocity"
   Real vo;
