@@ -54,8 +54,64 @@ def run_end_to_end(dl_filepath: Path, env_name: str = "GeneratedCar2Env", out_fi
     if EnvClass is None:
         raise RuntimeError("Generated module does not expose `KeYmaeraGymEnv` class")
 
-    print("Instantiating environment...")
-    env = EnvClass(render_mode=None, config_override=None)
+    print("Instantiating environment with GDelta and initial-state overrides...")
+    env = EnvClass(render_mode=None, config_override={
+        'constants': [
+            {'name': 'GDelta', 'value': '40.0'}
+        ],
+        'initial_state_buffer_config': {
+            'enabled': True,
+            'strategy': 'z3_diverse',
+            'capacity': 100,
+            'max_populate_attempts': 1000
+        }
+    })
+
+    # --- Sampling analysis: quantity, diversity, and bounds ---
+    def analyze_initial_sampling(env, per_var_samples=1000, joint_samples=200):
+        samplers = getattr(env, 'initial_state_samplers', {})
+        print('\n--- Initial-state sampling analysis (unique joint samples) ---')
+        if not samplers:
+            print('No initial-state samplers defined in the environment.')
+            return None
+
+        var_names = list(samplers.keys())
+        print('Sampler variables count:', len(samplers))
+        print('Sampler variable names:', var_names)
+
+        # Draw joint samples and deduplicate to get only unique joint states
+        joint_draws = []
+        for _ in range(per_var_samples):
+            st = tuple(round(float(samplers[name]()), 6) for name in var_names)
+            joint_draws.append(st)
+        unique_joints = list(dict.fromkeys(joint_draws))  # preserves order, keeps uniques
+
+        unique_count = len(unique_joints)
+        print(f'Unique joint states from {per_var_samples} draws: {unique_count} ({unique_count/per_var_samples*100:.1f}%)')
+
+        # Compute per-variable stats over the unique joint samples only
+        if unique_count > 0:
+            arr = np.array(unique_joints, dtype=float)
+            for i, name in enumerate(var_names):
+                col = arr[:, i]
+                print(f"{name}: min={float(col.min()):.6f}, max={float(col.max()):.6f}, mean={float(col.mean()):.6f}, std={float(col.std()):.6f}")
+        else:
+            print('No unique joint samples to compute per-variable stats.')
+
+        buf_cfg = getattr(env, 'initial_state_buffer_config', {})
+        print('Initial state buffer config:', buf_cfg)
+        buf_len = len(getattr(env, 'initial_state_buffer', []))
+        print('Current buffer length:', buf_len)
+
+        # Additionally show joint diversity for a smaller sample set
+        small_states = []
+        for _ in range(joint_samples):
+            st = tuple(round(float(samplers[name]()), 6) for name in var_names)
+            small_states.append(st)
+        print(f'Unique full-state tuples (of {joint_samples} draws):', len(set(small_states)))
+        print('--- end sampling analysis ---\n')
+
+    analyze_initial_sampling(env)
 
     # Ensure attribute exists
     if not hasattr(env, 'action_space_type'):

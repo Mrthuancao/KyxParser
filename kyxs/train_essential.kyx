@@ -1,0 +1,88 @@
+SharedDefinitions
+  Real ep; /* Control cycle duration upper bound */
+  Real b;  /* Braking force */
+  Real A;  /* Maximum acceleration */
+
+  Bool Assumptions(Real v, Real d) <-> v>=0 & d>=0 & b>0;
+
+  Bool Controllable(Real m, Real z, Real v, Real d) <-> (
+    v^2-d^2 <= 2*b*(m-z) & Assumptions(v,d)
+  );
+
+  Bool M(Real d, Real do, Real m, Real mo) <-> (
+    do^2 - d^2 <= 2*b*(m-mo) & do >= 0 & d >= 0
+  );
+
+  Real stopDist(Real v) = v^2/(2*b);
+
+  Bool safe(Real m, Real z, Real v, Real d) <-> (
+    z >= m -> v <= d
+  );
+
+  Real emOn  = 1;
+  Real emOff = 0;
+
+  HP spd ::= {
+        ?v <= vdes; a:=*; ?-b<=a&a<=A;
+     ++ ?v >= vdes; a:=*; ?-b<=a&a<=0;
+  };
+
+  HP atp ::= {
+    if (m-z <= sb | em = emOn) { a := -b; }
+  };
+
+  HP drive ::= {
+    t := 0;
+    {z'=v, v'=a, t'=1  & v >= 0 & t <= ep}
+  };
+
+  HP rbc ::= {
+       em := emOn;
+    ++ m :=*; d :=*; ?d > 0;
+  };
+End.
+
+ArchiveEntry "ICFEM09/ETCS Essentials"
+
+/**
+ * Essentials of European Train Control System (ETCS)
+ * @see "Andre Platzer. Differential dynamic logic for hybrid systems. Journal of Automated Reasoning,
+ *                      41(2), pages 143-189, 2008."
+ */
+Definitions
+  Real m;  /* End of movement authority (train must not drive past m) */
+
+  Real accCompensation(Real v) = (((A/b) + 1)*((A/2)*ep^2 + ep*v));         /* Distance to compensate speed increase. */
+  Real SB(Real v) = stopDist(v) + accCompensation(v);        /* Distance needed to stop safely when accelerating once */
+
+  /* loop invariant: always maintain sufficient stopping distance */
+  Bool loopInv(Real m, Real z, Real v) <-> v >= 0 & m-z >= stopDist(v);
+
+  /* train controller */
+  HP ctrl ::= {
+        ?m - z <= SB(v); a := -b;    /* train protection: emergency brake when close to end of movement authority */
+     ++ ?m - z >= SB(v); a :=  A;    /* free driving: accelerate when sufficient distance */
+  };
+End.
+
+ProgramVariables
+  Real a;  /* Actual acceleration -b <= a <= A */
+  Real v;  /* Current velocity */
+  Real z;  /* Train position */
+  Real t;  /* Actual control cycle duration t <= ep */
+End.
+
+/* Safety specification of the form: initial -> [{ctrl;plant}*]safe
+ * Starting in any state where initial is true,
+ * any number of repetitions of running a controller 'ctrl' and then driving according to 'plant'
+ * keeps the system safe (end up only in states where 'safe' is true).
+ */
+Problem
+initial(m,z,v)  ->
+    [
+      {
+        ctrl;
+        drive;
+      }*@invariant(loopInv(m,z,v))                       /* repeat, loop invariant documents system design property */
+    ] (z <= m)                        /* safety property: train 'z' never drives past end of movement authority 'm' */
+End.

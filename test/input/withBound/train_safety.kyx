@@ -1,0 +1,100 @@
+SharedDefinitions
+  Real ep; /* Control cycle duration upper bound */
+  Real b;  /* Braking force */
+  Real A;  /* Maximum acceleration */
+
+  Bool Assumptions(Real v, Real d) <-> v>=0 & d>=0 & b>0;
+
+  Bool Controllable(Real m, Real z, Real v, Real d) <-> (
+    v^2-d^2 <= 2*b*(m-z) & Assumptions(v,d)
+  );
+
+  Bool M(Real d, Real do, Real m, Real mo) <-> (
+    do^2 - d^2 <= 2*b*(m-mo) & do >= 0 & d >= 0
+  );
+
+  Real stopDist(Real v) = v^2/(2*b);
+
+  Bool safe(Real m, Real z, Real v, Real d) <-> (
+    z >= m -> v <= d
+  );
+
+  Real emOn  = 1;
+  Real emOff = 0;
+
+  HP spd ::= {
+        ?v <= vdes; a:=*; ?-b<=a&a<=A;
+     ++ ?v >= vdes; a:=*; ?-b<=a&a<=0;
+  };
+
+  HP atp ::= {
+    { ? (m - z <= sb | em = emOn); a := -b; }
+  };
+
+  HP drive ::= {
+    t := 0;
+    {z'=v, v'=a, t'=1  & v >= 0 & t <= ep}
+  };
+
+  HP rbc ::= {
+       em := emOn;
+    ++ m :=*; d :=*; ?d > 0;
+  };
+End.
+
+Theorem "ICFEM09/Proposition 5: Safety"
+
+/**
+ * Proposition 5: Safety
+ * @see "Andre Platzer and Jan-David Quesel. European Train Control System: A case study in formal verification.
+ *       In Karin Breitman and Ana Cavalcanti, editors, 11th International Conference on Formal Engineering Methods,
+ *       ICFEM, Rio de Janeiro, Brasil, Proceedings, volume 5885 of LNCS, pages 246-265. Springer, 2009."
+ *
+ * The following refinement is provable, too: SB := (v^2 - d^2)/(2*b) + (a/b+1)*(A/2*ep^2+ep*v);
+ */
+Definitions
+  Real brakeDist(Real v, Real d) = ((v^2-d^2)/(2*b));         /* Train stopping distance from speed v with braking force b */
+  Real accCompensation(Real v) = (((A/b) + 1)*((A/2)*ep^2 + ep*v));     /* Distance to compensate speed increase. */
+  Real SB(Real v, Real d) = (brakeDist(v,d) + accCompensation(v));   /* Distance needed to brake safely when accelerating once */
+
+  Bool loopInv(Real m, Real z, Real v, Real d) <-> (m-z >= brakeDist(v,d) & d>=0);  /* loop invariant: maintain sufficient braking distance */
+
+  HP atpr ::= {
+    sb := SB(v, d);
+    atp;
+  };
+
+  HP rbcr ::= {
+       em := emOn;
+    ++ mo := m; m := *; vdes := *; ?vdes >= 0; do := d; d :=*; ?M(d,do,m,mo);
+  };
+End.
+
+ProgramVariables
+	Real vdes;
+	Real sb;
+	Real mo;
+	Real t;
+	Real a;
+	Real v;
+	Real z;
+	Real m;
+	Real d;
+	Real do;
+	Real em;
+End.
+
+Problem
+Controllable(m,z,v,d) & em = emOff & A>=0 & ep>=0
+  ->
+  [{
+       rbcr;
+    ++ spd; atpr; drive;
+   }*@invariant(loopInv(m,z,v,d))
+  ]safe(m,z,v,d)
+End.
+
+Tactic "Proof Proposition 5: Safety"
+  expandAllDefs();
+  auto
+End.
