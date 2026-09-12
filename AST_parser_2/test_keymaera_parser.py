@@ -1,10 +1,13 @@
 import unittest
 import re
+import tempfile
+from pathlib import Path
 from typing import List, Optional, Union, Dict, Any
 import os # Import os module for file path manipulation
 
 # Assuming keymaera_parser.py, keymaera_lexer.py, and ast_config.py are in the same directory
 from keymaera_parser import KeYmaeraParser
+from generator_core import generate_gym_environment_file
 from keymaera_lexer import parse_annotations
 from ast_config import (
     ASTNode, KeYmaeraModel, ArchiveEntry, DefinitionsBlock, Definition, FuncDef, PredDef, HPDef,
@@ -18,6 +21,43 @@ from ast_config import (
 
 
 class TestKeYmaeraParser(unittest.TestCase):
+
+    def test_bare_constant_declarations_are_not_generated_as_recursive_functions(self):
+        model_text = '''
+        Definitions
+            Real ep;
+            Real b;
+            Real A;
+        End.
+
+        ProgramVariables
+            Real v;
+        End.
+
+        Problem
+            v >= 0 -> [{v' = 1}] (v >= 0)
+        End.
+        '''
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_path = Path(tmpdir) / 'tmp_bare_constant_env.py'
+            ok = generate_gym_environment_file(model_text, 'TmpBareConstantEnv', str(out_path))
+            self.assertTrue(ok)
+            generated_code = out_path.read_text(encoding='utf-8')
+            self.assertNotIn("self.user_defined_functions['ep'] = self._ep_impl", generated_code)
+            self.assertNotIn("return self._evaluate_expression(\"self._ep_impl()\"", generated_code)
+
+    def test_train_safety_problem_extraction_keeps_modal_goal(self):
+        model_text = Path('test/input/withBound/train_safety.kyx').read_text(encoding='utf-8')
+        parser = KeYmaeraParser(model_text)
+        model_ast = parser.parse()
+        generator = GymnasiumEnvironmentGenerator('TrainSafety')
+        generator._process_definitions(model_ast)
+        generator._process_problem(model_ast)
+
+        self.assertNotEqual(generator.config.goal, 'True')
+        self.assertIn('safe', generator.config.goal)
+        self.assertNotEqual(generator.config.termination_condition_body, 'True')
 
     # --- Toggle this flag to True to see the AST output for each test ---
     # Set to True to write full ASTs to files

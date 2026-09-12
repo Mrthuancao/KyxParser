@@ -270,7 +270,9 @@ class GymnasiumEnvironmentGenerator:
         safety_modal_formula = None
         liveness_modal_formula = None
 
-        if isinstance(current_formula, BinaryFormulaOp) and current_formula.op in ["&&", "&"]:
+        if isinstance(current_formula, ModalFormula) and current_formula.modality == 'box':
+            safety_modal_formula = current_formula
+        elif isinstance(current_formula, BinaryFormulaOp) and current_formula.op in ["&&", "&"]:
             if isinstance(current_formula.left, ModalFormula) and current_formula.left.modality == 'box':
                 safety_modal_formula = current_formula.left
             if isinstance(current_formula.right, ModalFormula) and current_formula.right.modality == 'diamond':
@@ -282,13 +284,18 @@ class GymnasiumEnvironmentGenerator:
                     liveness_modal_formula = safety_modal_formula.formula.right
                     safety_modal_formula = ModalFormula(modality='box', program=safety_modal_formula.program, formula=safety_modal_formula.formula.left)
 
-        if safety_modal_formula and isinstance(safety_modal_formula.program, VarRef):
-            hp_name = safety_modal_formula.program.name
-            ode_block = self._resolve_hp_to_ode(hp_name)
-            if ode_block:
-                program_ode_str = self._hp_to_string(ode_block)
-            else:
-                raise ValueError(f"Could not resolve ODE block from hybrid program '{hp_name}'")
+        if safety_modal_formula is not None:
+            program = safety_modal_formula.program
+            if isinstance(program, VarRef):
+                hp_name = program.name
+                ode_block = self._resolve_hp_to_ode(hp_name)
+                if ode_block:
+                    program_ode_str = self._hp_to_string(ode_block)
+                else:
+                    raise ValueError(f"Could not resolve ODE block from hybrid program '{hp_name}'")
+            elif hasattr(program, 'programs'):
+                # Generated programs can also be explicit hybrid-program blocks that are already in AST form.
+                program_ode_str = self._hp_to_string(program)
 
             try:
                 goal_formula_str = self._formula_to_string_python(safety_modal_formula.formula)
@@ -336,6 +343,11 @@ class GymnasiumEnvironmentGenerator:
 
         for definition in archive_entry.definitions.defs:
             if isinstance(definition, FuncDef):
+                if not definition.args and isinstance(definition.body, VarRef) and definition.body.name == definition.name:
+                    # Bare declarations such as `Real ep;` are symbolic constants, not zero-arg functions.
+                    # Keep them as constants so they do not generate self-recursive `self._ep_impl()` calls.
+                    self.config.constants.append(ConstantDefinitionConfig(name=definition.name, value="1.0"))
+                    continue
                 self.func_definition_map[definition.name] = definition
             elif isinstance(definition, PredDef):
                 self.pred_definition_map[definition.name] = definition
@@ -373,6 +385,11 @@ class GymnasiumEnvironmentGenerator:
 
         for definition in archive_entry.definitions.defs:
             if isinstance(definition, FuncDef):
+                if not definition.args and isinstance(definition.body, VarRef) and definition.body.name == definition.name:
+                    # Treat implicit constant declarations such as `Real ep;` as constants with a safe default value.
+                    self.config.constants.append(ConstantDefinitionConfig(name=definition.name, value="1.0"))
+                    continue
+
                 const_annotation = definition.annotations.get('const')
                 if const_annotation:
                     value = const_annotation.get('value')
