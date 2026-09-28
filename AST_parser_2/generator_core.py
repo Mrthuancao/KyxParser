@@ -48,6 +48,25 @@ class GymnasiumEnvironmentGenerator:
         self.hp_definition_map: Dict[str, HPDef] = {}
         self.func_definition_map: Dict[str, FuncDef] = {}
         self.pred_definition_map: Dict[str, PredDef] = {}
+        # Reused to parse standalone dL expressions found inside annotation values
+        # (e.g. `@progress: reward=xr - waypointStartDist(xg)`).
+        self._expr_parser = KeYmaeraParser("")
+
+    def _annotation_value_to_python_expr(self, value: Any) -> str:
+        """Converts an `@progress`/`@safety` annotation value into a Python-evaluable expression
+        string. Plain numbers (the common case, e.g. `reward=1000`) pass through unchanged; a
+        value that failed numeric parsing (e.g. `reward=xr - waypointStartDist(xg)`) is a raw dL
+        expression string, so it's parsed as a Term and converted the same way user-defined
+        function bodies are, letting the reward/penalty be shaped by the model itself."""
+        if isinstance(value, (int, float)):
+            return str(value)
+        if isinstance(value, str):
+            try:
+                term = self._expr_parser.parse_term(expression=value)
+                return self._term_to_string_python(term)
+            except Exception:
+                return value
+        return str(value)
 
     def _indent(self, text: str) -> str:
         lines = text.splitlines()
@@ -283,10 +302,11 @@ class GymnasiumEnvironmentGenerator:
         walk(self.hp_definition_map[hp_name].body)
         return invariants
 
-    def _find_safety_penalty(self, *formulas: Formula, default: float = -100.0) -> float:
+    def _find_safety_penalty(self, *formulas: Formula, default: str = "-100.0") -> str:
         """Searches formulas (loop invariants, safety postcondition, ...) for a PredicateCall
-        whose definition carries an `@safety: penalty=X` annotation, returning the first X found."""
-        def search(node) -> Optional[float]:
+        whose definition carries an `@safety: penalty=X` annotation, returning the first X found
+        as a Python-evaluable expression string (X may be a plain number or a dL expression)."""
+        def search(node) -> Optional[str]:
             if node is None:
                 return None
             if isinstance(node, PredicateCall):
@@ -294,7 +314,7 @@ class GymnasiumEnvironmentGenerator:
                 if pred_def:
                     safety_annotation = pred_def.annotations.get('safety')
                     if safety_annotation and 'penalty' in safety_annotation:
-                        return float(safety_annotation['penalty'])
+                        return self._annotation_value_to_python_expr(safety_annotation['penalty'])
                 for arg in node.args:
                     found = search(arg)
                     if found is not None:
@@ -392,7 +412,7 @@ class GymnasiumEnvironmentGenerator:
             *raw_invariant_formulas,
             safety_modal_formula.formula if safety_modal_formula is not None else None
         )
-        not_safe_str = f"({safety_penalty} if ({termination_condition_str}) else 0.0)"
+        not_safe_str = f"(({safety_penalty}) if ({termination_condition_str}) else 0.0)"
 
         if liveness_modal_formula and isinstance(liveness_modal_formula.formula, PredicateCall):
             ensure_pred_call = liveness_modal_formula.formula
@@ -401,8 +421,8 @@ class GymnasiumEnvironmentGenerator:
             if ensure_pred_def:
                 progress_annotation = ensure_pred_def.annotations.get('progress')
                 if progress_annotation:
-                    reward_value = progress_annotation.get('reward', 0.0)
-                    reward_function_str = f"{reward_value} if ({ensure_goal_str}) else {not_safe_str}"
+                    reward_value = self._annotation_value_to_python_expr(progress_annotation.get('reward', 0.0))
+                    reward_function_str = f"({reward_value}) if ({ensure_goal_str}) else {not_safe_str}"
                 else:
                     reward_function_str = f"1.0 if ({ensure_goal_str}) else {not_safe_str}"
             else:
