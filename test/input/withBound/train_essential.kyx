@@ -42,7 +42,7 @@ SharedDefinitions
   };
 End.
 
-ArchiveEntry "ICFEM09/ETCS Essentials"
+Theorem "ICFEM09/ETCS Essentials"
 
 /**
  * Essentials of European Train Control System (ETCS)
@@ -57,6 +57,9 @@ Definitions
 
   /* loop invariant: always maintain sufficient stopping distance */
   Bool loopInv(Real m, Real z, Real v) <-> v >= 0 & m-z >= stopDist(v);
+
+  /* initial condition: system starts in a state satisfying the loop invariant */
+  Bool initial(Real m, Real z, Real v) <-> v >= 0 & m-z >= stopDist(v);
 
   /* train controller */
   HP ctrl ::= {

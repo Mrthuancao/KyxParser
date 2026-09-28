@@ -73,8 +73,10 @@ class KeYmaeraParser:
             self._consume_token()
             program = self._parse_hp_choice_expression()
             self._expect_token(']')
-            # The formula part must be a formula, so call parse_formula_expression
-            formula_part = self._parse_formula_expression()
+            # [hp]F binds tighter than &,|,->,<->, so F must not swallow trailing connectives
+            # (e.g. `[a]P & Q` must parse as `([a]P) & Q`, not `[a](P & Q)`). A parenthesized F
+            # still parses fully since '(' resets to min_precedence=0 internally.
+            formula_part = self._parse_formula_expression(self.operator_precedence['&'] + 1)
             if not isinstance(formula_part, Formula):
                 formula_part = self._convert_term_to_predicate_call(formula_part, "Modal operator expects a formula, but got a term: ")
             return ModalFormula('box', program, formula_part)
@@ -82,8 +84,8 @@ class KeYmaeraParser:
             self._consume_token()
             program = self._parse_hp_choice_expression()
             self._expect_token('>')
-            # The formula part must be a formula, so call parse_formula_expression
-            formula_part = self._parse_formula_expression()
+            # See box modality above: bind tighter than the logical connectives.
+            formula_part = self._parse_formula_expression(self.operator_precedence['&'] + 1)
             if not isinstance(formula_part, Formula):
                 formula_part = self._convert_term_to_predicate_call(formula_part, "Modal operator expects a formula, but got a term: ")
             return ModalFormula('diamond', program, formula_part)
@@ -878,19 +880,28 @@ class KeYmaeraParser:
             name = kind_prefix_match.group(2).strip()
 
         # 2. Locate and Extract Raw Text for Main Sections
-        definitions_section_match = re.search(r'Definitions\s*(.*?)\s*End\.', self.lexer.text, re.DOTALL)
-        program_variables_section_match = re.search(r'ProgramVariables\s*(.*?)\s*End\.', self.lexer.text, re.DOTALL)
-        # FIX: Adjusted regex to be more robust for End. followed by any whitespace or EOF
-        problem_section_match = re.search(r'Problem\s*(.*?)\s*End\.\s*', self.lexer.text, re.DOTALL)
+        # NOTE: search only the text after the Theorem header so entry-specific sections
+        # (Definitions/ProgramVariables/Problem) aren't confused with a preceding SharedDefinitions block.
+        text_after_theorem = self.lexer.text[theorem_match.end():]
 
-        if not (definitions_section_match and program_variables_section_match and problem_section_match):
+        # SharedDefinitions (if present) is shared across archive entries and lives before the Theorem header.
+        shared_definitions_section_match = re.search(r'SharedDefinitions\s*(.*?)\s*End\.', self.lexer.text, re.DOTALL)
+        definitions_section_match = re.search(r'Definitions\s*(.*?)\s*End\.', text_after_theorem, re.DOTALL)
+        program_variables_section_match = re.search(r'ProgramVariables\s*(.*?)\s*End\.', text_after_theorem, re.DOTALL)
+        # FIX: Adjusted regex to be more robust for End. followed by any whitespace or EOF
+        problem_section_match = re.search(r'Problem\s*(.*?)\s*End\.\s*', text_after_theorem, re.DOTALL)
+
+        if not (shared_definitions_section_match or definitions_section_match) or not (program_variables_section_match and problem_section_match):
             missing_sections = []
-            if not definitions_section_match: missing_sections.append("Definitions")
+            if not (shared_definitions_section_match or definitions_section_match): missing_sections.append("Definitions")
             if not program_variables_section_match: missing_sections.append("ProgramVariables")
             if not problem_section_match: missing_sections.append("Problem")
             raise ValueError(f"Missing sections in the model file: {', '.join(missing_sections)}.")
 
-        raw_definitions_text = definitions_section_match.group(1)
+        # Merge SharedDefinitions (if any) with the entry-specific Definitions block.
+        raw_definitions_text = "\n".join(
+            m.group(1) for m in (shared_definitions_section_match, definitions_section_match) if m
+        )
         raw_program_variables_text = program_variables_section_match.group(1)
         raw_problem_text_with_comments = problem_section_match.group(1)
 
