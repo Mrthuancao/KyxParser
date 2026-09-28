@@ -252,6 +252,76 @@ class GymnasiumEnvironmentGenerator:
 
         return find_ode_in_hp(current_hp_body, [hp_name])
 
+    def _collect_loop_invariants(self, hp_name: str, _visited: Optional[set] = None) -> List[Formula]:
+        """Walks a hybrid program (resolving named HP references) and collects every
+        `@invariant(...)` formula attached to an Iteration node."""
+        if _visited is None:
+            _visited = set()
+        if hp_name in _visited or hp_name not in self.hp_definition_map:
+            return []
+        _visited.add(hp_name)
+
+        invariants: List[Formula] = []
+
+        def walk(node):
+            if isinstance(node, Iteration):
+                if node.invariant is not None:
+                    invariants.append(node.invariant)
+                walk(node.program)
+            elif isinstance(node, Sequence):
+                for p in node.programs:
+                    walk(p)
+            elif isinstance(node, Choice):
+                walk(node.left)
+                walk(node.right)
+            elif isinstance(node, HPBlock):
+                walk(node.program)
+            elif isinstance(node, VarRef):
+                invariants.extend(self._collect_loop_invariants(node.name, _visited))
+            # Assignment / NondetAssignment / Test / ODE have no nested invariants.
+
+        walk(self.hp_definition_map[hp_name].body)
+        return invariants
+
+    def _find_safety_penalty(self, *formulas: Formula, default: float = -100.0) -> float:
+        """Searches formulas (loop invariants, safety postcondition, ...) for a PredicateCall
+        whose definition carries an `@safety: penalty=X` annotation, returning the first X found."""
+        def search(node) -> Optional[float]:
+            if node is None:
+                return None
+            if isinstance(node, PredicateCall):
+                pred_def = self.pred_definition_map.get(node.name)
+                if pred_def:
+                    safety_annotation = pred_def.annotations.get('safety')
+                    if safety_annotation and 'penalty' in safety_annotation:
+                        return float(safety_annotation['penalty'])
+                for arg in node.args:
+                    found = search(arg)
+                    if found is not None:
+                        return found
+                return None
+            if isinstance(node, (BinaryFormulaOp, BinaryTermOp)):
+                return search(node.left) or search(node.right)
+            if isinstance(node, (UnaryFormulaOp, UnaryTermOp)):
+                return search(node.operand)
+            if isinstance(node, Comparison):
+                return search(node.left) or search(node.right)
+            if isinstance(node, FunctionCall):
+                for arg in node.args:
+                    found = search(arg)
+                    if found is not None:
+                        return found
+                return None
+            if isinstance(node, Quantifier):
+                return search(node.body)
+            return None
+
+        for formula in formulas:
+            found = search(formula)
+            if found is not None:
+                return found
+        return default
+
     def _extract_problem_components(self, problem_formula: Formula) -> Dict[str, Any]:
         # Implementation mirrors previous logic; kept compact for readability
         initial_condition = "True"
@@ -284,6 +354,8 @@ class GymnasiumEnvironmentGenerator:
                     liveness_modal_formula = safety_modal_formula.formula.right
                     safety_modal_formula = ModalFormula(modality='box', program=safety_modal_formula.program, formula=safety_modal_formula.formula.left)
 
+        raw_invariant_formulas: List[Formula] = []
+
         if safety_modal_formula is not None:
             program = safety_modal_formula.program
             if isinstance(program, VarRef):
@@ -293,6 +365,7 @@ class GymnasiumEnvironmentGenerator:
                     program_ode_str = self._hp_to_string(ode_block)
                 else:
                     raise ValueError(f"Could not resolve ODE block from hybrid program '{hp_name}'")
+                raw_invariant_formulas = self._collect_loop_invariants(hp_name)
             elif hasattr(program, 'programs'):
                 # Generated programs can also be explicit hybrid-program blocks that are already in AST form.
                 program_ode_str = self._hp_to_string(program)
@@ -304,6 +377,23 @@ class GymnasiumEnvironmentGenerator:
 
             termination_condition_str = f"(not ({goal_formula_str}))"
 
+        for inv_formula in raw_invariant_formulas:
+            try:
+                inv_formula_str = self._formula_to_string_python(inv_formula)
+            except Exception:
+                continue
+            loop_invariants.append({"formula_str": inv_formula_str})
+            termination_condition_str = f"({termination_condition_str} or (not ({inv_formula_str})))"
+
+        # `@safety: penalty=X` on a loop-invariant predicate (or the safety postcondition itself)
+        # gives the model author's intended penalty for violating that condition; fall back to a
+        # generic -100.0 if the model doesn't declare one.
+        safety_penalty = self._find_safety_penalty(
+            *raw_invariant_formulas,
+            safety_modal_formula.formula if safety_modal_formula is not None else None
+        )
+        not_safe_str = f"({safety_penalty} if ({termination_condition_str}) else 0.0)"
+
         if liveness_modal_formula and isinstance(liveness_modal_formula.formula, PredicateCall):
             ensure_pred_call = liveness_modal_formula.formula
             ensure_pred_def = self.pred_definition_map.get(ensure_pred_call.name)
@@ -312,18 +402,13 @@ class GymnasiumEnvironmentGenerator:
                 progress_annotation = ensure_pred_def.annotations.get('progress')
                 if progress_annotation:
                     reward_value = progress_annotation.get('reward', 0.0)
-                    reward_function_str = f"{reward_value} if ({ensure_goal_str}) else -0.1"
+                    reward_function_str = f"{reward_value} if ({ensure_goal_str}) else {not_safe_str}"
                 else:
-                    reward_function_str = f"1.0 if ({ensure_goal_str}) else -0.01"
+                    reward_function_str = f"1.0 if ({ensure_goal_str}) else {not_safe_str}"
             else:
-                reward_function_str = f"1.0 if ({ensure_goal_str}) else -0.01"
+                reward_function_str = f"1.0 if ({ensure_goal_str}) else {not_safe_str}"
         else:
-            reward_function_str = f"1.0 if ({goal_formula_str}) else -0.01"
-
-        for inv_data in loop_invariants:
-            inv_formula_str = inv_data.get("formula_str")
-            if inv_formula_str:
-                termination_condition_str = f"({termination_condition_str} or (not ({inv_formula_str})))"
+            reward_function_str = f"1.0 if ({goal_formula_str}) else {not_safe_str}"
 
         return {
             "initial_condition": initial_condition,

@@ -277,17 +277,6 @@ def main():
     ]
     gdelta = 40.0
 
-    # The generator's default reward is `1000 if ensure(...) else -0.1`. That -0.1-per-step
-    # "alive penalty" combined with a termination condition that carries NO penalty of its own
-    # (only an outright ODE-solver crash gets -100; violating the safety postcondition to end
-    # the episode early does not) makes "drive straight through the goal zone to end the episode
-    # ASAP" cheaper than surviving. Empirically this shows up as episode length shrinking while
-    # reward "improves" over training -- the agent learns to fail fast, not to succeed. Fix: make
-    # surviving free (0.0) and attach the -100 penalty to violating the actual safety postcondition
-    # (not just solver crashes), so ending early is never advantageous.
-    car2_goal_str = "((xr < self._waypointEndDist_impl(xg)) and (not ((T <= 0.0)) or (self._ensure_impl(xr, vr, xg))))"
-    car2_reward_override = f"1000 if (self._ensure_impl(xr, vr, xg)) else (-100 if (not ({car2_goal_str})) else 0.0)"
-
     def make_env(buffer_capacity: int):
         # An untrained/exploring policy often ends episodes almost immediately (it violates the
         # ODE domain), which drains the initial-state buffer far faster than a well-behaved
@@ -295,7 +284,6 @@ def main():
         # slow (or fails outright), so size the buffer to cover a full training run up front.
         env = EnvClass(render_mode=None, config_override={
             'constants': car2_constants,
-            'reward_function_body': car2_reward_override,
             # Default max_step (0.001) forces >=200 forced RK45 sub-steps per control cycle
             # (ep=0.2), each doing an expensive SymPy substitution -> ~16 steps/sec. Raising it
             # cuts forced sub-steps ~20x (measured ~230+ steps/sec) with no accuracy loss beyond
