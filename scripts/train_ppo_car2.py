@@ -119,14 +119,15 @@ def plot_training_curve(callback: EpisodeStatsCallback, out_path: Path):
     print(f"Saved training curve to {out_path}")
 
 
-def reached_waypoint_from_rewards(reward_history: list) -> bool:
-    """The model's success reward is +1000 (vs. 0/-100 otherwise), so any step near that value
-    unambiguously means the real `ensure(xr,vr,xg)` condition fired -- more reliable than
-    inspecting only the final state, which can look deceptively "successful" right at a crash."""
-    return any(r >= 500 for r in reward_history)
+def reached_waypoint_from_rewards(reward_history: list, success_threshold: float) -> bool:
+    """The model's success reward is a large positive spike (vs. 0/negative otherwise), so any
+    step near that value unambiguously means the real `ensure(xr,vr,xg)` condition fired --
+    more reliable than inspecting only the final state, which can look deceptively "successful"
+    right at a crash."""
+    return any(r >= success_threshold for r in reward_history)
 
 
-def run_eval_episode(env, model, out_path: Path, gdelta: float):
+def run_eval_episode(env, model, out_path: Path, gdelta: float, success_threshold: float):
     """Runs one episode and plots the car's position (vs goal), velocity, acceleration, reward."""
     obs, info = env.reset()
     state_history = [dict(info.get('state', {}))]
@@ -148,7 +149,7 @@ def run_eval_episode(env, model, out_path: Path, gdelta: float):
     vr_series = [s.get('vr', np.nan) for s in state_history]
     ar_series = [s.get('ar', np.nan) for s in state_history]
     xg_final = state_history[-1].get('xg', np.nan)
-    success = reached_waypoint_from_rewards(reward_history)
+    success = reached_waypoint_from_rewards(reward_history, success_threshold)
 
     fig, axes = plt.subplots(4, 1, figsize=(9, 11), sharex=True)
 
@@ -183,7 +184,7 @@ def run_eval_episode(env, model, out_path: Path, gdelta: float):
             'truncated': truncated, 'reached_waypoint': success}
 
 
-def evaluate_policy_metrics(env, model, n_episodes: int, gdelta: float, out_path: Path):
+def evaluate_policy_metrics(env, model, n_episodes: int, gdelta: float, success_threshold: float, out_path: Path):
     """Runs n_episodes with the trained policy, plots a validation graph, and prints metrics."""
     rewards = []
     lengths = []
@@ -207,7 +208,7 @@ def evaluate_policy_metrics(env, model, n_episodes: int, gdelta: float, out_path
         lengths.append(step)
         if terminated:
             safety_violations += 1
-        successes.append(reached_waypoint_from_rewards(episode_rewards))
+        successes.append(reached_waypoint_from_rewards(episode_rewards, success_threshold))
 
     success_rate = float(np.mean(successes)) if successes else 0.0
 
@@ -277,6 +278,16 @@ def main():
     ]
     gdelta = 40.0
 
+    # The generator's reward is on the model's declared scale (+1000/-1000/0, from the file's own
+    # @progress/@safety annotations). That magnitude is too large for PPO's default value-function
+    # learning rate: value_loss swings between ~100 and ~30,000 across updates, and ep_rew_mean
+    # oscillates/regresses instead of climbing steadily. Rescale to +10/-10/0 for training stability;
+    # the *relative* shape of the reward (and hence the optimal policy) is unchanged.
+    reward_scale = 0.01
+    raw_reward_expr = EnvClass().config['reward_function_body']
+    scaled_reward_expr = f"({raw_reward_expr}) * {reward_scale}"
+    success_threshold = 500.0 * reward_scale  # half of the model's +1000 success bonus, rescaled
+
     def make_env(buffer_capacity: int):
         # An untrained/exploring policy often ends episodes almost immediately (it violates the
         # ODE domain), which drains the initial-state buffer far faster than a well-behaved
@@ -284,6 +295,12 @@ def main():
         # slow (or fails outright), so size the buffer to cover a full training run up front.
         env = EnvClass(render_mode=None, config_override={
             'constants': car2_constants,
+            'reward_function_body': scaled_reward_expr,
+            # The ODE-solver/domain-violation penalty is a separate hardcoded constant (-100.0)
+            # from `reward_function_body`, so it must be rescaled to match or it dominates the
+            # signal (this is the most common failure mode -- frequent "Differential domain
+            # constraint violated" crashes).
+            'ode_failure_penalty': -100.0 * reward_scale,
             # Default max_step (0.001) forces >=200 forced RK45 sub-steps per control cycle
             # (ep=0.2), each doing an expensive SymPy substitution -> ~16 steps/sec. Raising it
             # cuts forced sub-steps ~20x (measured ~230+ steps/sec) with no accuracy loss beyond
@@ -306,7 +323,9 @@ def main():
         print("WARNING: action space is Discrete(1) — the generated model exposes no "
               "controllable decision variable, so the PPO agent has nothing meaningful to learn.")
 
-    model = PPO('MlpPolicy', train_env, verbose=1)
+    # ent_coef adds an exploration bonus so the policy doesn't prematurely collapse to a narrow
+    # "just survive" behavior before ever discovering the sparse success reward.
+    model = PPO('MlpPolicy', train_env, verbose=1, ent_coef=0.01)
 
     callback = EpisodeStatsCallback()
     model.learn(total_timesteps=args.timesteps, callback=callback, progress_bar=True)
@@ -319,8 +338,8 @@ def main():
 
     eval_buffer_capacity = min(max((args.eval_episodes + 1) * 210, 2000), 30000)
     eval_env = make_env(eval_buffer_capacity)
-    run_eval_episode(eval_env, model, args.out_dir / f"{args.dl_path.stem.lower()}_episode.png", gdelta)
-    evaluate_policy_metrics(eval_env, model, args.eval_episodes, gdelta,
+    run_eval_episode(eval_env, model, args.out_dir / f"{args.dl_path.stem.lower()}_episode.png", gdelta, success_threshold)
+    evaluate_policy_metrics(eval_env, model, args.eval_episodes, gdelta, success_threshold,
                              args.out_dir / f"{args.dl_path.stem.lower()}_validation.png")
 
     train_env.close()

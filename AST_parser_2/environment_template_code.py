@@ -808,7 +808,7 @@ class KeYmaeraGymEnv(gym.Env):
         self._debug_print(f"DEBUG: step method: solver_failed = {{solver_failed}}")
         if solver_failed:
             terminated = True # Terminate if ODE solver fails or domain constraint violated
-            reward += -100.0 # Penalty for ODE failure
+            reward += self.config.get('ode_failure_penalty', -100.0) # Penalty for ODE failure (configurable)
 
         # Evaluate reward (from problem definition)
         reward_expr = self.config.get('reward_function_body', '0.0')
