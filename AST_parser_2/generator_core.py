@@ -450,7 +450,7 @@ class GymnasiumEnvironmentGenerator:
             if 'progress' in pred_def.annotations:
                 progress_annotation = pred_def.annotations['progress']
                 components = self._extract_reward_components_from_annotation(progress_annotation)
-                args_str = ", ".join([f"arg{i}" for i in range(len(pred_def.args))])
+                args_str = ", ".join([arg.name for arg in pred_def.args])
                 pred_call_str = f"self._{pred_name}_impl({args_str})" if pred_def.args else f"self._{pred_name}_impl()"
                 reward_components_list.append({
                     'predicate_name': pred_name,
@@ -461,7 +461,7 @@ class GymnasiumEnvironmentGenerator:
             elif 'safety' in pred_def.annotations:
                 safety_annotation = pred_def.annotations['safety']
                 components = self._extract_reward_components_from_annotation(safety_annotation)
-                args_str = ", ".join([f"arg{i}" for i in range(len(pred_def.args))])
+                args_str = ", ".join([arg.name for arg in pred_def.args])
                 pred_call_str = f"self._{pred_name}_impl({args_str})" if pred_def.args else f"self._{pred_name}_impl()"
                 reward_components_list.append({
                     'predicate_name': pred_name,
