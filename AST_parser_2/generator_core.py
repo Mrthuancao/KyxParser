@@ -342,6 +342,30 @@ class GymnasiumEnvironmentGenerator:
                 return found
         return default
 
+    def _extract_reward_components_from_annotation(self, annotation: Optional[Dict[str, Any]]) -> Dict[str, str]:
+        """Extracts shape, reward, and penalty from @safety, @progress, or @stability annotations.
+        According to the RL-Annotation DSL spec, rewards are calculated as:
+        R = shape_expr + (reward_val if φ is True, else penalty_val)
+        
+        Returns a dict with keys 'shape', 'reward', 'penalty', each as a Python-evaluable string.
+        Defaults to '0.0' for any missing component.
+        """
+        components = {
+            'shape': '0.0',
+            'reward': '0.0',
+            'penalty': '0.0'
+        }
+        
+        if annotation:
+            if 'shape' in annotation:
+                components['shape'] = self._annotation_value_to_python_expr(annotation['shape'])
+            if 'reward' in annotation:
+                components['reward'] = self._annotation_value_to_python_expr(annotation['reward'])
+            if 'penalty' in annotation:
+                components['penalty'] = self._annotation_value_to_python_expr(annotation['penalty'])
+        
+        return components
+
     def _extract_problem_components(self, problem_formula: Formula) -> Dict[str, Any]:
         # Implementation mirrors previous logic; kept compact for readability
         initial_condition = "True"
@@ -408,27 +432,67 @@ class GymnasiumEnvironmentGenerator:
         # `@safety: penalty=X` on a loop-invariant predicate (or the safety postcondition itself)
         # gives the model author's intended penalty for violating that condition; fall back to a
         # generic -100.0 if the model doesn't declare one.
+        # NOTE: Per the RL-Annotation DSL spec, safety predicates can also have shape= and reward= fields.
         safety_penalty = self._find_safety_penalty(
             *raw_invariant_formulas,
             safety_modal_formula.formula if safety_modal_formula is not None else None
         )
         not_safe_str = f"(({safety_penalty}) if ({termination_condition_str}) else 0.0)"
-
-        if liveness_modal_formula and isinstance(liveness_modal_formula.formula, PredicateCall):
-            ensure_pred_call = liveness_modal_formula.formula
-            ensure_pred_def = self.pred_definition_map.get(ensure_pred_call.name)
-            ensure_goal_str = self._formula_to_string_python(ensure_pred_call)
-            if ensure_pred_def:
-                progress_annotation = ensure_pred_def.annotations.get('progress')
-                if progress_annotation:
-                    reward_value = self._annotation_value_to_python_expr(progress_annotation.get('reward', 0.0))
-                    reward_function_str = f"({reward_value}) if ({ensure_goal_str}) else {not_safe_str}"
-                else:
-                    reward_function_str = f"1.0 if ({ensure_goal_str}) else {not_safe_str}"
-            else:
-                reward_function_str = f"1.0 if ({ensure_goal_str}) else {not_safe_str}"
+        # Collect reward contributions from ALL annotated predicates in the model.
+        # Per RL-Annotation DSL spec: R = shape_expr + (reward_val if φ is True, else penalty_val)
+        # KEY RULES:
+        # 1. @progress and @safety can annotate ANY predicate regardless of name/modality
+        # 2. A predicate can have ONLY ONE: either @progress or @safety, not both (mutually exclusive)
+        reward_components_list = []
+        
+        for pred_name, pred_def in self.pred_definition_map.items():
+            # Enforce mutual exclusivity: @progress OR @safety, not both
+            if 'progress' in pred_def.annotations:
+                progress_annotation = pred_def.annotations['progress']
+                components = self._extract_reward_components_from_annotation(progress_annotation)
+                args_str = ", ".join([f"arg{i}" for i in range(len(pred_def.args))])
+                pred_call_str = f"self._{pred_name}_impl({args_str})" if pred_def.args else f"self._{pred_name}_impl()"
+                reward_components_list.append({
+                    'predicate_name': pred_name,
+                    'predicate_str': pred_call_str,
+                    'components': components,
+                    'type': 'progress'
+                })
+            elif 'safety' in pred_def.annotations:
+                safety_annotation = pred_def.annotations['safety']
+                components = self._extract_reward_components_from_annotation(safety_annotation)
+                args_str = ", ".join([f"arg{i}" for i in range(len(pred_def.args))])
+                pred_call_str = f"self._{pred_name}_impl({args_str})" if pred_def.args else f"self._{pred_name}_impl()"
+                reward_components_list.append({
+                    'predicate_name': pred_name,
+                    'predicate_str': pred_call_str,
+                    'components': components,
+                    'type': 'safety'
+                })
+        
+        # Build the reward function by combining all components.
+        # Formula per spec: R = shape + (reward if φ true else penalty)
+        # When safe: sum up all contributions; when unsafe: apply safety_penalty override
+        if reward_components_list:
+            # Build a list of reward expressions, one per annotated predicate
+            reward_terms = []
+            for component in reward_components_list:
+                pred_str = component['predicate_str']
+                comps = component['components']
+                # Build: shape + (reward if pred else penalty)
+                term = f"(({comps['shape']}) + (({comps['reward']}) if ({pred_str}) else ({comps['penalty']})))"
+                reward_terms.append(term)
+            
+            # Sum all components when safe; apply safety_penalty when unsafe
+            combined_rewards = " + ".join(reward_terms)
+            reward_function_str = f"({combined_rewards}) if not ({termination_condition_str}) else ({safety_penalty})"
         else:
-            reward_function_str = f"1.0 if ({goal_formula_str}) else {not_safe_str}"
+            # Fallback to default behavior if no annotations found
+            if liveness_modal_formula and isinstance(liveness_modal_formula.formula, PredicateCall):
+                ensure_goal_str = self._formula_to_string_python(liveness_modal_formula.formula)
+                reward_function_str = f"1.0 if ({ensure_goal_str}) else {not_safe_str}"
+            else:
+                reward_function_str = f"1.0 if ({goal_formula_str}) else {not_safe_str}"
 
         return {
             "initial_condition": initial_condition,

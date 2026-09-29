@@ -84,7 +84,7 @@ Definitions
         }*@invariant(loopinv(xr, vr, xg, T))
     };
 
-    // @progress: reward=xr - waypointStartDist(xg), on_success=terminate:status=success, on_failure=terminate:status=failure
+    // @progress: shape=xr - waypointStartDist(xg), on_success=terminate:status=success, on_failure=terminate:status=failure
     Bool ensure(Real xr, Real vr, Real xg) <-> (
         waypointStartDist(xg) < xr & vr = 0
     );
