@@ -53,7 +53,7 @@ Definitions
     Bool assumptions(Real xr, Real vr, Real xg, Real T) <->              
         bounds() & initialState(xr, vr, xg, T);
 
-    // @safety: penalty=-50, on_failure=truncate:status=failure
+    // @safety: penalty=-0.05*vr, on_failure=truncate:status=failure
     Bool loopinv(Real xr, Real vr, Real xg, Real T) <-> ( // Added T to parameters as it's used in the invariant
         0 <= vr & vr <= Vmax & xr + stopDist(vr) < waypointEndDist(xg)
                 & (waypointStartDist(xg) < xr -> (vr = 0 | T >= stopTime(vr)))

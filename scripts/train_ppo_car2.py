@@ -213,10 +213,10 @@ def evaluate_policy_metrics(env, model, n_episodes: int, gdelta: float, out_path
             step += 1
         rewards.append(total_reward)
         lengths.append(step)
-        if terminated:
+        success = reached_waypoint_from_states(state_history, gdelta)
+        successes.append(success)
+        if terminated and not success:
             safety_violations += 1
-        successes.append(reached_waypoint_from_states(state_history, gdelta))
-
     success_rate = float(np.mean(successes)) if successes else 0.0
 
     fig, axes = plt.subplots(2, 1, figsize=(9, 8))
