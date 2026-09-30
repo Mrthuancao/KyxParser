@@ -290,7 +290,7 @@ def main():
     # penalty), so no script-side rescaling is needed here anymore. The ODE-solver/domain-crash
     # penalty is a separate hardcoded constant from `reward_function_body`, so it's set explicitly
     # to match the model's own -50 safety penalty scale (kept consistent, not rescaled).
-    ode_failure_penalty = -50.0
+    ode_failure_penalty = 0
 
     def make_env(buffer_capacity: int):
         # An untrained/exploring policy often ends episodes almost immediately (it violates the
