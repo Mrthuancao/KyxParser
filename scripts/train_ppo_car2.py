@@ -270,6 +270,11 @@ def main():
     args.out_dir.mkdir(parents=True, exist_ok=True)
     args.model_dir.mkdir(parents=True, exist_ok=True)
     env_out = proj_root / f"generated_{args.dl_path.stem.lower()}_env.py"
+    
+    # AUTO-DELETE old generated env to force fresh regeneration from model file
+    if env_out.exists():
+        env_out.unlink()
+        print(f"Deleted stale generated env: {env_out}")
 
     EnvClass = build_env_class(args.dl_path, args.env_name, env_out)
 
