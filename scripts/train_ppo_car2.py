@@ -5,9 +5,9 @@ driving toward a goal at `xg` within a `GDelta`-wide tolerance zone. There is no
 this model.
 
 Pipeline: parse car2.txt -> generate Gym env -> wrap with Monitor -> train PPO
-(stable-baselines3) -> plot training curve (reward + episode length) -> roll out one evaluation
-episode and plot car state trajectories (position/velocity/acceleration vs goal) -> run N
-validation episodes and plot per-episode success/failure -> print metrics.
+(stable-baselines3) -> plot training curve (reward + episode length) -> roll out multiple evaluation
+episodes and plot a sample of successful/failed trajectories -> run N validation episodes and plot 
+per-episode success/failure -> print metrics.
 
 Run from project root (d:/Reinforcement learning/kyx_parser) in the .venv:
 
@@ -134,29 +134,18 @@ def reached_waypoint_from_states(state_history: list, gdelta: float, vr_toleranc
     return False
 
 
-def run_eval_episode(env, model, out_path: Path, gdelta: float):
-    """Runs one episode and plots the car's position (vs goal), velocity, acceleration, reward."""
-    obs, info = env.reset()
-    state_history = [dict(info.get('state', {}))]
-    reward_history = []
-    terminated = truncated = False
-    total_reward = 0.0
-    step = 0
-    max_steps = getattr(env, 'max_episode_steps', 200)
-
-    while not (terminated or truncated) and step < max_steps:
-        action, _ = model.predict(obs, deterministic=True)
-        obs, reward, terminated, truncated, info = env.step(action)
-        reward_history.append(reward)
-        state_history.append(dict(info.get('state', {})))
-        total_reward += reward
-        step += 1
+def plot_single_episode(episode_data: dict, out_path: Path, gdelta: float):
+    """Plots a single episode's trajectory: position, velocity, acceleration, reward."""
+    state_history = episode_data['state_history']
+    reward_history = episode_data['reward_history']
+    success = episode_data['success']
+    total_reward = episode_data['total_reward']
+    steps = episode_data['steps']
 
     xr_series = [s.get('xr', np.nan) for s in state_history]
     vr_series = [s.get('vr', np.nan) for s in state_history]
     ar_series = [s.get('ar', np.nan) for s in state_history]
     xg_final = state_history[-1].get('xg', np.nan)
-    success = reached_waypoint_from_states(state_history, gdelta)
 
     fig, axes = plt.subplots(4, 1, figsize=(9, 11), sharex=True)
 
@@ -164,7 +153,7 @@ def run_eval_episode(env, model, out_path: Path, gdelta: float):
     axes[0].axhline(xg_final, color='tab:red', linestyle='--', label='xg (goal)')
     axes[0].axhspan(xg_final - gdelta, xg_final + gdelta, color='tab:green', alpha=0.15, label='goal zone (±GDelta)')
     axes[0].set_ylabel('Position')
-    axes[0].set_title(f"Evaluation episode: robot position vs goal ({'REACHED' if success else 'NOT REACHED'})")
+    axes[0].set_title(f"Episode: robot position vs goal ({'REACHED' if success else 'NOT REACHED'})")
     axes[0].legend(loc='best', fontsize='small')
 
     axes[1].plot(vr_series, color='tab:purple')
@@ -183,40 +172,49 @@ def run_eval_episode(env, model, out_path: Path, gdelta: float):
     fig.tight_layout()
     fig.savefig(out_path)
     plt.close(fig)
-    print(f"Saved car state trajectory plot to {out_path}")
-
-    print(f"Evaluation episode: steps={step}, total_reward={total_reward:.3f}, "
-          f"terminated={terminated}, truncated={truncated}, reached_waypoint={success}")
-    return {'steps': step, 'total_reward': total_reward, 'terminated': terminated,
-            'truncated': truncated, 'reached_waypoint': success}
+    print(f"Saved episode plot to {out_path} (steps={steps}, total_reward={total_reward:.3f})")
 
 
-def evaluate_policy_metrics(env, model, n_episodes: int, gdelta: float, out_path: Path):
-    """Runs n_episodes with the trained policy, plots a validation graph, and prints metrics."""
-    rewards = []
-    lengths = []
-    successes = []
-    safety_violations = 0
-    max_steps = getattr(env, 'max_episode_steps', 200)
-
+def collect_episodes(env, model, n_episodes: int, gdelta: float, max_steps: int = 200):
+    """Collects episode data (state history, rewards, success flag) for n episodes."""
+    episodes = []
     for _ in range(n_episodes):
         obs, info = env.reset()
         state_history = [dict(info.get('state', {}))]
+        reward_history = []
         terminated = truncated = False
         total_reward = 0.0
         step = 0
+
         while not (terminated or truncated) and step < max_steps:
             action, _ = model.predict(obs, deterministic=True)
             obs, reward, terminated, truncated, info = env.step(action)
+            reward_history.append(reward)
             state_history.append(dict(info.get('state', {})))
             total_reward += reward
             step += 1
-        rewards.append(total_reward)
-        lengths.append(step)
+
         success = reached_waypoint_from_states(state_history, gdelta)
-        successes.append(success)
-        if terminated and not success:
-            safety_violations += 1
+        episodes.append({
+            'state_history': state_history,
+            'reward_history': reward_history,
+            'success': success,
+            'total_reward': total_reward,
+            'steps': step,
+            'terminated': terminated,
+            'truncated': truncated
+        })
+
+    return episodes
+
+
+def evaluate_policy_metrics(episodes: list, gdelta: float, out_path: Path):
+    """Plots validation graph and prints metrics from collected episodes."""
+    rewards = [e['total_reward'] for e in episodes]
+    lengths = [e['steps'] for e in episodes]
+    successes = [e['success'] for e in episodes]
+    safety_violations = sum(1 for e in episodes if e['terminated'] and not e['success'])
+    n_episodes = len(episodes)
     success_rate = float(np.mean(successes)) if successes else 0.0
 
     fig, axes = plt.subplots(2, 1, figsize=(9, 8))
@@ -342,9 +340,25 @@ def main():
 
     eval_buffer_capacity = min(max((args.eval_episodes + 1) * 210, 2000), 30000)
     eval_env = make_env(eval_buffer_capacity)
-    run_eval_episode(eval_env, model, args.out_dir / f"{args.dl_path.stem.lower()}_episode.png", gdelta)
-    evaluate_policy_metrics(eval_env, model, args.eval_episodes, gdelta,
-                             args.out_dir / f"{args.dl_path.stem.lower()}_validation.png")
+    max_steps = getattr(eval_env.unwrapped, 'max_episode_steps', 200)
+
+    # Collect episodes for evaluation
+    episodes = collect_episodes(eval_env, model, args.eval_episodes, gdelta, max_steps)
+    
+    # Separate into successes and failures
+    successes = [e for e in episodes if e['success']]
+    failures = [e for e in episodes if not e['success']]
+    
+    # Plot sample successful episodes (up to 2)
+    for idx, ep in enumerate(successes[:2]):
+        plot_single_episode(ep, args.out_dir / f"{args.dl_path.stem.lower()}_success_{idx}.png", gdelta)
+    
+    # Plot sample failed episodes (up to 2)
+    for idx, ep in enumerate(failures[:2]):
+        plot_single_episode(ep, args.out_dir / f"{args.dl_path.stem.lower()}_failure_{idx}.png", gdelta)
+    
+    # Plot validation metrics
+    evaluate_policy_metrics(episodes, gdelta, args.out_dir / f"{args.dl_path.stem.lower()}_validation.png")
 
     train_env.close()
     eval_env.close()
