@@ -241,66 +241,81 @@ class GymnasiumEnvironmentGenerator:
             raise ValueError(f"Unsupported HybridProgram type: {type(hp)}")
 
     def _resolve_hp_to_ode(self, hp_name: str) -> Optional[ODE]:
-        if hp_name not in self.hp_definition_map:
+        hp_definition = self.hp_definition_map.get(hp_name)
+        if hp_definition is None:
             return None
-        current_hp_def = self.hp_definition_map[hp_name]
-        current_hp_body = current_hp_def.body
+        return self._find_ode_in_hp_node(hp_definition.body)
 
-        def find_ode_in_hp(hp_node: HybridProgram, path: List[str]) -> Optional[ODE]:
-            if isinstance(hp_node, ODE):
-                return hp_node
-            elif isinstance(hp_node, Sequence):
-                for sub_hp in hp_node.programs:
-                    ode = find_ode_in_hp(sub_hp, path)
-                    if ode:
-                        return ode
-            elif isinstance(hp_node, Choice):
-                ode = find_ode_in_hp(hp_node.left, path)
-                if ode:
+    def _find_ode_in_hp_node(self, hp_node: HybridProgram, visited: Optional[set] = None) -> Optional[ODE]:
+        if visited is None:
+            visited = set()
+        if isinstance(hp_node, ODE):
+            return hp_node
+        if isinstance(hp_node, Sequence):
+            for program in hp_node.programs:
+                ode = self._find_ode_in_hp_node(program, visited)
+                if ode is not None:
                     return ode
-                ode = find_ode_in_hp(hp_node.right, path)
-                if ode:
-                    return ode
-            elif isinstance(hp_node, Iteration):
-                return find_ode_in_hp(hp_node.program, path)
-            elif isinstance(hp_node, HPBlock):
-                return find_ode_in_hp(hp_node.program, path)
-            elif isinstance(hp_node, VarRef):
-                return self._resolve_hp_to_ode(hp_node.name)
-            return None
+        elif isinstance(hp_node, Choice):
+            return (self._find_ode_in_hp_node(hp_node.left, visited)
+                    or self._find_ode_in_hp_node(hp_node.right, visited))
+        elif isinstance(hp_node, (Iteration, HPBlock)):
+            return self._find_ode_in_hp_node(hp_node.program, visited)
+        elif isinstance(hp_node, VarRef) and hp_node.name not in visited:
+            visited.add(hp_node.name)
+            hp_definition = self.hp_definition_map.get(hp_node.name)
+            if hp_definition is not None:
+                return self._find_ode_in_hp_node(hp_definition.body, visited)
+        return None
 
-        return find_ode_in_hp(current_hp_body, [hp_name])
+    def _collect_loop_invariants_from_program(
+        self, hp_node: HybridProgram, visited: Optional[set] = None
+    ) -> List[Formula]:
+        if visited is None:
+            visited = set()
+        invariants: List[Formula] = []
+        if isinstance(hp_node, Iteration):
+            if hp_node.invariant is not None:
+                invariants.append(hp_node.invariant)
+            invariants.extend(self._collect_loop_invariants_from_program(hp_node.program, visited))
+        elif isinstance(hp_node, Sequence):
+            for program in hp_node.programs:
+                invariants.extend(self._collect_loop_invariants_from_program(program, visited))
+        elif isinstance(hp_node, Choice):
+            invariants.extend(self._collect_loop_invariants_from_program(hp_node.left, visited))
+            invariants.extend(self._collect_loop_invariants_from_program(hp_node.right, visited))
+        elif isinstance(hp_node, HPBlock):
+            invariants.extend(self._collect_loop_invariants_from_program(hp_node.program, visited))
+        elif isinstance(hp_node, VarRef) and hp_node.name not in visited:
+            visited.add(hp_node.name)
+            hp_definition = self.hp_definition_map.get(hp_node.name)
+            if hp_definition is not None:
+                invariants.extend(
+                    self._collect_loop_invariants_from_program(hp_definition.body, visited)
+                )
+        return invariants
+
+    def _serialize_ast_node(self, node: ASTNode) -> Dict[str, Any]:
+        serialized: Dict[str, Any] = {"_type": type(node).__name__}
+        for name, value in vars(node).items():
+            if isinstance(value, ASTNode):
+                serialized[name] = self._serialize_ast_node(value)
+            elif isinstance(value, list):
+                serialized[name] = [
+                    self._serialize_ast_node(item) if isinstance(item, ASTNode) else item
+                    for item in value
+                ]
+            else:
+                serialized[name] = value
+        return serialized
 
     def _collect_loop_invariants(self, hp_name: str, _visited: Optional[set] = None) -> List[Formula]:
         """Walks a hybrid program (resolving named HP references) and collects every
         `@invariant(...)` formula attached to an Iteration node."""
-        if _visited is None:
-            _visited = set()
-        if hp_name in _visited or hp_name not in self.hp_definition_map:
+        hp_definition = self.hp_definition_map.get(hp_name)
+        if hp_definition is None:
             return []
-        _visited.add(hp_name)
-
-        invariants: List[Formula] = []
-
-        def walk(node):
-            if isinstance(node, Iteration):
-                if node.invariant is not None:
-                    invariants.append(node.invariant)
-                walk(node.program)
-            elif isinstance(node, Sequence):
-                for p in node.programs:
-                    walk(p)
-            elif isinstance(node, Choice):
-                walk(node.left)
-                walk(node.right)
-            elif isinstance(node, HPBlock):
-                walk(node.program)
-            elif isinstance(node, VarRef):
-                invariants.extend(self._collect_loop_invariants(node.name, _visited))
-            # Assignment / NondetAssignment / Test / ODE have no nested invariants.
-
-        walk(self.hp_definition_map[hp_name].body)
-        return invariants
+        return self._collect_loop_invariants_from_program(hp_definition.body, _visited)
 
     def _find_safety_penalty(self, *formulas: Formula, default: str = "-100.0") -> str:
         """Searches formulas (loop invariants, safety postcondition, ...) for a PredicateCall
@@ -410,9 +425,11 @@ class GymnasiumEnvironmentGenerator:
                 else:
                     raise ValueError(f"Could not resolve ODE block from hybrid program '{hp_name}'")
                 raw_invariant_formulas = self._collect_loop_invariants(hp_name)
-            elif hasattr(program, 'programs'):
-                # Generated programs can also be explicit hybrid-program blocks that are already in AST form.
-                program_ode_str = self._hp_to_string(program)
+            else:
+                ode_block = self._find_ode_in_hp_node(program)
+                if ode_block is not None:
+                    program_ode_str = self._hp_to_string(ode_block)
+                raw_invariant_formulas = self._collect_loop_invariants_from_program(program)
 
             try:
                 goal_formula_str = self._formula_to_string_python(safety_modal_formula.formula)
@@ -429,6 +446,19 @@ class GymnasiumEnvironmentGenerator:
             loop_invariants.append({"formula_str": inv_formula_str})
             termination_condition_str = f"({termination_condition_str} or (not ({inv_formula_str})))"
 
+        safety_termination_condition_str = termination_condition_str
+        progress_success_conditions = []
+        for pred_name, pred_def in self.pred_definition_map.items():
+            annotation = pred_def.annotations.get('progress', {})
+            on_success = annotation.get('on_success', '')
+            if isinstance(on_success, str) and on_success.startswith('terminate'):
+                args_str = ", ".join(arg.name for arg in pred_def.args)
+                args = f"({args_str})" if args_str else "()"
+                progress_success_conditions.append(f"self._{pred_name}_impl{args}")
+        if progress_success_conditions:
+            success_condition = " or ".join(progress_success_conditions)
+            termination_condition_str = f"({termination_condition_str} or ({success_condition}))"
+
         # `@safety: penalty=X` on a loop-invariant predicate (or the safety postcondition itself)
         # gives the model author's intended penalty for violating that condition; fall back to a
         # generic -100.0 if the model doesn't declare one.
@@ -437,7 +467,7 @@ class GymnasiumEnvironmentGenerator:
             *raw_invariant_formulas,
             safety_modal_formula.formula if safety_modal_formula is not None else None
         )
-        not_safe_str = f"(({safety_penalty}) if ({termination_condition_str}) else 0.0)"
+        not_safe_str = f"(({safety_penalty}) if ({safety_termination_condition_str}) else 0.0)"
         # Collect reward contributions from ALL annotated predicates in the model.
         # Per RL-Annotation DSL spec: R = shape_expr + (reward_val if φ is True, else penalty_val)
         # KEY RULES:
@@ -485,7 +515,10 @@ class GymnasiumEnvironmentGenerator:
             
             # Sum all components when safe; apply safety_penalty when unsafe
             combined_rewards = " + ".join(reward_terms)
-            reward_function_str = f"({combined_rewards}) if not ({termination_condition_str}) else ({safety_penalty})"
+            reward_function_str = (
+                f"({combined_rewards}) if not ({safety_termination_condition_str}) "
+                f"else ({safety_penalty})"
+            )
         else:
             # Fallback to default behavior if no annotations found
             if liveness_modal_formula and isinstance(liveness_modal_formula.formula, PredicateCall):
@@ -575,6 +608,20 @@ class GymnasiumEnvironmentGenerator:
                 self.config.function_definitions.append(FuncDefConfig(name=definition.name, args=[arg.name for arg in definition.args], body=body_str))
             elif isinstance(definition, HPDef):
                 self.config.hp_definitions.append(HPDefConfig(name=definition.name, args=[], body=self._hp_to_string(definition.body)))
+
+        # Models without a direct continuous action can expose their named controller
+        # choice as the agent's discrete action (e.g. train-essential's `ctrl`).
+        if not any(variable.name == 'ar' for variable in self.config.variables):
+            controller = next(
+                (definition for definition in archive_entry.definitions.defs
+                 if isinstance(definition, HPDef) and definition.name in {'controlFunc', 'ctrl'}),
+                None
+            )
+            if controller is not None:
+                controller_program = controller.body
+                while isinstance(controller_program, HPBlock):
+                    controller_program = controller_program.program
+                self.config.control_flow_program_ast_json = self._serialize_ast_node(controller_program)
 
         for var_config in self.config.variables:
             if var_config.initial_value:

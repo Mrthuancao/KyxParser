@@ -187,7 +187,7 @@ class KeYmaeraGymEnv(gym.Env):
             operand_str = self._term_to_python_eval_str_env(term.operand)
             if term.op == "'":
                 raise ValueError(f"Derivative operator '{term.op}' not supported in Python term evaluation in environment: {term}")
-                return f"{term.op}({operand_str})"
+            return f"{term.op}({operand_str})"
         elif isinstance(term, FunctionCall):
             args_str = ", ".join(self._term_to_python_eval_str_env(arg) for arg in term.args)
             # Call the bound method from user_defined_functions
@@ -269,9 +269,8 @@ class KeYmaeraGymEnv(gym.Env):
             while q:
                 node = q.popleft()
                 if isinstance(node, Choice):
-                    # Add right branch first to process left-to-right from popleft
-                    q.append(node.right)
                     q.append(node.left)
+                    q.append(node.right)
                 else: # This is a leaf branch (e.g., HPBlock, Assignment, Test, Sequence)
                     num_choices += 1
             
@@ -662,9 +661,8 @@ class KeYmaeraGymEnv(gym.Env):
         while q and selected_branch is None:
             node = q.popleft()
             if isinstance(node, Choice):
-                # Add right branch first to process left-to-right from popleft
-                q.append(node.right)
                 q.append(node.left)
+                q.append(node.right)
             else: # This is a leaf branch
                 if current_choice_index == action_choice:
                     selected_branch = node
@@ -699,7 +697,7 @@ class KeYmaeraGymEnv(gym.Env):
                 status["terminated"] = status["terminated"] or sub_status["terminated"]
                 status["reward_delta"] += sub_status["reward_delta"]
                 if status["terminated"]: # If any part of sequence terminates, the whole sequence terminates
-                    status["info"] = "sequence_terminated"
+                    status["info"] = sub_status["info"] or "sequence_terminated"
                     break
             return status
 

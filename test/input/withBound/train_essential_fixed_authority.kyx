@@ -1,0 +1,74 @@
+SharedDefinitions
+  // @const: bound=[0.1:0.1]; def="Maximum duration of one train control cycle"
+  Real ep;
+  // @const: bound=[1:1]; def="Available braking force"
+  Real b;
+  // @const: bound=[1:1]; def="Maximum train acceleration"
+  Real A;
+
+  Real stopDist(Real v) = v^2/(2*b);
+
+  Bool safe(Real m, Real z, Real v) <-> z <= m;
+End.
+
+Theorem "ICFEM09/ETCS Essentials: Fixed authority reach-and-stop task"
+
+Definitions
+  // @const: bound=[10:10]; def="Fixed end of movement authority"
+  Real m;
+  // @const: bound=[0.2:0.2]; def="Maximum speed accepted at the arrival zone"
+  Real d;
+  // @const: bound=[0.5:0.5]; def="Width of the safe arrival zone before the authority limit"
+  Real delta;
+
+  Real accCompensation(Real v) = (((A/b) + 1)*((A/2)*ep^2 + ep*v));
+  Real SB(Real v) = stopDist(v) + accCompensation(v);
+
+  // Maintain enough distance to stop before the fixed authority limit.
+  // @safety: shape=-0.05*v^2; reward=0.25; penalty=-100.0; on_failure=terminate:status=failure
+  Bool loopInv(Real m, Real z, Real v) <-> v >= 0 & m-z >= stopDist(v);
+
+  Bool initial(Real m, Real z, Real v) <-> v >= 0 & m-z >= stopDist(v);
+
+  // @progress: shape=0.01*z; reward=100.0; on_success=terminate:status=success
+  Bool reached(Real m, Real z, Real v, Real d, Real delta) <->
+    z >= m-delta & z <= m & v >= 0 & v <= d;
+
+  HP ctrl ::= {
+        ?m - z <= SB(v); a := -b;
+     ++ ?m - z >= SB(v); a := A;
+  };
+
+  HP drive ::= {
+    t := 0;
+    {z'=v, v'=a, t'=1 & v >= 0 & t <= ep}
+  };
+End.
+
+ProgramVariables
+  // @var: bound=[-1:1]; plot=line; def="Actual train acceleration"
+  Real a;
+  // @var: bound=[0:3]; plot=line; def="Train velocity"
+  Real v;
+  // @var: bound=[0:5]; plot=line; def="Train position; authority limit is fixed at m=10"
+  Real z;
+  // @var: bound=[0:0.1]; plot=line; def="Elapsed time within the current control cycle"
+  Real t;
+End.
+
+Problem
+initial(m,z,v) ->
+  [
+    {
+      ctrl;
+      drive;
+    }*@invariant(loopInv(m,z,v))
+  ] safe(m,z,v)
+  &
+  <
+    {
+      ctrl;
+      drive;
+    }*@invariant(loopInv(m,z,v))
+  > reached(m,z,v,d,delta)
+End.

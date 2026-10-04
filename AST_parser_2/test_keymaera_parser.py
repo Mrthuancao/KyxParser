@@ -7,7 +7,7 @@ import os # Import os module for file path manipulation
 
 # Assuming keymaera_parser.py, keymaera_lexer.py, and ast_config.py are in the same directory
 from keymaera_parser import KeYmaeraParser
-from generator_core import generate_gym_environment_file
+from generator_core import GymnasiumEnvironmentGenerator, generate_gym_environment_file
 from keymaera_lexer import parse_annotations
 from ast_config import (
     ASTNode, KeYmaeraModel, ArchiveEntry, DefinitionsBlock, Definition, FuncDef, PredDef, HPDef,
@@ -58,6 +58,113 @@ class TestKeYmaeraParser(unittest.TestCase):
         self.assertNotEqual(generator.config.goal, 'True')
         self.assertIn('safe', generator.config.goal)
         self.assertNotEqual(generator.config.termination_condition_body, 'True')
+
+    def test_train_essential_generates_dynamics_invariant_and_guarded_actions(self):
+        model_text = Path('test/input/withBound/train_essential.kyx').read_text(encoding='utf-8')
+        generator = GymnasiumEnvironmentGenerator('TrainEssential')
+        generated_code = generator.generate_environment_code(KeYmaeraParser(model_text).parse())
+
+        self.assertIn("z' = v", generator.config.problem.program)
+        self.assertTrue(generator.config.problem.loop_invariants)
+        self.assertIsNotNone(generator.config.control_flow_program_ast_json)
+        variable_bounds = {
+            variable.name: (variable.lower_bound, variable.upper_bound)
+            for variable in generator.config.variables
+        }
+        self.assertEqual(variable_bounds['v'], ('0.0', '3.0'))
+        self.assertEqual(variable_bounds['z'], ('0.0', '5.0'))
+        self.assertIn('0.05 * v', generator.config.reward_function_body)
+        self.assertIn('100.0', generator.config.reward_function_body)
+
+        namespace = {'__name__': 'generated_train_essential_test'}
+        exec(compile(generated_code, '<generated-train-essential>', 'exec'), namespace)
+        env = namespace['KeYmaeraGymEnv'](config_override={
+            'constants': [
+                {'name': 'ep', 'value': '0.1'},
+                {'name': 'b', 'value': '1.0'},
+                {'name': 'A', 'value': '1.0'},
+                {'name': 'm', 'value': '10.0'},
+            ]
+        })
+        self.assertEqual(env.action_space.n, 2)
+        self.assertEqual(set(env.differential_equations), {'z', 'v', 't'})
+
+        env.current_state.update({'z': 9.995, 'v': 1.0, 'a': 0.0, 't': 0.0})
+        brake_status = env._execute_control_flow(0)
+        self.assertFalse(brake_status['terminated'])
+        self.assertEqual(env.current_state['a'], -1.0)
+
+        env.current_state.update({'z': 9.0, 'v': 0.0, 'a': 0.0, 't': 0.0})
+        accelerate_status = env._execute_control_flow(1)
+        self.assertFalse(accelerate_status['terminated'])
+        self.assertEqual(env.current_state['a'], 1.0)
+        env.close()
+
+    def test_fixed_authority_progress_terminates_with_success_reward(self):
+        model_text = Path(
+            'test/input/withBound/train_essential_fixed_authority.kyx'
+        ).read_text(encoding='utf-8')
+        generator = GymnasiumEnvironmentGenerator('FixedAuthorityTrain')
+        generated_code = generator.generate_environment_code(KeYmaeraParser(model_text).parse())
+
+        self.assertIn('self._reached_impl(m, z, v, d, delta)', generator.config.termination_condition_body)
+
+        namespace = {'__name__': 'generated_fixed_authority_test'}
+        exec(compile(generated_code, '<generated-fixed-authority>', 'exec'), namespace)
+        env = namespace['KeYmaeraGymEnv'](config_override={
+            'constants': [
+                {'name': 'ep', 'value': '0.1'},
+                {'name': 'b', 'value': '1.0'},
+                {'name': 'A', 'value': '1.0'},
+                {'name': 'm', 'value': '10.0'},
+                {'name': 'd', 'value': '0.2'},
+                {'name': 'delta', 'value': '0.5'},
+            ]
+        })
+        env.current_state.update({'z': 9.0, 'v': 0.5, 'a': 0.0, 't': 0.0})
+        invalid_branch = env._execute_control_flow(0)
+        self.assertTrue(invalid_branch['terminated'])
+        self.assertEqual(invalid_branch['info'], 'test_condition_failed')
+
+        env.current_state.update({'z': 9.6, 'v': 0.1, 'a': 0.0, 't': 0.0})
+
+        self.assertTrue(env._evaluate_expression(
+            env.config['termination_condition_body'], env.current_state
+        ))
+        self.assertGreater(
+            env._evaluate_expression(env.config['reward_function_body'], env.current_state),
+            100.0,
+        )
+
+        env.current_state.update({'z': 9.0, 'v': 0.5})
+        self.assertFalse(env._evaluate_expression(
+            env.config['termination_condition_body'], env.current_state
+        ))
+        self.assertGreater(
+            env._evaluate_expression(env.config['reward_function_body'], env.current_state),
+            -100.0,
+        )
+
+        env.reset(seed=3)
+        terminated = truncated = False
+        for _ in range(200):
+            state = env.current_state
+            braking_threshold = env.user_defined_functions['SB'](state['v'])
+            action = 0 if state['m'] - state['z'] <= braking_threshold else 1
+            _, _, terminated, truncated, info = env.step(action)
+            if terminated or truncated:
+                break
+        self.assertTrue(terminated)
+        self.assertFalse(truncated)
+        final_state = info['state']
+        self.assertTrue(env.user_defined_functions['reached'](
+            final_state['m'],
+            final_state['z'],
+            final_state['v'],
+            final_state['d'],
+            final_state['delta'],
+        ))
+        env.close()
 
     # --- Toggle this flag to True to see the AST output for each test ---
     # Set to True to write full ASTs to files

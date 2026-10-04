@@ -349,12 +349,12 @@ def main():
     successes = [e for e in episodes if e['success']]
     failures = [e for e in episodes if not e['success']]
     
-    # Plot sample successful episodes (up to 2)
-    for idx, ep in enumerate(successes[:2]):
+    # Plot sample successful episodes (up to 5)
+    for idx, ep in enumerate(successes[:5]):
         plot_single_episode(ep, args.out_dir / f"{args.dl_path.stem.lower()}_success_{idx}.png", gdelta)
     
-    # Plot sample failed episodes (up to 2)
-    for idx, ep in enumerate(failures[:2]):
+    # Plot sample failed episodes (up to 5)
+    for idx, ep in enumerate(failures[:5]):
         plot_single_episode(ep, args.out_dir / f"{args.dl_path.stem.lower()}_failure_{idx}.png", gdelta)
     
     # Plot validation metrics
