@@ -102,6 +102,8 @@ class GymnasiumEnvironmentGenerator:
             return f"{term.op}({operand_str})"
         elif isinstance(term, FunctionCall):
             args_str = ", ".join(self._term_to_string_python(arg) for arg in term.args)
+            if term.name in {'abs', 'min', 'max'}:
+                return f"{term.name}({args_str})"
             return f"self._{term.name}_impl({args_str})"
         else:
             raise ValueError(f"Unsupported Term type for Python eval: {type(term)}")
@@ -581,7 +583,7 @@ class GymnasiumEnvironmentGenerator:
                         if isinstance(bounds, list) and len(bounds) == 2:
                             lower_bound = str(bounds[0])
                             upper_bound = str(bounds[1])
-                    if var_annotation.get('initial_value'):
+                    if var_annotation.get('initial_value') is not None:
                         initial_value = str(var_annotation['initial_value'])
                 self.config.variables.append(VariableDeclarationConfig(name=var_name, type=pv_decl.type, lower_bound=lower_bound, upper_bound=upper_bound, initial_value=initial_value))
 

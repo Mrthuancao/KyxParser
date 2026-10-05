@@ -92,6 +92,10 @@ class KeYmaeraGymEnv(gym.Env):
             self.control_flow_program_ast = self._deserialize_ast_node(self.config['control_flow_program_ast_json'])
             self._debug_print(f"DEBUG: Deserialized control_flow_program_ast: {{self.control_flow_program_ast._repr_indented(0)}}")
 
+        self.control_choice_paths = (
+            self._enumerate_control_choice_paths(self.control_flow_program_ast)
+            if self.control_flow_program_ast else []
+        )
         self._setup_spaces()
         self._setup_initial_state_samplers()
         self._setup_hybrid_program()
@@ -190,6 +194,8 @@ class KeYmaeraGymEnv(gym.Env):
             return f"{term.op}({operand_str})"
         elif isinstance(term, FunctionCall):
             args_str = ", ".join(self._term_to_python_eval_str_env(arg) for arg in term.args)
+            if term.name in {'abs', 'min', 'max'}:
+                return f"{term.name}({args_str})"
             # Call the bound method from user_defined_functions
             return f"self.user_defined_functions['{term.name}']({args_str})"
         else:
@@ -258,27 +264,15 @@ class KeYmaeraGymEnv(gym.Env):
         return config
 
     def _setup_spaces(self):
-        # Determine action space based on controlFunc AST if available
-        if self.control_flow_program_ast and isinstance(self.control_flow_program_ast, Choice):
-            # Assuming Choice between HPBlocks, each representing a distinct action branch
-            # We need to count the number of distinct choices.
-            # The example controlFunc is nested: ((A) ++ (B)) ++ ((C) ++ (D)).
-            # We need a BFS to find the leaf branches.
-            num_choices = 0
-            q = deque([self.control_flow_program_ast])
-            while q:
-                node = q.popleft()
-                if isinstance(node, Choice):
-                    q.append(node.left)
-                    q.append(node.right)
-                else: # This is a leaf branch (e.g., HPBlock, Assignment, Test, Sequence)
-                    num_choices += 1
+        # Give the agent an opaque ID for a complete path through the control AST.
+        if self.control_flow_program_ast:
+            num_choices = len(self.control_choice_paths)
             
             if num_choices > 0:
                 self.action_space_type = 'discrete'
                 self.action_space = spaces.Discrete(num_choices)
-                self.action_variable_names = ['control_choice'] # Placeholder name for discrete action
-                self._debug_print(f"DEBUG: Action space set to Discrete({{num_choices}}) based on controlFunc.")
+                self.action_variable_names = ['control_choice']
+                self._debug_print(f"DEBUG: Action space set to Discrete({{num_choices}}) based on complete control paths.")
             else:
                 raise ValueError("controlFunc is a Choice but no valid branches found.")
         elif self.control_flow_program_ast:
@@ -329,6 +323,29 @@ class KeYmaeraGymEnv(gym.Env):
             raise NotImplementedError("Discrete observation space not yet supported.")
         else:
             raise ValueError(f"Unsupported observation space type: {{observation_space_type}}")
+
+    def _enumerate_control_choice_paths(self, node):
+        if isinstance(node, HPBlock):
+            return self._enumerate_control_choice_paths(node.program)
+        if isinstance(node, Choice):
+            left_paths = self._enumerate_control_choice_paths(node.left)
+            right_paths = self._enumerate_control_choice_paths(node.right)
+            return [(0,) + path for path in left_paths] + [
+                (1,) + path for path in right_paths
+            ]
+        if isinstance(node, Sequence):
+            paths = [()]
+            for program in node.programs:
+                program_paths = self._enumerate_control_choice_paths(program)
+                paths = [
+                    prefix + suffix
+                    for prefix in paths
+                    for suffix in program_paths
+                ]
+            return paths
+        if isinstance(node, Iteration):
+            return self._enumerate_control_choice_paths(node.program)
+        return [()]
 
     def _setup_initial_state_samplers(self):
         self.initial_state_samplers = {{}}
@@ -427,6 +444,7 @@ class KeYmaeraGymEnv(gym.Env):
             'self': self, # Allow access to self for calling methods
             'np': np, # Allow numpy functions
             'math': math, # Allow math functions (e.g., for power `**`)
+            'abs': abs, 'min': min, 'max': max,
             'float': float, 'int': int, 'bool': bool,
             # Add sympy objects explicitly if any sympy constructs are still generated for eval
             'sympy': sympy,
@@ -649,51 +667,55 @@ class KeYmaeraGymEnv(gym.Env):
             status["info"] = "no_control_flow_program"
             return status
 
-        # For a discrete action space, the agent provides an integer representing the choice.
-        # We need to map this integer to the correct branch in the Choice AST.
-        # The example controlFunc is nested: ((A) ++ (B)) ++ ((C) ++ (D)).
-        # We need a BFS to find the Nth leaf branch.
-        
-        selected_branch = None
-        current_choice_index = 0
-        q = deque([self.control_flow_program_ast])
-        
-        while q and selected_branch is None:
-            node = q.popleft()
-            if isinstance(node, Choice):
-                q.append(node.left)
-                q.append(node.right)
-            else: # This is a leaf branch
-                if current_choice_index == action_choice:
-                    selected_branch = node
-                current_choice_index += 1
-        
-        if selected_branch is None:
-            self._debug_print(f"ERROR: Invalid action_choice {{action_choice}} for controlFunc. Max choices: {{current_choice_index}}.")
+        if not self.action_space.contains(action_choice):
             status["terminated"] = True
-            status["reward_delta"] = -100.0 # Penalty for invalid choice
+            status["reward_delta"] = -100.0
             status["info"] = "invalid_control_choice"
             return status
 
-        self._debug_print(f"DEBUG: Executing selected control branch: {{selected_branch._repr_indented(0)}}")
-        
-        # Now execute the selected_branch
-        return self._execute_hp_node(selected_branch)
+        try:
+            path_index = int(action_choice)
+        except (TypeError, ValueError, OverflowError):
+            status["terminated"] = True
+            status["reward_delta"] = -100.0
+            status["info"] = "invalid_control_choice"
+            return status
 
-    def _execute_hp_node(self, hp_node: HybridProgram) -> Dict[str, Any]:
+        if path_index < 0 or path_index >= len(self.control_choice_paths):
+            status["terminated"] = True
+            status["reward_delta"] = -100.0
+            status["info"] = "invalid_control_choice"
+            return status
+
+        self._debug_print(f"DEBUG: Executing complete control path {{path_index}}.")
+        cursor = [0]
+        return self._execute_hp_node(
+            self.control_flow_program_ast,
+            self.control_choice_paths[path_index],
+            cursor,
+        )
+
+    def _execute_hp_node(
+        self,
+        hp_node: HybridProgram,
+        choice_path=(),
+        choice_cursor=None,
+    ) -> Dict[str, Any]:
         \"\"\"
         Recursively executes a hybrid program node.
         Returns execution status, potentially modifying self.current_state.
         \"\"\"
         status = {"terminated": False, "reward_delta": 0.0, "info": ""}
+        if choice_cursor is None:
+            choice_cursor = [0]
 
         if isinstance(hp_node, HPBlock):
             # Execute the program inside the block
-            return self._execute_hp_node(hp_node.program)
+            return self._execute_hp_node(hp_node.program, choice_path, choice_cursor)
         
         elif isinstance(hp_node, Sequence):
             for program in hp_node.programs:
-                sub_status = self._execute_hp_node(program)
+                sub_status = self._execute_hp_node(program, choice_path, choice_cursor)
                 status["terminated"] = status["terminated"] or sub_status["terminated"]
                 status["reward_delta"] += sub_status["reward_delta"]
                 if status["terminated"]: # If any part of sequence terminates, the whole sequence terminates
@@ -702,13 +724,16 @@ class KeYmaeraGymEnv(gym.Env):
             return status
 
         elif isinstance(hp_node, Choice):
-            # This should ideally not be reached if _execute_control_flow already picked a branch.
-            # But if it is, it indicates a problem or a complex nested choice not handled by simple action_choice.
-            self._debug_print("WARNING: _execute_hp_node encountered a Choice node. This should be handled by _execute_control_flow.")
-            status["terminated"] = True
-            status["reward_delta"] = -100.0
-            status["info"] = "unexpected_choice_node"
-            return status
+            if choice_cursor[0] >= len(choice_path):
+                status.update(
+                    terminated=True,
+                    reward_delta=-100.0,
+                    info="invalid_control_choice_path",
+                )
+                return status
+            branch = hp_node.left if choice_path[choice_cursor[0]] == 0 else hp_node.right
+            choice_cursor[0] += 1
+            return self._execute_hp_node(branch, choice_path, choice_cursor)
         
         elif isinstance(hp_node, Test):
             condition_met = self._evaluate_expression(hp_node.condition, self.current_state)
@@ -722,11 +747,18 @@ class KeYmaeraGymEnv(gym.Env):
         elif isinstance(hp_node, Assignment):
             var_name = hp_node.var.name
             expr_value = self._evaluate_expression(hp_node.expr, self.current_state)
+            handler = getattr(self, '_assignment_handler', None)
+            if handler is not None:
+                expr_value = handler(var_name, expr_value)
             self.current_state[var_name] = expr_value
             self._debug_print(f"DEBUG: Assignment: {{var_name}} := {{expr_value}}")
             return status
 
         elif isinstance(hp_node, NondetAssignment):
+            handler = getattr(self, '_nondeterministic_assignment_handler', None)
+            if handler is not None:
+                self.current_state[hp_node.var.name] = float(handler(hp_node.var.name))
+                return status
             # This is more complex. For now, we'll raise an error or apply a default.
             # A proper implementation would sample from the allowed range.
             self._debug_print(f"ERROR: Nondeterministic assignment '{{hp_node.var.name}} := *' not yet fully supported. Defaulting to 0.0.")
@@ -738,7 +770,7 @@ class KeYmaeraGymEnv(gym.Env):
             self._debug_print("WARNING: Iteration node encountered in controlFunc. Iterations are typically handled by the RL loop, not directly executed here.")
             # If an iteration is part of controlFunc, it implies the agent decides to loop.
             # This is usually a higher-level concept. For now, treat as a single execution.
-            return self._execute_hp_node(hp_node.program)
+            return self._execute_hp_node(hp_node.program, choice_path, choice_cursor)
 
         elif isinstance(hp_node, VarRef):
             # If the HP is just a reference to another HPDef, resolve and execute it.

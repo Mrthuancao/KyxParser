@@ -146,6 +146,8 @@ class TestKeYmaeraParser(unittest.TestCase):
             definition.name: definition
             for definition in model_ast.entries[0].definitions.defs
         }
+        self.assertIn('safety', definitions['ensure'].annotations)
+        self.assertNotIn('progress', definitions['ensure'].annotations)
 
         self.assertEqual(
             {name for name in ('obstacleFunc', 'controlFunc', 'stepFunc', 'dwwpdl') if name in definitions},
@@ -162,6 +164,48 @@ class TestKeYmaeraParser(unittest.TestCase):
         self.assertIn("xo' = vxo", generator.config.problem.program)
         self.assertTrue(generator.config.problem.loop_invariants)
         compile(generated_code, '<generated-car1>', 'exec')
+
+        namespace = {'__name__': 'generated_car1_initial_state_test'}
+        exec(compile(generated_code, '<generated-car1-initial-state>', 'exec'), namespace)
+        env_class = namespace['KeYmaeraGymEnv']
+        env = env_class()
+        _, info = env.reset(seed=7)
+        self.assertEqual(env.action_space.n, 5)
+        self.assertEqual(len(env.control_choice_paths), 5)
+        first_path_status = env._execute_control_flow(0)
+        self.assertFalse(first_path_status['terminated'])
+        env.current_state['x'] = -3.0
+        abs_term = FunctionCall('abs', [VarRef('x')])
+        abs_expression = env._term_to_python_eval_str_env(abs_term)
+        self.assertEqual(env._evaluate_expression(abs_expression, env.current_state), 3.0)
+        self.assertTrue(
+            env._evaluate_expression(
+                env.config['problem']['initial_condition'],
+                info['state'],
+            )
+        )
+        env.close()
+
+        buffered_env = env_class(config_override={
+            'initial_state_buffer_config': {
+                'enabled': True,
+                'strategy': 'z3_diverse',
+                'capacity': 4,
+                'max_populate_attempts': 20,
+            },
+        })
+        self.assertEqual(len(buffered_env.initial_state_buffer), 4)
+        for state in buffered_env.initial_state_buffer:
+            self.assertEqual(state['x'], 10.0)
+            self.assertEqual(state['y'], 10.0)
+            self.assertEqual(state['v'], 0.0)
+            self.assertEqual(state['dx'], -1.0)
+            self.assertEqual(state['dy'], 0.0)
+            self.assertEqual(state['w'], 0.0)
+            self.assertEqual(state['r'], 1.0)
+            self.assertEqual(state['xc'], 10.0)
+            self.assertEqual(state['yc'], 9.0)
+        buffered_env.close()
 
     def test_train_essential_generates_dynamics_invariant_and_guarded_actions(self):
         model_text = Path('test/input/withBound/train_essential.kyx').read_text(encoding='utf-8')
