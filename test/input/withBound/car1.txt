@@ -50,6 +50,59 @@ Definitions
   // @progress: reward=1000, on_success=terminate:status=success, on_failure=terminate:status=failure
   Bool ensure(Real v, Real x, Real y, Real xo, Real yo) <-> (v>0 -> (x - xo)^2 + (y - yo)^2 > 0);
 
+  HP obstacleFunc ::= {
+    vxo := *; vyo := *;
+    ?vxo^2+vyo^2<=V^2;
+  };
+
+  HP controlFunc ::= {
+    /* brake on current curve */
+    { a := -b; }
+    ++
+    /* remain stopped and choose a new direction/curve */
+    { ?v = 0; a := 0; w := 0; { dx:=-dx;dy:=-dy; ++ dx:=dx;dy:=dy; }; r := *; xc := *; yc := *;
+      ?(r!=0 & r^2 = (x-xc)^2+(y-yc)^2 & dx=-(y-yc)/r & dy=(x-xc)/r & r*w=v); }
+    ++
+    /* choose a new safe curve */
+    { a := *; ?-b<=a & a<=A;
+      w := *; ?-W<=w & w<=W;
+      r := *;
+      xc := *; yc := *;
+
+      xo := *; yo := *;
+
+      ?(r!=0 & r^2 = (x-xc)^2+(y-yc)^2 & dx=-(y-yc)/r & dy=(x-xc)/r & r*w=v);
+
+      {
+        ?(v+a*ep>=0);
+        ?abs(x-xo) > admissibleSeparationG(v,a) | abs(y-yo) > admissibleSeparationG(v,a) | trajectoryDist(r,xo,xc,yo,yc) > V*(ep + (v+a*ep)/b);
+      }
+      ++
+      {
+        ?!(v+a*ep>=0);
+        ?abs(x-xo) > admissibleSeparationL(v,a) | abs(y-yo) > admissibleSeparationL(v,a) | trajectoryDist(r,xo,xc,yo,yc) > -V*v/a;
+      }
+    }
+  };
+
+  HP stepFunc ::= {
+    x' = v * dx, y' = v * dy, v' = a,
+    dx' = -w * dy, dy' = w * dx, w' = a/r,
+    xo' = vxo, yo' = vyo,
+    t' = 1 & t <= ep & v >= 0
+  };
+
+  HP dwwpdl ::= {
+    {
+      obstacleFunc;
+      controlFunc;
+      t := 0;
+    }
+    {
+      stepFunc;
+    }
+  }*@invariant(loopinv(x, y, v, w, r, dx, dy, xo, yo, xc, yc));
+
 End.
 
 ProgramVariables
@@ -87,54 +140,5 @@ End.
 
 Problem
 assumptions(x, y, v, w, r, dx, dy, xo, yo, xc, yc) ->
-  [
-    {
-      {
-        /* obstacle control */
-        {
-          vxo := *; vyo := *;
-          ?vxo^2+vyo^2<=V^2;
-        }
-        /* robot control */
-        {
-          /* brake on current curve or remain stopped */
-          { a := -b; }
-          ++
-          { ?v = 0; a := 0; w := 0; { dx:=-dx;dy:=-dy; ++ dx:=dx;dy:=dy; }; r := *; xc := *; yc := *;
-            ?(r!=0 & r^2 = (x-xc)^2+(y-yc)^2 & dx=-(y-yc)/r & dy=(x-xc)/r & r*w=v); }
-          ++
-          /* or choose a new safe curve */
-          { a := *; ?-b<=a & a<=A;
-            w := *; ?-W<=w & w<=W;       /* choose steering */
-            r := *;
-            xc := *; yc := *;
-
-            xo := *; yo := *;            /* measure closest obstacle on the curve */
-
-            /* admissible curve */
-            ?(r!=0 & r^2 = (x-xc)^2+(y-yc)^2 & dx=-(y-yc)/r & dy=(x-xc)/r & r*w=v);
-
-            /* use that curve, if it is a safe one (admissible velocities) */
-            {
-              ?(v+a*ep>=0);
-              ?abs(x-xo) > admissibleSeparationG(v,a) | abs(y-yo) > admissibleSeparationG(v,a) | trajectoryDist(r,xo,xc,yo,yc) > V*(ep + (v+a*ep)/b);
-            }
-            ++
-            {
-              ?!(v+a*ep>=0);
-              ?abs(x-xo) > admissibleSeparationL(v,a) | abs(y-yo) > admissibleSeparationL(v,a) | trajectoryDist(r,xo,xc,yo,yc) > -V*v/a;
-            }
-          }
-        };
-        t := 0;
-      }
-
-      /* dynamics */
-      { x' = v * dx, y' = v * dy, v' = a,        /* accelerate/decelerate and move */
-        dx' = -w * dy, dy' = w * dx, w' = a/r,   /* follow curve */
-        xo' = vxo, yo' = vyo,                    /* obstacle moves */
-        t' = 1 & t <= ep & v >= 0
-      }
-    }*@invariant(loopinv(x, y, v, w, r, dx, dy, xo, yo, xc, yc))
-  ]ensure(v, x, y, xo, yo)
+  [ dwwpdl; ]ensure(v, x, y, xo, yo)
 End.

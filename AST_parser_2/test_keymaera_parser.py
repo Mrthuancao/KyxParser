@@ -52,7 +52,7 @@ class TestKeYmaeraParser(unittest.TestCase):
         parser = KeYmaeraParser(model_text)
         model_ast = parser.parse()
         generator = GymnasiumEnvironmentGenerator('TrainSafety')
-        generator.generate_environment_code(model_ast)
+        generated_code = generator.generate_environment_code(model_ast)
 
         self.assertNotEqual(generator.config.problem.goal, 'True')
         self.assertIn('safe', generator.config.problem.goal)
@@ -95,8 +95,73 @@ class TestKeYmaeraParser(unittest.TestCase):
                 'em': ('0.0', '1.0'),
             },
         )
+        expected_sampling_ranges = {
+            name: (float(bounds[0]), float(bounds[1]))
+            for name, bounds in {
+                'vdes': (0, 3),
+                'sb': (0, 10),
+                'mo': (8, 12),
+                't': (0, 0.2),
+                'a': (-1.5, 1.5),
+                'v': (0, 3),
+                'z': (0, 12),
+                'm': (8, 12),
+                'd': (0, 3),
+                'do': (0, 3),
+                'em': (0, 1),
+            }.items()
+        }
+        self.assertEqual(
+            {
+                name: (float(config['min']), float(config['max']))
+                for name, config in generator.config.initial_state_sampling_config.items()
+                if 'min' in config and 'max' in config
+            },
+            expected_sampling_ranges,
+        )
         self.assertIn('0.05', generator.config.reward_function_body)
         self.assertIn('100.0', generator.config.reward_function_body)
+
+        namespace = {'__name__': 'generated_train_safety_bounds_test'}
+        exec(compile(generated_code, '<generated-train-safety-bounds>', 'exec'), namespace)
+        env = namespace['KeYmaeraGymEnv'](config_override={
+            'initial_state_buffer_config': {
+                'enabled': True,
+                'strategy': 'z3_diverse',
+                'capacity': 4,
+                'max_populate_attempts': 100,
+            },
+        })
+        self.assertTrue(env.initial_state_buffer)
+        for state in env.initial_state_buffer:
+            for name, (low, high) in expected_sampling_ranges.items():
+                self.assertGreaterEqual(state[name], low - 1e-8, name)
+                self.assertLessEqual(state[name], high + 1e-8, name)
+        env.close()
+
+    def test_car1_named_control_and_step_programs_are_extracted(self):
+        model_text = Path('test/input/withBound/car1.txt').read_text(encoding='utf-8')
+        model_ast = KeYmaeraParser(model_text).parse()
+        definitions = {
+            definition.name: definition
+            for definition in model_ast.entries[0].definitions.defs
+        }
+
+        self.assertEqual(
+            {name for name in ('obstacleFunc', 'controlFunc', 'stepFunc', 'dwwpdl') if name in definitions},
+            {'obstacleFunc', 'controlFunc', 'stepFunc', 'dwwpdl'},
+        )
+        self.assertIsInstance(definitions['controlFunc'].body.program, Choice)
+
+        generator = GymnasiumEnvironmentGenerator('Car1')
+        generated_code = generator.generate_environment_code(model_ast)
+
+        self.assertIsNotNone(generator.config.control_flow_program_ast_json)
+        self.assertEqual(generator.config.control_flow_program_ast_json['_type'], 'Choice')
+        self.assertIn("x' =", generator.config.problem.program)
+        self.assertIn("xo' = vxo", generator.config.problem.program)
+        self.assertTrue(generator.config.problem.loop_invariants)
+        compile(generated_code, '<generated-car1>', 'exec')
 
     def test_train_essential_generates_dynamics_invariant_and_guarded_actions(self):
         model_text = Path('test/input/withBound/train_essential.kyx').read_text(encoding='utf-8')
