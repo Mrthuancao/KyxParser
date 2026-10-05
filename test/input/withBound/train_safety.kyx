@@ -1,6 +1,9 @@
 SharedDefinitions
+  // @const: bound=[0.05:0.2]; def="Maximum duration of one train control cycle"
   Real ep; /* Control cycle duration upper bound */
+  // @const: bound=[0.8:1.2]; def="Available braking force"
   Real b;  /* Braking force */
+  // @const: bound=[0.5:1.5]; def="Maximum train acceleration"
   Real A;  /* Maximum acceleration */
 
   Bool Assumptions(Real v, Real d) <-> v>=0 & d>=0 & b>0;
@@ -57,6 +60,7 @@ Definitions
   Real accCompensation(Real v) = (((A/b) + 1)*((A/2)*ep^2 + ep*v));     /* Distance to compensate speed increase. */
   Real SB(Real v, Real d) = (brakeDist(v,d) + accCompensation(v));   /* Distance needed to brake safely when accelerating once */
 
+  // @safety: shape=-0.05*v^2; reward=0.25; penalty=-100.0; on_failure=terminate:status=failure
   Bool loopInv(Real m, Real z, Real v, Real d) <-> (m-z >= brakeDist(v,d) & d>=0);  /* loop invariant: maintain sufficient braking distance */
 
   HP atpr ::= {
@@ -71,16 +75,27 @@ Definitions
 End.
 
 ProgramVariables
+  // @var: bound=[0:3]; plot=line; def="Requested train speed"
 	Real vdes;
+  // @var: bound=[0:10]; plot=line; def="Computed safe braking threshold"
 	Real sb;
+  // @var: bound=[8:12]; plot=line; def="Previous movement authority"
 	Real mo;
+  // @var: bound=[0:0.2]; plot=line; def="Elapsed time within the current control cycle"
 	Real t;
+  // @var: bound=[-1.5:1.5]; plot=line; def="Actual train acceleration"
 	Real a;
+  // @var: bound=[0:3]; plot=line; def="Train velocity"
 	Real v;
+  // @var: bound=[0:12]; plot=line; def="Train position"
 	Real z;
+  // @var: bound=[8:12]; plot=line; def="Current end of movement authority"
 	Real m;
+  // @var: bound=[0:3]; plot=line; def="Current permitted speed at the movement authority"
 	Real d;
+  // @var: bound=[0:3]; plot=line; def="Previous permitted speed"
 	Real do;
+  // @var: bound=[0:1]; plot=none; def="Emergency-brake command state"
 	Real em;
 End.
 

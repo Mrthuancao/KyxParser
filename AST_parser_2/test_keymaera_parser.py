@@ -52,12 +52,51 @@ class TestKeYmaeraParser(unittest.TestCase):
         parser = KeYmaeraParser(model_text)
         model_ast = parser.parse()
         generator = GymnasiumEnvironmentGenerator('TrainSafety')
-        generator._process_definitions(model_ast)
-        generator._process_problem(model_ast)
+        generator.generate_environment_code(model_ast)
 
-        self.assertNotEqual(generator.config.goal, 'True')
-        self.assertIn('safe', generator.config.goal)
+        self.assertNotEqual(generator.config.problem.goal, 'True')
+        self.assertIn('safe', generator.config.problem.goal)
         self.assertNotEqual(generator.config.termination_condition_body, 'True')
+        definitions = {definition.name: definition for definition in model_ast.entries[0].definitions.defs}
+        self.assertEqual(
+            definitions['loopInv'].annotations['safety'],
+            {
+                'shape': '-0.05*v^2',
+                'reward': 0.25,
+                'penalty': -100.0,
+                'on_failure': 'terminate:status=failure',
+            },
+        )
+        constant_bounds = {
+            name: definitions[name].annotations['const']['bound']
+            for name in ('ep', 'b', 'A')
+        }
+        self.assertEqual(
+            constant_bounds,
+            {'ep': [0.05, 0.2], 'b': [0.8, 1.2], 'A': [0.5, 1.5]},
+        )
+        variable_bounds = {
+            variable.name: (variable.lower_bound, variable.upper_bound)
+            for variable in generator.config.variables
+        }
+        self.assertEqual(
+            variable_bounds,
+            {
+                'vdes': ('0.0', '3.0'),
+                'sb': ('0.0', '10.0'),
+                'mo': ('8.0', '12.0'),
+                't': ('0.0', '0.2'),
+                'a': ('-1.5', '1.5'),
+                'v': ('0.0', '3.0'),
+                'z': ('0.0', '12.0'),
+                'm': ('8.0', '12.0'),
+                'd': ('0.0', '3.0'),
+                'do': ('0.0', '3.0'),
+                'em': ('0.0', '1.0'),
+            },
+        )
+        self.assertIn('0.05', generator.config.reward_function_body)
+        self.assertIn('100.0', generator.config.reward_function_body)
 
     def test_train_essential_generates_dynamics_invariant_and_guarded_actions(self):
         model_text = Path('test/input/withBound/train_essential.kyx').read_text(encoding='utf-8')
