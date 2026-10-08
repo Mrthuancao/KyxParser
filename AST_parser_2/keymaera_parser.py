@@ -961,15 +961,21 @@ class KeYmaeraParser:
             if var_decl_match := re.match(r'(Real|Bool)\s+(\w+)\s*;', full_definition_str):
                 var_type = var_decl_match.group(1)
                 var_name = var_decl_match.group(2)
-                annotations = current_annotations.copy()
+                annotations = {
+                    key: value.copy() if isinstance(value, dict) else value
+                    for key, value in current_annotations.items()
+                }
                 if var_type == "Real":
                     # Bare declarations like `Real ep;` are constant symbols, not zero-arg functions.
                     # Use a positive default rather than 0.0 so common constraints like `b > 0` remain satisfiable
-                    # when no explicit annotation or value is present in the model.
-                    annotations.setdefault('const', {})['value'] = '1.0'
+                    # when no explicit value or fixed bound is present in the model.
+                    const_annotation = annotations.setdefault('const', {})
+                    if 'value' not in const_annotation and 'bound' not in const_annotation:
+                        const_annotation['value'] = '1.0'
                     definitions_list.append(FuncDef(var_name, "Real", Literal(1.0), [], annotations))
                 else:
-                    annotations.setdefault('const', {})['value'] = 'True'
+                    const_annotation = annotations.setdefault('const', {})
+                    const_annotation.setdefault('value', 'True')
                     definitions_list.append(PredDef(var_name, "Bool", BooleanLiteral(True), [], annotations))
             # Refined regex for FuncDef: use non-capturing group for optional arguments
             elif func_def_match := re.match(r'Real\s+(\w+)\s*(?:\(([^)]*)\))?\s*=\s*(.*);', full_definition_str):

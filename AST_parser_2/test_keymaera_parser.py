@@ -47,6 +47,101 @@ class TestKeYmaeraParser(unittest.TestCase):
             self.assertNotIn("self.user_defined_functions['ep'] = self._ep_impl", generated_code)
             self.assertNotIn("return self._evaluate_expression(\"self._ep_impl()\"", generated_code)
 
+    def test_car2_fixed_constant_metadata_drives_four_way_discrete_controller(self):
+        model_text = Path('test/input/withBound/car2.txt').read_text(encoding='utf-8')
+        model_ast = KeYmaeraParser(model_text).parse()
+        generator = GymnasiumEnvironmentGenerator('Car2')
+        generated_code = generator.generate_environment_code(model_ast)
+
+        constants = {constant.name: constant.value for constant in generator.config.constants}
+        self.assertEqual(
+            {name: constants[name] for name in ('ep', 'b', 'A', 'Vmax', 'GDelta')},
+            {'ep': '0.2', 'b': '1.0', 'A': '1.0', 'Vmax': '5.0', 'GDelta': '40.0'},
+        )
+        self.assertEqual(generator.config.action_space_type, 'discrete')
+        self.assertEqual(generator.config.action_space_bounds, {'n': 4})
+        self.assertIsNotNone(generator.config.control_flow_program_ast_json)
+
+        namespace = {'__name__': 'generated_car2_controller_test'}
+        exec(compile(generated_code, '<generated-car2-controller>', 'exec'), namespace)
+        env = namespace['KeYmaeraGymEnv']()
+        self.assertEqual(env.action_space.n, 4)
+
+        env.current_state.update({'xr': 11.0, 'vr': 0.0, 'xg': 50.0, 'ar': 0.0})
+        self.assertFalse(env._execute_control_flow(0)['terminated'])
+        self.assertEqual(env.current_state['ar'], -1.0)
+
+        env.current_state.update({'xr': 11.0, 'vr': 0.0, 'ar': 0.0})
+        self.assertFalse(env._execute_control_flow(1)['terminated'])
+        self.assertEqual(env.current_state['ar'], 0.0)
+
+        env.current_state.update({'xr': 0.0, 'vr': 0.0, 'ar': 0.0})
+        self.assertFalse(env._execute_control_flow(2)['terminated'])
+        self.assertEqual(env.current_state['ar'], 1.0)
+
+        env.current_state.update({'xr': 0.0, 'vr': 5.0, 'ar': 0.0})
+        self.assertFalse(env._execute_control_flow(3)['terminated'])
+        self.assertEqual(env.current_state['ar'], 0.0)
+
+        env.current_state.update({'xr': 0.0, 'vr': 0.0, 'xg': 50.0, 'ar': 0.0, 't': 0.0, 'T': 100.0})
+        _, _, terminated, _, _ = env.step(2)
+        self.assertFalse(terminated)
+        self.assertEqual(env.current_state['ar'], 1.0)
+        env.close()
+
+    def test_constant_ranges_are_solved_against_bounds_and_fixed_values_are_validated(self):
+        model_text = Path('test/input/withBound/car2.txt').read_text(encoding='utf-8')
+        range_metadata = {
+            'bound=0.2; def="time limit for control decisions"':
+                'bound=[0.1:0.5]; def="time limit for control decisions"',
+            'bound=1.0; def="minimum braking capability of the robot"':
+                'bound=[0.5:5.0]; def="minimum braking capability of the robot"',
+            'bound=1.0; def="maximum acceleration"':
+                'bound=[1.0:10.0]; def="maximum acceleration"',
+            'bound=40.0; def="goal area size"':
+                'bound=[1.0:40.0]; def="goal area size"',
+            'bound=5.0; def="robot cannot go faster than this"':
+                'bound=[5.0:30.0]; def="robot cannot go faster than this"',
+        }
+        for fixed_metadata, range_annotation in range_metadata.items():
+            model_text = model_text.replace(fixed_metadata, range_annotation, 1)
+
+        generator = GymnasiumEnvironmentGenerator('Car2Ranges')
+        generated_code = generator.generate_environment_code(KeYmaeraParser(model_text).parse())
+        namespace = {'__name__': 'generated_car2_range_constants_test'}
+        exec(compile(generated_code, '<generated-car2-range-constants>', 'exec'), namespace)
+        env = namespace['KeYmaeraGymEnv']()
+        sampled_constants = {
+            name: env.current_state[name]
+            for name in ('ep', 'b', 'A', 'Vmax', 'GDelta')
+        }
+        self.assertGreaterEqual(sampled_constants['ep'], 0.1)
+        self.assertLessEqual(sampled_constants['ep'], 0.5)
+        self.assertGreaterEqual(sampled_constants['b'], 0.5)
+        self.assertLessEqual(sampled_constants['b'], 5.0)
+        self.assertGreaterEqual(sampled_constants['A'], 0.5)
+        self.assertLessEqual(sampled_constants['A'], 5.0)
+        self.assertGreaterEqual(sampled_constants['Vmax'], 5.0)
+        self.assertLessEqual(sampled_constants['Vmax'], 30.0)
+        self.assertGreaterEqual(sampled_constants['GDelta'], 1.0)
+        self.assertLessEqual(sampled_constants['GDelta'], 40.0)
+        self.assertTrue(env.user_defined_functions['bounds']())
+        env.close()
+
+        invalid_fixed_model = Path('test/input/withBound/car2.txt').read_text(encoding='utf-8').replace(
+            'bound=40.0; def="goal area size"',
+            'bound=1.0; def="goal area size"',
+            1,
+        )
+        invalid_generator = GymnasiumEnvironmentGenerator('Car2InvalidFixed')
+        invalid_code = invalid_generator.generate_environment_code(
+            KeYmaeraParser(invalid_fixed_model).parse()
+        )
+        invalid_namespace = {'__name__': 'generated_car2_invalid_fixed_test'}
+        exec(compile(invalid_code, '<generated-car2-invalid-fixed>', 'exec'), invalid_namespace)
+        with self.assertRaisesRegex(ValueError, 'Fixed @const values do not satisfy'):
+            invalid_namespace['KeYmaeraGymEnv']()
+
     def test_train_safety_problem_extraction_keeps_modal_goal(self):
         model_text = Path('test/input/withBound/train_safety.kyx').read_text(encoding='utf-8')
         parser = KeYmaeraParser(model_text)
@@ -1310,10 +1405,14 @@ End.
         self.assertEqual(parsed_anno2, {'param': {'value': 10, 'type': 'int'}})
         print(f"Input: '{annotation_line2}' -> Output: {parsed_anno2}")
 
-        annotation_line3 = '// Not an annotation'
+        annotation_line3 = '// @const: bound=0.2; def="time limit"'
         parsed_anno3 = parse_annotations(annotation_line3)
-        self.assertEqual(parsed_anno3, {})
-        print(f"Input: '{annotation_line3}' -> Output: {parsed_anno3}")
+        self.assertEqual(parsed_anno3, {'const': {'bound': 0.2, 'def': 'time limit'}})
+
+        annotation_line4 = '// Not an annotation'
+        parsed_anno4 = parse_annotations(annotation_line4)
+        self.assertEqual(parsed_anno4, {})
+        print(f"Input: '{annotation_line4}' -> Output: {parsed_anno4}")
         print("parse_annotations tests passed.")
 
     def _run_full_model_test(self, model_text: str, expected_kind: str, expected_name: str, filename_prefix: str):

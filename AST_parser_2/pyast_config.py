@@ -15,6 +15,8 @@ class VariableDeclarationConfig:
 class ConstantDefinitionConfig:
     name: str
     value: str  # Stored as string to allow expressions or specific types
+    lower_bound: Optional[str] = None
+    upper_bound: Optional[str] = None
 
 @dataclass
 class FuncDefConfig:

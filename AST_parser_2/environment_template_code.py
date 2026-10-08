@@ -70,6 +70,7 @@ class KeYmaeraGymEnv(gym.Env):
         # Initialize user_defined_functions before _setup_constants calls _evaluate_expression
         self.user_defined_functions = {} 
 
+        self._resolve_constants_with_solver()
         self._setup_constants()
         self._setup_functions() 
 
@@ -242,6 +243,11 @@ class KeYmaeraGymEnv(gym.Env):
                     existing_constants_map = {c['name']: c for c in config.get('constants', [])}
                     for ov_const in override_value:
                         if ov_const['name'] in existing_constants_map:
+                            if 'value' in ov_const and not {
+                                'lower_bound', 'upper_bound'
+                            }.intersection(ov_const):
+                                existing_constants_map[ov_const['name']].pop('lower_bound', None)
+                                existing_constants_map[ov_const['name']].pop('upper_bound', None)
                             existing_constants_map[ov_const['name']].update(ov_const)
                         else:
                             existing_constants_map[ov_const['name']] = ov_const # Add new constant
@@ -262,6 +268,109 @@ class KeYmaeraGymEnv(gym.Env):
                     # For other keys, just replace the value
                     config[key] = override_value
         return config
+
+    def _resolve_constants_with_solver(self):
+        constants = self.config.get('constants', [])
+        ranged_constants = [
+            constant for constant in constants
+            if constant.get('lower_bound') is not None
+            and constant.get('upper_bound') is not None
+        ]
+        has_bounds_predicate = any(
+            function.get('name') == 'bounds'
+            for function in self.config.get('function_definitions', [])
+        )
+        if not ranged_constants and not has_bounds_predicate:
+            return
+
+        z3_symbols = {
+            constant['name']: z3.Real(constant['name'])
+            for constant in ranged_constants
+        }
+        fixed_constants_map = {}
+        for constant in constants:
+            name = constant['name']
+            if name in z3_symbols:
+                continue
+            try:
+                fixed_constants_map[name] = float(constant['value'])
+            except (TypeError, ValueError):
+                continue
+
+        solver = z3.Solver()
+        for constant in ranged_constants:
+            symbol = z3_symbols[constant['name']]
+            low = float(constant['lower_bound'])
+            high = float(constant['upper_bound'])
+            if low > high:
+                raise ValueError(
+                    f"Invalid @const range for {constant['name']}: [{low}, {high}]"
+                )
+            solver.add(symbol >= low, symbol <= high)
+
+        if has_bounds_predicate:
+            bounds_condition = self._expr_to_z3(
+                'self._bounds_impl()', z3_symbols, fixed_constants_map
+            )
+            solver.add(bounds_condition)
+
+        result = solver.check()
+        if result == z3.unsat:
+            if has_bounds_predicate:
+                fixed_validation = z3.Solver()
+                fixed_validation.add(self._expr_to_z3(
+                    'self._bounds_impl()', {}, fixed_constants_map
+                ))
+                fixed_result = fixed_validation.check()
+                if fixed_result == z3.unsat:
+                    raise ValueError(
+                        "Fixed @const values do not satisfy the model bounds() predicate."
+                    )
+                if fixed_result != z3.sat:
+                    raise RuntimeError(
+                        "Z3 could not validate fixed constants against bounds(): "
+                        f"{fixed_validation.reason_unknown()}"
+                    )
+            constraint_description = (
+                "the @const ranges and model bounds() predicate"
+                if has_bounds_predicate else "the @const ranges"
+            )
+            raise ValueError(
+                f"No constant assignment satisfies {constraint_description}."
+            )
+        if result != z3.sat:
+            raise RuntimeError(
+                f"Z3 could not resolve model constants: {solver.reason_unknown()}"
+            )
+
+        model = solver.model()
+        for constant in ranged_constants:
+            value = model.evaluate(
+                z3_symbols[constant['name']], model_completion=True
+            )
+            constant['value'] = str(value)
+
+        if has_bounds_predicate:
+            concrete_constants = {}
+            for constant in constants:
+                try:
+                    concrete_constants[constant['name']] = float(constant['value'])
+                except (TypeError, ValueError):
+                    continue
+            validation = z3.Solver()
+            validation.add(self._expr_to_z3(
+                'self._bounds_impl()', {}, concrete_constants
+            ))
+            validation_result = validation.check()
+            if validation_result == z3.unsat:
+                raise ValueError(
+                    "Fixed @const values do not satisfy the model bounds() predicate."
+                )
+            if validation_result != z3.sat:
+                raise RuntimeError(
+                    "Z3 could not validate fixed constants against bounds(): "
+                    f"{validation.reason_unknown()}"
+                )
 
     def _setup_spaces(self):
         # Give the agent an opaque ID for a complete path through the control AST.

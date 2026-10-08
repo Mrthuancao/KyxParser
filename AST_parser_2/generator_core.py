@@ -48,6 +48,7 @@ class GymnasiumEnvironmentGenerator:
         self.hp_definition_map: Dict[str, HPDef] = {}
         self.func_definition_map: Dict[str, FuncDef] = {}
         self.pred_definition_map: Dict[str, PredDef] = {}
+        self.control_choice_count: Optional[int] = None
         # Reused to parse standalone dL expressions found inside annotation values
         # (e.g. `@progress: reward=xr - waypointStartDist(xg)`).
         self._expr_parser = KeYmaeraParser("")
@@ -311,6 +312,23 @@ class GymnasiumEnvironmentGenerator:
                 serialized[name] = value
         return serialized
 
+    def _count_control_choice_paths(self, node: HybridProgram) -> int:
+        if isinstance(node, HPBlock):
+            return self._count_control_choice_paths(node.program)
+        if isinstance(node, Choice):
+            return (
+                self._count_control_choice_paths(node.left)
+                + self._count_control_choice_paths(node.right)
+            )
+        if isinstance(node, Sequence):
+            count = 1
+            for program in node.programs:
+                count *= self._count_control_choice_paths(program)
+            return count
+        if isinstance(node, Iteration):
+            return self._count_control_choice_paths(node.program)
+        return 1
+
     def _collect_loop_invariants(self, hp_name: str, _visited: Optional[set] = None) -> List[Formula]:
         """Walks a hybrid program (resolving named HP references) and collects every
         `@invariant(...)` formula attached to an Iteration node."""
@@ -318,6 +336,28 @@ class GymnasiumEnvironmentGenerator:
         if hp_definition is None:
             return []
         return self._collect_loop_invariants_from_program(hp_definition.body, _visited)
+
+    @staticmethod
+    def _constant_values(
+        const_annotation: Dict[str, Any],
+    ) -> tuple[Optional[str], Optional[str], Optional[str]]:
+        value = const_annotation.get('value')
+        lower_bound = upper_bound = None
+        bound = const_annotation.get('bound')
+        if value is None and isinstance(bound, (int, float)):
+            value = bound
+        elif value is None and isinstance(bound, list) and len(bound) == 2:
+            lower_bound, upper_bound = map(str, bound)
+            if bound[0] == bound[1]:
+                value = bound[0]
+                lower_bound = upper_bound = None
+            else:
+                value = bound[0]
+        return (
+            str(value) if value is not None else None,
+            lower_bound,
+            upper_bound,
+        )
 
     def _find_safety_penalty(self, *formulas: Formula, default: str = "-100.0") -> str:
         """Searches formulas (loop invariants, safety postcondition, ...) for a PredicateCall
@@ -549,8 +589,6 @@ class GymnasiumEnvironmentGenerator:
             if isinstance(definition, FuncDef):
                 if not definition.args and isinstance(definition.body, VarRef) and definition.body.name == definition.name:
                     # Bare declarations such as `Real ep;` are symbolic constants, not zero-arg functions.
-                    # Keep them as constants so they do not generate self-recursive `self._ep_impl()` calls.
-                    self.config.constants.append(ConstantDefinitionConfig(name=definition.name, value="1.0"))
                     continue
                 self.func_definition_map[definition.name] = definition
             elif isinstance(definition, PredDef):
@@ -563,15 +601,13 @@ class GymnasiumEnvironmentGenerator:
             annotations = pv_decl.annotations
             const_annotation = annotations.get('const')
             if const_annotation:
-                value = const_annotation.get('value')
-                if value is None and const_annotation.get('bound'):
-                    bounds = const_annotation['bound']
-                    if isinstance(bounds, list) and len(bounds) == 2:
-                        if bounds[0] == bounds[1]:
-                            value = str(bounds[0])
-                        else:
-                            value = str(bounds[0])
-                self.config.constants.append(ConstantDefinitionConfig(name=var_name, value=str(value if value is not None else var_name)))
+                value, lower_bound, upper_bound = self._constant_values(const_annotation)
+                self.config.constants.append(ConstantDefinitionConfig(
+                    name=var_name,
+                    value=value if value is not None else var_name,
+                    lower_bound=lower_bound,
+                    upper_bound=upper_bound,
+                ))
             else:
                 lower_bound = None
                 upper_bound = None
@@ -590,18 +626,26 @@ class GymnasiumEnvironmentGenerator:
         for definition in archive_entry.definitions.defs:
             if isinstance(definition, FuncDef):
                 if not definition.args and isinstance(definition.body, VarRef) and definition.body.name == definition.name:
-                    # Treat implicit constant declarations such as `Real ep;` as constants with a safe default value.
-                    self.config.constants.append(ConstantDefinitionConfig(name=definition.name, value="1.0"))
+                    # Treat implicit constant declarations as constants rather than generated functions.
+                    const_annotation = definition.annotations.get('const', {})
+                    value, lower_bound, upper_bound = self._constant_values(const_annotation)
+                    self.config.constants.append(ConstantDefinitionConfig(
+                        name=definition.name,
+                        value=value or "1.0",
+                        lower_bound=lower_bound,
+                        upper_bound=upper_bound,
+                    ))
                     continue
 
                 const_annotation = definition.annotations.get('const')
                 if const_annotation:
-                    value = const_annotation.get('value')
-                    if value is None and const_annotation.get('bound'):
-                        bounds = const_annotation['bound']
-                        if isinstance(bounds, list) and len(bounds) == 2:
-                            value = str(bounds[0])
-                    self.config.constants.append(ConstantDefinitionConfig(name=definition.name, value=str(value if value is not None else definition.name)))
+                    value, lower_bound, upper_bound = self._constant_values(const_annotation)
+                    self.config.constants.append(ConstantDefinitionConfig(
+                        name=definition.name,
+                        value=value or definition.name,
+                        lower_bound=lower_bound,
+                        upper_bound=upper_bound,
+                    ))
                     continue
                 body_str = self._term_to_string_python(definition.body)
                 self.config.function_definitions.append(FuncDefConfig(name=definition.name, args=[arg.name for arg in definition.args], body=body_str))
@@ -611,19 +655,19 @@ class GymnasiumEnvironmentGenerator:
             elif isinstance(definition, HPDef):
                 self.config.hp_definitions.append(HPDefConfig(name=definition.name, args=[], body=self._hp_to_string(definition.body)))
 
-        # Models without a direct continuous action can expose their named controller
-        # choice as the agent's discrete action (e.g. train-essential's `ctrl`).
-        if not any(variable.name == 'ar' for variable in self.config.variables):
-            controller = next(
-                (definition for definition in archive_entry.definitions.defs
-                 if isinstance(definition, HPDef) and definition.name in {'controlFunc', 'ctrl'}),
-                None
-            )
-            if controller is not None:
-                controller_program = controller.body
-                while isinstance(controller_program, HPBlock):
-                    controller_program = controller_program.program
-                self.config.control_flow_program_ast_json = self._serialize_ast_node(controller_program)
+        # A named controller is the agent's action interface even when its assignments
+        # target a declared program variable such as `ar`.
+        controller = next(
+            (definition for definition in archive_entry.definitions.defs
+             if isinstance(definition, HPDef) and definition.name in {'controlFunc', 'ctrl'}),
+            None
+        )
+        if controller is not None:
+            controller_program = controller.body
+            while isinstance(controller_program, HPBlock):
+                controller_program = controller_program.program
+            self.control_choice_count = self._count_control_choice_paths(controller_program)
+            self.config.control_flow_program_ast_json = self._serialize_ast_node(controller_program)
 
         for var_config in self.config.variables:
             if var_config.initial_value:
@@ -653,16 +697,20 @@ class GymnasiumEnvironmentGenerator:
     def _determine_action_and_observation_spaces(self):
         action_variables = []
         observation_variables = []
-        if 'ar' in [v.name for v in self.config.variables]:
-            action_variables.append('ar')
+        if self.config.control_flow_program_ast_json is not None:
+            self.config.action_space_type = "discrete"
+            self.config.action_space_bounds = {"n": self.control_choice_count or 1}
+        else:
+            if 'ar' in [v.name for v in self.config.variables]:
+                action_variables.append('ar')
+            if action_variables:
+                self.config.action_space_type = "continuous"
+                self.config.action_space_bounds = {var.name: {"min": var.lower_bound if var.lower_bound else "-float('inf')", "max": var.upper_bound if var.upper_bound else "float('inf')"} for var in self.config.variables if var.name in action_variables}
+            else:
+                self.config.action_space_type = "discrete"
+                self.config.action_space_bounds = {"n": 1}
         for var_config in self.config.variables:
             observation_variables.append(var_config.name)
-        if action_variables:
-            self.config.action_space_type = "continuous"
-            self.config.action_space_bounds = {var.name: {"min": var.lower_bound if var.lower_bound else "-float('inf')", "max": var.upper_bound if var.upper_bound else "float('inf')"} for var in self.config.variables if var.name in action_variables}
-        else:
-            self.config.action_space_type = "discrete"
-            self.config.action_space_bounds = {"n": 1}
         if observation_variables:
             self.config.observation_space_type = "continuous"
             self.config.observation_space_bounds = {var.name: {"min": var.lower_bound if var.lower_bound is not None else "-float('inf')", "max": var.upper_bound if var.upper_bound is not None else "float('inf')"} for var in self.config.variables if var.name in observation_variables}

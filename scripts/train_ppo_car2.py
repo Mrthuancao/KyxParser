@@ -21,6 +21,7 @@ import argparse
 import importlib.util
 import sys
 from pathlib import Path
+from typing import Callable
 
 import matplotlib
 matplotlib.use('Agg')
@@ -119,17 +120,16 @@ def plot_training_curve(callback: EpisodeStatsCallback, out_path: Path):
     print(f"Saved training curve to {out_path}")
 
 
-def reached_waypoint_from_states(state_history: list, gdelta: float, vr_tolerance: float = 0.1) -> bool:
-    """Checks the model's actual `ensure(xr,vr,xg)` condition (xr past the goal's start boundary
-    and stopped) against every recorded step, not just the final one -- the reward is now a
-    graded, model-shaped expression (not a large fixed spike), so it can no longer be used to
-    unambiguously detect success. Checking the full trajectory (not just the final state) avoids
-    the false positives a final-state-only check can produce right at a crash."""
+def reached_waypoint_from_states(
+    state_history: list,
+    ensure_condition: Callable[[float, float, float], bool],
+) -> bool:
+    """Apply the generated model predicate to each recorded state, including pre-crash states."""
     for s in state_history:
         xr, vr, xg = s.get('xr'), s.get('vr'), s.get('xg')
         if xr is None or vr is None or xg is None:
             continue
-        if xr > (xg - gdelta) and abs(vr) < vr_tolerance:
+        if ensure_condition(xr, vr, xg):
             return True
     return False
 
@@ -175,9 +175,12 @@ def plot_single_episode(episode_data: dict, out_path: Path, gdelta: float):
     print(f"Saved episode plot to {out_path} (steps={steps}, total_reward={total_reward:.3f})")
 
 
-def collect_episodes(env, model, n_episodes: int, gdelta: float, max_steps: int = 200):
+def collect_episodes(env, model, n_episodes: int, max_steps: int = 200):
     """Collects episode data (state history, rewards, success flag) for n episodes."""
     episodes = []
+    ensure_condition = env.unwrapped.user_defined_functions.get('ensure')
+    if ensure_condition is None:
+        raise RuntimeError("Generated environment does not provide the model's 'ensure' predicate")
     for _ in range(n_episodes):
         obs, info = env.reset()
         state_history = [dict(info.get('state', {}))]
@@ -194,7 +197,7 @@ def collect_episodes(env, model, n_episodes: int, gdelta: float, max_steps: int 
             total_reward += reward
             step += 1
 
-        success = reached_waypoint_from_states(state_history, gdelta)
+        success = reached_waypoint_from_states(state_history, ensure_condition)
         episodes.append({
             'state_history': state_history,
             'reward_history': reward_history,
@@ -208,7 +211,7 @@ def collect_episodes(env, model, n_episodes: int, gdelta: float, max_steps: int 
     return episodes
 
 
-def evaluate_policy_metrics(episodes: list, gdelta: float, out_path: Path):
+def evaluate_policy_metrics(episodes: list, out_path: Path):
     """Plots validation graph and prints metrics from collected episodes."""
     rewards = [e['total_reward'] for e in episodes]
     lengths = [e['steps'] for e in episodes]
@@ -276,23 +279,8 @@ def main():
 
     EnvClass = build_env_class(args.dl_path, args.env_name, env_out)
 
-    # Default constants (each generator-picked as the lower bound of its @const range) leave
-    # `bounds()` unsatisfiable (Vmax too small relative to A/b/ep/GDelta), so the initial-state
-    # buffer can never populate. Override to a consistent, feasible set.
-    car2_constants = [
-        {'name': 'ep', 'value': '0.2'},
-        {'name': 'b', 'value': '1.0'},
-        {'name': 'A', 'value': '1.0'},
-        {'name': 'Vmax', 'value': '5.0'},
-        {'name': 'GDelta', 'value': '40.0'}
-    ]
-    gdelta = 40.0
-
-    # Reward/penalty magnitude is now shaped in the model itself (car2.txt's @progress/@safety
-    # annotations: a graded `xr - waypointStartDist(xg)` success reward and a `-50` safety
-    # penalty), so no script-side rescaling is needed here anymore. The ODE-solver/domain-crash
-    # penalty is a separate hardcoded constant from `reward_function_body`, so it's set explicitly
-    # to match the model's own -50 safety penalty scale (kept consistent, not rescaled).
+    # Use the reward and safety terms defined by the model without adding a separate solver-failure
+    # penalty on top.
     ode_failure_penalty = 0
 
     def make_env(buffer_capacity: int):
@@ -301,7 +289,6 @@ def main():
         # policy would. Once drained, refilling on-the-fly via rejection sampling is extremely
         # slow (or fails outright), so size the buffer to cover a full training run up front.
         env = EnvClass(render_mode=None, config_override={
-            'constants': car2_constants,
             'ode_failure_penalty': ode_failure_penalty,
             # Default max_step (0.001) forces >=200 forced RK45 sub-steps per control cycle
             # (ep=0.2), each doing an expensive SymPy substitution -> ~16 steps/sec. Raising it
@@ -341,9 +328,10 @@ def main():
     eval_buffer_capacity = min(max((args.eval_episodes + 1) * 210, 2000), 30000)
     eval_env = make_env(eval_buffer_capacity)
     max_steps = getattr(eval_env.unwrapped, 'max_episode_steps', 200)
+    gdelta = float(eval_env.unwrapped.current_state['GDelta'])
 
     # Collect episodes for evaluation
-    episodes = collect_episodes(eval_env, model, args.eval_episodes, gdelta, max_steps)
+    episodes = collect_episodes(eval_env, model, args.eval_episodes, max_steps)
     
     # Separate into successes and failures
     successes = [e for e in episodes if e['success']]
@@ -358,7 +346,7 @@ def main():
         plot_single_episode(ep, args.out_dir / f"{args.dl_path.stem.lower()}_failure_{idx}.png", gdelta)
     
     # Plot validation metrics
-    evaluate_policy_metrics(episodes, gdelta, args.out_dir / f"{args.dl_path.stem.lower()}_validation.png")
+    evaluate_policy_metrics(episodes, args.out_dir / f"{args.dl_path.stem.lower()}_validation.png")
 
     train_env.close()
     eval_env.close()

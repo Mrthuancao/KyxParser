@@ -14,15 +14,15 @@ Theorem "IJRR17/Theorem 14: Reach waypoint with deadline"
  */
 
 Definitions
-    // @const: bound=[0.1:0.5]; def="time limit for control decisions"
+    // @const: bound=0.2; def="time limit for control decisions"
     Real ep;      /* time limit for control decisions */
-    // @const: bound=[0.5:5.0]; def="minimum braking capability of the robot"
+    // @const: bound=1.0; def="minimum braking capability of the robot"
     Real b;       /* minimum braking capability of the robot */
-    // @const: bound=[1.0:10.0]; def="maximum acceleration"
+    // @const: bound=1.0; def="maximum acceleration"
     Real A;       /* maximum acceleration -b <= a <= A */
-    // @const: bound=[1.0:40.0]; def="goal area size"
+    // @const: bound=40.0; def="goal area size"
     Real GDelta;	 /* goal area size */
-    // @const: bound=[5.0:30.0]; def="maximum robot velocity"
+    // @const: bound=5.0; def="maximum robot velocity"
     Real Vmax;    /* robot cannot go faster than this */
 
     Real waypointStartDist(Real xg) = xg-GDelta;

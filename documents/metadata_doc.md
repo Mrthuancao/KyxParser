@@ -117,14 +117,20 @@ This section describes annotations used to define the fixed parameters and state
 ### 4.1. Category Tags for Environment Definition
 
 #### `@const`
-Used for `Real` definitions that represent fixed parameters of the environment or system. These values might be sampled from a nondeterministic range at the start of an episode.
+Used for `Real` definitions that represent fixed parameters of the environment or system.
 *   **Primary Use Cases:** Physical constants, environmental parameters, configuration settings.
 *   **Attributes:**
-    *   **`bound=[min:max]`**: (Optional) Specifies a nondeterministic range from which the constant's value will be sampled at the beginning of each episode. `min` and `max` should be real numbers.
+    *   **`bound=value`**: Specifies one fixed numeric value for the constant. The generated environment checks fixed values against the model's `bounds()` predicate, when present.
+    *   **`bound=[min:max]`**: Specifies a numeric range. At environment initialization, the generator uses Z3 to find values inside the ranges that satisfy the model's `bounds()` predicate, when present. If no `bounds()` predicate is defined, Z3 selects values that satisfy the ranges alone. Initialization fails explicitly if there is no satisfying assignment.
     *   **`def="description"`**: (Optional) A descriptive string explaining the constant's purpose.
 *   **Example:**
     ```java
     // @const: bound=[0.1:0.5], def="time limit for control decisions"
+    Real ep;
+    ```
+    To fix the parameter to a particular value instead:
+    ```java
+    // @const: bound=0.2; def="time limit for control decisions"
     Real ep;
     ```
 
