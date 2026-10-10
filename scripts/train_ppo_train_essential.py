@@ -1,9 +1,9 @@
-"""Train PPO on the fixed-authority train-approach Gymnasium task.
+"""Train MaskablePPO on the fixed-authority train-approach Gymnasium task.
 
 The policy chooses between the formal controller's two guarded branches:
-0 = brake, 1 = accelerate. During training, an unavailable branch is penalized
-and recovered to the guard-valid branch. Validation reports both this assisted
-mode and strict unassisted execution. Success means stopping in
+0 = brake, 1 = accelerate. Training and masked validation exclude branches
+whose guards fail; a separate unmasked evaluation checks reliance on masking.
+Success means stopping in
 [m - delta, m] at speed no greater than d.
 
 Run from the repository root:
@@ -18,9 +18,8 @@ from pathlib import Path
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import gymnasium as gym
 import numpy as np
-from stable_baselines3 import PPO
+from sb3_contrib import MaskablePPO
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv
@@ -40,47 +39,14 @@ class EpisodeStatsCallback(BaseCallback):
         super().__init__()
         self.episode_rewards = []
         self.episode_lengths = []
-        self.rejected_actions = 0
 
     def _on_step(self) -> bool:
         for info in self.locals.get("infos", []):
-            self.rejected_actions += int("rejected_action" in info)
             episode = info.get("episode")
             if episode:
                 self.episode_rewards.append(episode["r"])
                 self.episode_lengths.append(episode["l"])
         return True
-
-
-class GuardValidActionRecovery(gym.Wrapper):
-    """Penalize a rejected branch choice, then execute the guard-valid branch.
-
-    The generated KeYmaera environment itself remains strict: a failed test
-    terminates its step. This training wrapper avoids turning that invalid
-    choice into an uninformative terminal transition for PPO.
-    """
-
-    def __init__(self, env, invalid_action_penalty: float):
-        super().__init__(env)
-        self.invalid_action_penalty = invalid_action_penalty
-
-    def step(self, action):
-        observation, reward, terminated, truncated, info = self.env.step(action)
-        if not (terminated and info.get("control_flow_info") == "test_condition_failed"):
-            return observation, reward, terminated, truncated, info
-
-        requested_action = int(np.asarray(action).item())
-        valid_action = 1 - requested_action
-        observation, valid_reward, terminated, truncated, info = self.env.step(valid_action)
-        info["rejected_action"] = requested_action
-        info["executed_action"] = valid_action
-        return (
-            observation,
-            float(valid_reward) - self.invalid_action_penalty,
-            terminated,
-            truncated,
-            info,
-        )
 
 
 def build_env_class(model_path: Path, generated_path: Path):
@@ -117,6 +83,7 @@ def evaluate_policy(
     movement_authority: float,
     arrival_zone_width: float,
     arrival_speed: float,
+    use_action_mask: bool,
 ) -> list:
     """Run complete deterministic episodes and retain trajectories/reasons for plots."""
     episodes = []
@@ -129,7 +96,14 @@ def evaluate_policy(
             terminated = truncated = False
 
             while not (terminated or truncated):
-                action, _ = model.predict(observation, deterministic=True)
+                predict_kwargs = {}
+                if use_action_mask:
+                    predict_kwargs["action_masks"] = env.action_masks()
+                action, _ = model.predict(
+                    observation,
+                    deterministic=True,
+                    **predict_kwargs,
+                )
                 observation, reward, terminated, truncated, info = env.step(action)
                 reward_history.append(float(reward))
                 state_history.append(dict(info.get("state", {})))
@@ -186,14 +160,14 @@ def print_evaluation_metrics(mode: str, episodes: list):
     print(f"Failed terminations: {failures}/{len(episodes)}")
     print(f"Time-limit truncations: {timeouts}/{len(episodes)}")
     print(f"Rejected branch requests: {rejected_actions}")
-    if mode == "unassisted":
+    if mode == "unmasked":
         reasons = {}
         for episode in episodes:
             if episode["outcome"] == "failure":
                 reason = episode["termination_reason"]
                 reasons[reason] = reasons.get(reason, 0) + 1
         if reasons:
-            print(f"Unassisted failure reasons: {reasons}")
+            print(f"Unmasked failure reasons: {reasons}")
 
 
 def plot_episode(
@@ -307,7 +281,7 @@ def plot_validation_summary(episodes_by_mode: dict, out_path: Path):
     axes[0].set_xticks(positions, [label.title() for label in outcomes])
     axes[0].set_ylim(0.0, 1.0)
     axes[0].set_ylabel("Episode fraction")
-    axes[0].set_title("Validation outcomes: shielded vs strict policy")
+    axes[0].set_title("Validation outcomes: masked vs unmasked policy")
     axes[0].legend()
 
     for mode, episodes in episodes_by_mode.items():
@@ -332,11 +306,11 @@ def plot_validation_summary(episodes_by_mode: dict, out_path: Path):
         )
     axes[2].bar([mode.title() for mode in modes], intervention_rates, color="tab:orange")
     axes[2].set_ylabel("Interventions per 100 steps")
-    axes[2].set_title("Rejected branch requests (assisted corrections / strict failures)")
+    axes[2].set_title("Illegal branch requests during unmasked evaluation")
     fig.tight_layout()
     fig.savefig(out_path)
     plt.close(fig)
-    print(f"Saved assisted/unassisted validation plot: {out_path}")
+    print(f"Saved masked/unmasked validation plot: {out_path}")
 
 
 def main():
@@ -350,7 +324,6 @@ def main():
     parser.add_argument("--eval-episodes", type=int, default=20)
     parser.add_argument("--max-episode-steps", type=int, default=200)
     parser.add_argument("--plot-episodes", type=int, default=5)
-    parser.add_argument("--invalid-action-penalty", type=float, default=10.0)
     parser.add_argument(
         "--out-dir",
         type=Path,
@@ -360,10 +333,9 @@ def main():
     args = parser.parse_args()
 
     if (args.timesteps < 2 or args.eval_episodes <= 0 or args.max_episode_steps <= 0
-            or args.plot_episodes <= 0
-            or args.invalid_action_penalty <= 0):
+            or args.plot_episodes <= 0):
         parser.error(
-            "timesteps must be at least 2; episode counts, plot counts, lengths, and penalty "
+            "timesteps must be at least 2; episode counts, plot counts, and lengths "
             "must be positive"
         )
 
@@ -372,24 +344,13 @@ def main():
     generated_path = args.model_dir / "generated_train_essential_fixed_authority_env.py"
     env_class = build_env_class(args.dl_path, generated_path)
 
-    # Use a feasible, non-degenerate parameter set instead of the generator's
-    # generic defaults for bare symbolic constants.
     movement_authority = 10.0
     arrival_speed = 0.2
     arrival_zone_width = 0.5
-    constants = [
-        {"name": "ep", "value": "0.1"},
-        {"name": "b", "value": "1.0"},
-        {"name": "A", "value": "1.0"},
-        {"name": "m", "value": str(movement_authority)},
-        {"name": "d", "value": str(arrival_speed)},
-        {"name": "delta", "value": str(arrival_zone_width)},
-    ]
 
-    def make_env(assisted: bool):
+    def make_env():
         env = env_class(
             config_override={
-                "constants": constants,
                 "max_episode_steps": args.max_episode_steps,
                 "ode_solver_step_size": 0.02,
                 "initial_state_buffer_config": {"enabled": False},
@@ -402,13 +363,11 @@ def main():
             )
         if not env.differential_equations or not env.config["problem"]["loop_invariants"]:
             raise RuntimeError("Generated environment is missing train dynamics or loop invariant")
-        if assisted:
-            env = GuardValidActionRecovery(env, args.invalid_action_penalty)
         return env
 
-    train_env = DummyVecEnv([lambda: Monitor(make_env(assisted=True))])
+    train_env = DummyVecEnv([lambda: Monitor(make_env())])
     rollout_steps = min(2048, args.timesteps)
-    model = PPO(
+    model = MaskablePPO(
         "MlpPolicy",
         train_env,
         verbose=1,
@@ -419,9 +378,9 @@ def main():
     callback = EpisodeStatsCallback()
     model.learn(total_timesteps=args.timesteps, callback=callback, progress_bar=True)
 
-    model_path = args.model_dir / "ppo_train_essential_fixed_authority.zip"
+    model_path = args.model_dir / "ppo_train_essential_fixed_authority_masked.zip"
     model.save(str(model_path))
-    print(f"Saved PPO model: {model_path}")
+    print(f"Saved MaskablePPO model: {model_path}")
 
     if callback.episode_rewards:
         fig, axes = plt.subplots(2, 1, figsize=(9, 7), sharex=True)
@@ -431,7 +390,7 @@ def main():
         axes[1].plot(callback.episode_lengths, alpha=0.6, color="tab:purple")
         axes[1].set_xlabel("Episode")
         axes[1].set_ylabel("Steps")
-        fig.suptitle("PPO training — fixed-authority train approach")
+        fig.suptitle("MaskablePPO training — fixed-authority train approach")
         fig.tight_layout()
         plot_path = args.out_dir / "train_essential_fixed_authority_training.png"
         fig.savefig(plot_path)
@@ -440,17 +399,19 @@ def main():
     else:
         print("No episodes completed during training; skipping training plot.")
 
-    assisted_episodes = evaluate_policy(
-        model, make_env(assisted=True), args.eval_episodes,
+    masked_episodes = evaluate_policy(
+        model, make_env(), args.eval_episodes,
         movement_authority, arrival_zone_width, arrival_speed,
+        use_action_mask=True,
     )
-    strict_episodes = evaluate_policy(
-        model, make_env(assisted=False), args.eval_episodes,
+    unmasked_episodes = evaluate_policy(
+        model, make_env(), args.eval_episodes,
         movement_authority, arrival_zone_width, arrival_speed,
+        use_action_mask=False,
     )
     all_episodes = {
-        "assisted": assisted_episodes,
-        "unassisted": strict_episodes,
+        "masked": masked_episodes,
+        "unmasked": unmasked_episodes,
     }
     for mode, episodes in all_episodes.items():
         print_evaluation_metrics(mode, episodes)
@@ -467,7 +428,6 @@ def main():
         all_episodes,
         args.out_dir / "train_essential_fixed_authority_validation.png",
     )
-    print(f"Rejected requests during assisted training: {callback.rejected_actions}")
 
     train_env.close()
 
