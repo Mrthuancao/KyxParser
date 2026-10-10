@@ -943,7 +943,8 @@ class KeYmaeraGymEnv(gym.Env):
 
         # Execute discrete control flow based on agent's action
         if self.control_flow_program_ast:
-            control_action = int(np.asarray(action).item())
+            action_values = np.asarray(action).reshape(-1)
+            control_action = int(action_values[0])
             invalid_mode = self.config.get('invalid_action_mode', 'mask')
             if invalid_mode not in ('mask', 'penalize', 'repair'):
                 raise ValueError(f"Unsupported invalid_action_mode: {{invalid_mode}}")

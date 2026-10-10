@@ -21,7 +21,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
-from stable_baselines3 import PPO
+from sb3_contrib import MaskablePPO
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv
@@ -64,6 +64,15 @@ class HierarchicalCar1Env(gym.Wrapper):
         env._assignment_handler = self._handle_assignment
         env._execute_control_flow = self._execute_control_flow
 
+    def action_masks(self):
+        """Mask illegal controller paths; all parameter bins remain selectable."""
+        path_mask = np.asarray(self.env.action_masks(), dtype=bool)
+        return np.concatenate((
+            path_mask,
+            np.ones(self.acceleration_bins, dtype=bool),
+            np.ones(self.radius_bins, dtype=bool),
+        ))
+
     def _execute_control_flow(self, action):
         action_values = np.asarray(action, dtype=np.int64).reshape(-1)
         expected_size = 3
@@ -78,7 +87,10 @@ class HierarchicalCar1Env(gym.Wrapper):
         self._full_step_duration = float(state.get('ep', env.time_step))
         env.time_step = self._full_step_duration
 
-        constants = {item['name']: float(item['value']) for item in env.config['constants']}
+        constants = {
+            name: float(env.current_state[name])
+            for name in ('b', 'A')
+        }
         braking = constants['b']
         acceleration_limit = constants['A']
         self._selected_acceleration = float(np.linspace(
@@ -323,7 +335,11 @@ def evaluate_policy(env, model, episode_count, output_path, seed=10000):
         control_flow_info = ''
 
         while not (terminated or truncated) and len(rewards) < max_steps:
-            action, _ = model.predict(observation, deterministic=True)
+            action, _ = model.predict(
+                observation,
+                deterministic=True,
+                action_masks=env.get_wrapper_attr('action_masks')(),
+            )
             observation, reward, terminated, truncated, info = env.step(action)
             total_reward += float(reward)
             rewards.append(float(reward))
@@ -482,19 +498,10 @@ def main():
     generated_path = proj_root / 'generated_car1_env.py'
     EnvClass = load_environment_class(args.dl_path, generated_path)
 
-    constants = [
-        {'name': 'ep', 'value': '0.2'},
-        {'name': 'b', 'value': '1.0'},
-        {'name': 'A', 'value': '2.0'},
-        {'name': 'W', 'value': '0.5'},
-        {'name': 'V', 'value': '1.0'},
-    ]
-
     def make_env():
         base_env = EnvClass(
             render_mode=None,
             config_override={
-                'constants': constants,
                 'ode_solver_step_size': 0.02,
                 'initial_state_buffer_config': {'enabled': False},
             },
@@ -505,7 +512,7 @@ def main():
     train_env.seed(args.seed)
     print(f"Car 1 hierarchical action space: {train_env.action_space}")
     n_steps = min(max(args.timesteps, 32), 512)
-    model = PPO(
+    model = MaskablePPO(
         'MlpPolicy',
         train_env,
         verbose=1,
