@@ -84,9 +84,61 @@ class TestKeYmaeraParser(unittest.TestCase):
         self.assertEqual(env.current_state['ar'], 0.0)
 
         env.current_state.update({'xr': 0.0, 'vr': 0.0, 'xg': 50.0, 'ar': 0.0, 't': 0.0, 'T': 100.0})
-        _, _, terminated, _, _ = env.step(2)
+        _, _, terminated, _, step_info = env.step(2)
         self.assertFalse(terminated)
         self.assertEqual(env.current_state['ar'], 1.0)
+
+        env.current_state.update({'xr': 0.0, 'vr': 0.0, 'xg': 50.0, 'ar': 0.0, 't': 0.0, 'T': 100.0})
+        _, _, terminated, _, step_info = env.step(0)
+        self.assertTrue(terminated)
+        self.assertEqual(step_info['control_action'], 0)
+        self.assertEqual(step_info['termination_reason'], 'control_flow:test_condition_failed')
+        env.close()
+
+    def test_car2_invalid_action_modes_and_action_masks(self):
+        model_ast = KeYmaeraParser(
+            Path('test/input/withBound/car2.txt').read_text(encoding='utf-8')
+        ).parse()
+        generated_code = GymnasiumEnvironmentGenerator('Car2').generate_environment_code(model_ast)
+        namespace = {'__name__': 'generated_car2_modes_test'}
+        exec(compile(generated_code, '<generated-car2-modes>', 'exec'), namespace)
+        env_class = namespace['KeYmaeraGymEnv']
+        outside = {'xr': 0.0, 'vr': 0.0, 'xg': 50.0, 'ar': 0.0, 't': 0.0, 'T': 100.0}
+        inside_moving = {'xr': 20.0, 'vr': 1.0, 'xg': 50.0, 'ar': 0.0, 't': 0.0, 'T': 100.0}
+
+        env = env_class()
+        env.current_state.update(outside)
+        self.assertEqual(env.action_masks().tolist(), [False, False, True, False])
+        env.current_state.update(inside_moving)
+        self.assertEqual(env.action_masks().tolist(), [True, False, False, False])
+        self.assertEqual(env.current_state['xr'], 20.0)
+        env.close()
+
+        env = env_class(config_override={'invalid_action_mode': 'penalize'})
+        env.current_state.update(outside)
+        _, _, terminated, _, info = env.step(0)
+        self.assertTrue(terminated)
+        self.assertFalse(info['action_repaired'])
+        env.close()
+
+        env = env_class(config_override={'invalid_action_mode': 'repair', 'repair_penalty': -5.0})
+        env.current_state.update(outside)
+        _, reward, terminated, _, info = env.step(0)
+        self.assertFalse(terminated)
+        self.assertTrue(info['action_repaired'])
+        self.assertEqual((info['attempted_action'], info['control_action']), (0, 2))
+        env.close()
+
+        env = env_class(config_override={'invalid_action_mode': 'repair'})
+        env.current_state.update(outside)
+        _, unpenalized_reward, _, _, _ = env.step(0)
+        self.assertAlmostEqual(reward, unpenalized_reward - 5.0)
+        env.close()
+
+        env = env_class(config_override={'invalid_action_mode': 'bogus'})
+        env.current_state.update(outside)
+        with self.assertRaises(ValueError):
+            env.step(0)
         env.close()
 
     def test_constant_ranges_are_solved_against_bounds_and_fixed_values_are_validated(self):

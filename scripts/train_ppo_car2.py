@@ -18,8 +18,11 @@ Note: the car2 model's ODE integration is significantly slower than train_safety
 steps/sec), so 10k timesteps takes roughly 10-15 minutes.
 """
 import argparse
+import csv
 import importlib.util
+import json
 import sys
+from collections import Counter
 from pathlib import Path
 from typing import Callable
 
@@ -28,6 +31,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
 
+from sb3_contrib import MaskablePPO
 from stable_baselines3 import PPO
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.callbacks import BaseCallback
@@ -162,7 +166,7 @@ def plot_single_episode(episode_data: dict, out_path: Path, gdelta: float):
 
     axes[2].plot(ar_series, color='tab:orange')
     axes[2].set_ylabel('Acceleration (ar)')
-    axes[2].set_title('Robot acceleration (action)')
+    axes[2].set_title('Acceleration assigned by the selected controller branch')
 
     axes[3].plot(reward_history, color='tab:green')
     axes[3].set_xlabel('Step')
@@ -175,7 +179,7 @@ def plot_single_episode(episode_data: dict, out_path: Path, gdelta: float):
     print(f"Saved episode plot to {out_path} (steps={steps}, total_reward={total_reward:.3f})")
 
 
-def collect_episodes(env, model, n_episodes: int, max_steps: int = 200):
+def collect_episodes(env, model, n_episodes: int, max_steps: int = 200, use_masks: bool = False):
     """Collects episode data (state history, rewards, success flag) for n episodes."""
     episodes = []
     ensure_condition = env.unwrapped.user_defined_functions.get('ensure')
@@ -188,16 +192,37 @@ def collect_episodes(env, model, n_episodes: int, max_steps: int = 200):
         terminated = truncated = False
         total_reward = 0.0
         step = 0
+        chosen_actions = []
 
         while not (terminated or truncated) and step < max_steps:
-            action, _ = model.predict(obs, deterministic=True)
+            if use_masks:
+                action, _ = model.predict(
+                    obs, deterministic=True, action_masks=env.unwrapped.action_masks()
+                )
+            else:
+                action, _ = model.predict(obs, deterministic=True)
+            action_values = np.asarray(action).reshape(-1).tolist()
             obs, reward, terminated, truncated, info = env.step(action)
+            chosen_actions.append({
+                'path_id': info.get('control_action'),
+                'policy_action': action_values[0] if len(action_values) == 1 else action_values,
+                'ar_after_control': info.get('state', {}).get('ar'),
+                'control_flow_info': info.get('control_flow_info'),
+                'attempted_action': info.get('attempted_action'),
+                'repaired': info.get('action_repaired', False),
+            })
             reward_history.append(reward)
             state_history.append(dict(info.get('state', {})))
             total_reward += reward
             step += 1
 
         success = reached_waypoint_from_states(state_history, ensure_condition)
+        termination_reason = info.get('termination_reason')
+        if termination_reason is None:
+            termination_reason = (
+                'time_limit_truncation' if truncated or step >= max_steps
+                else 'episode_stopped_without_reason'
+            )
         episodes.append({
             'state_history': state_history,
             'reward_history': reward_history,
@@ -205,7 +230,10 @@ def collect_episodes(env, model, n_episodes: int, max_steps: int = 200):
             'total_reward': total_reward,
             'steps': step,
             'terminated': terminated,
-            'truncated': truncated
+            'truncated': truncated,
+            'termination_reason': termination_reason,
+            'chosen_actions': chosen_actions,
+            'final_state': state_history[-1],
         })
 
     return episodes
@@ -216,7 +244,11 @@ def evaluate_policy_metrics(episodes: list, out_path: Path):
     rewards = [e['total_reward'] for e in episodes]
     lengths = [e['steps'] for e in episodes]
     successes = [e['success'] for e in episodes]
-    safety_violations = sum(1 for e in episodes if e['terminated'] and not e['success'])
+    termination_counts = Counter(e['termination_reason'] for e in episodes)
+    action_counts = Counter(
+        action['path_id'] if action['path_id'] is not None else str(action['policy_action'])
+        for episode in episodes for action in episode['chosen_actions']
+    )
     n_episodes = len(episodes)
     success_rate = float(np.mean(successes)) if successes else 0.0
 
@@ -247,13 +279,51 @@ def evaluate_policy_metrics(episodes: list, out_path: Path):
     print(f"Mean reward: {np.mean(rewards):.3f} +/- {np.std(rewards):.3f}")
     print(f"Mean episode length: {np.mean(lengths):.1f} +/- {np.std(lengths):.1f}")
     print(f"Reached waypoint: {sum(successes)}/{n_episodes} ({success_rate * 100:.1f}%)")
-    print(f"Safety violations (terminated early): {safety_violations}/{n_episodes}")
+    print("Termination reasons:")
+    for reason, count in termination_counts.most_common():
+        print(f"  {reason}: {count}/{n_episodes}")
+    print(f"Controller action counts (0-based path IDs): {dict(action_counts)}")
+    for index, episode in enumerate(episodes, start=1):
+        final = episode['final_state']
+        state_summary = {
+            name: round(float(final[name]), 4)
+            for name in ('xr', 'vr', 'ar', 'xg', 'T')
+            if name in final
+        }
+        print(
+            f"Episode {index}: success={episode['success']}, "
+            f"reason={episode['termination_reason']}, "
+            f"actions={episode['chosen_actions']}, final_state={state_summary}"
+        )
+
+    diagnostics_path = out_path.with_name(f"{out_path.stem}_episodes.csv")
+    with diagnostics_path.open('w', newline='', encoding='utf-8') as csv_file:
+        writer = csv.DictWriter(csv_file, fieldnames=[
+            'episode', 'success', 'termination_reason', 'terminated', 'truncated',
+            'steps', 'total_reward', 'chosen_actions', 'final_state',
+        ])
+        writer.writeheader()
+        for index, episode in enumerate(episodes, start=1):
+            writer.writerow({
+                'episode': index,
+                'success': episode['success'],
+                'termination_reason': episode['termination_reason'],
+                'terminated': episode['terminated'],
+                'truncated': episode['truncated'],
+                'steps': episode['steps'],
+                'total_reward': episode['total_reward'],
+                'chosen_actions': json.dumps(episode['chosen_actions']),
+                'final_state': json.dumps(episode['final_state']),
+            })
+    print(f"Saved per-episode diagnostics to {diagnostics_path}")
+
     return {
         'mean_reward': float(np.mean(rewards)),
         'std_reward': float(np.std(rewards)),
         'mean_length': float(np.mean(lengths)),
         'success_rate': success_rate,
-        'safety_violations': safety_violations,
+        'termination_reasons': dict(termination_counts),
+        'action_counts': dict(action_counts),
         'n_episodes': n_episodes,
     }
 
@@ -266,6 +336,12 @@ def main():
     parser.add_argument('--eval-episodes', type=int, default=20)
     parser.add_argument('--out-dir', type=Path, default=proj_root / 'logs' / 'plots')
     parser.add_argument('--model-dir', type=Path, default=proj_root / 'models')
+    parser.add_argument('--invalid-action-mode', choices=['mask', 'penalize', 'repair'], default='mask',
+                        help="mask: MaskablePPO only samples legal controller choices; "
+                             "penalize: illegal choice ends the episode with a penalty; "
+                             "repair: illegal choice is replaced by the first legal one.")
+    parser.add_argument('--repair-penalty', type=float, default=0.0,
+                        help="Reward added when 'repair' replaces an illegal choice (use a negative value).")
     args = parser.parse_args()
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
@@ -290,6 +366,8 @@ def main():
         # slow (or fails outright), so size the buffer to cover a full training run up front.
         env = EnvClass(render_mode=None, config_override={
             'ode_failure_penalty': ode_failure_penalty,
+            'invalid_action_mode': args.invalid_action_mode,
+            'repair_penalty': args.repair_penalty,
             # Default max_step (0.001) forces >=200 forced RK45 sub-steps per control cycle
             # (ep=0.2), each doing an expensive SymPy substitution -> ~16 steps/sec. Raising it
             # cuts forced sub-steps ~20x (measured ~230+ steps/sec) with no accuracy loss beyond
@@ -314,7 +392,11 @@ def main():
 
     # ent_coef adds an exploration bonus so the policy doesn't prematurely collapse to a narrow
     # "just survive" behavior before ever discovering the sparse success reward.
-    model = PPO('MlpPolicy', train_env, verbose=1, ent_coef=0.01)
+    use_masks = args.invalid_action_mode == 'mask'
+    if use_masks:
+        model = MaskablePPO('MlpPolicy', train_env, verbose=1, ent_coef=0.01)
+    else:
+        model = PPO('MlpPolicy', train_env, verbose=1, ent_coef=0.01)
 
     callback = EpisodeStatsCallback()
     model.learn(total_timesteps=args.timesteps, callback=callback, progress_bar=True)
@@ -331,7 +413,7 @@ def main():
     gdelta = float(eval_env.unwrapped.current_state['GDelta'])
 
     # Collect episodes for evaluation
-    episodes = collect_episodes(eval_env, model, args.eval_episodes, max_steps)
+    episodes = collect_episodes(eval_env, model, args.eval_episodes, max_steps, use_masks=use_masks)
     
     # Separate into successes and failures
     successes = [e for e in episodes if e['success']]

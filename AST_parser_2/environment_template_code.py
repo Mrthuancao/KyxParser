@@ -684,6 +684,7 @@ class KeYmaeraGymEnv(gym.Env):
         return derivs
 
     def _run_continuous_dynamics(self, action_to_apply):
+        self.last_dynamics_failure_reason = None
         # Apply action to relevant variables before ODE integration
         # This block is now only relevant if action_space_type is 'continuous'
         # and controlFunc is NOT being used to set variables.
@@ -755,13 +756,35 @@ class KeYmaeraGymEnv(gym.Env):
                 if not bool(constraint_met): # Convert SymPy boolean to Python bool
                     print(f"Differential domain constraint violated: {{self.differential_domain_constraint}}")
                     self._debug_print(f"DEBUG: _run_continuous_dynamics returning True due to domain violation.")
+                    self.last_dynamics_failure_reason = "ode_domain_violation"
                     return True # Indicate episode should terminate due to violation
             self._debug_print(f"DEBUG: _run_continuous_dynamics returning False (solver success, no domain violation).")
             return False # Indicate episode continues
         else:
             print(f"ODE solver failed: {{sol.message}}")
             self._debug_print(f"DEBUG: _run_continuous_dynamics returning True due to solver failure.")
+            self.last_dynamics_failure_reason = "ode_solver_failure"
             return True # Indicate episode should terminate
+
+    def action_masks(self):
+        \"\"\"Boolean mask of controller choice paths whose guards hold in the current state.\"\"\"
+        if self.action_space_type != 'discrete' or not self.control_flow_program_ast:
+            return np.ones(getattr(self.action_space, 'n', 1), dtype=bool)
+        saved_state = dict(self.current_state)
+        mask = np.zeros(len(self.control_choice_paths), dtype=bool)
+        try:
+            for index, path in enumerate(self.control_choice_paths):
+                self.current_state.clear()
+                self.current_state.update(saved_state)
+                result = self._execute_hp_node(self.control_flow_program_ast, path, [0])
+                mask[index] = not result["terminated"]
+        finally:
+            self.current_state.clear()
+            self.current_state.update(saved_state)
+        if not mask.any():
+            # No legal choice: let the environment report the failed guard instead of hiding it.
+            mask[:] = True
+        return mask
 
     def _execute_control_flow(self, action_choice: int) -> Dict[str, Any]:
         \"\"\"
@@ -913,17 +936,40 @@ class KeYmaeraGymEnv(gym.Env):
         terminated = False
         truncated = False
         reward = 0.0 # Initialize reward
+        termination_reason = None
+        control_action = None
+        attempted_action = None
+        action_repaired = False
 
         # Execute discrete control flow based on agent's action
         if self.control_flow_program_ast:
+            control_action = int(np.asarray(action).item())
+            invalid_mode = self.config.get('invalid_action_mode', 'mask')
+            if invalid_mode not in ('mask', 'penalize', 'repair'):
+                raise ValueError(f"Unsupported invalid_action_mode: {{invalid_mode}}")
+            if invalid_mode == 'repair':
+                legal = self.action_masks()
+                in_range = 0 <= control_action < len(legal)
+                if in_range and not legal[control_action] and legal.any() and not legal.all():
+                    attempted_action = control_action
+                    control_action = int(np.flatnonzero(legal)[0])
+                    action = control_action
+                    action_repaired = True
+                    reward += self.config.get('repair_penalty', 0.0)
+            # 'mask' relies on a mask-aware algorithm; an illegal action that still arrives is penalized.
             control_flow_status = self._execute_control_flow(action)
             terminated = control_flow_status["terminated"]
             reward += control_flow_status["reward_delta"]
             if terminated:
+                termination_reason = f"control_flow:{control_flow_status['info']}"
                 self._debug_print(f"DEBUG: step method: Terminated by control flow: {{control_flow_status['info']}}")
                 observation = self._get_observation()
                 info = self._get_info()
                 info["control_flow_info"] = control_flow_status["info"]
+                info["control_action"] = control_action
+                info["attempted_action"] = attempted_action
+                info["action_repaired"] = action_repaired
+                info["termination_reason"] = termination_reason
                 if self.render_mode == "human":
                     self._render_frame()
                 return observation, reward, terminated, truncated, info
@@ -947,6 +993,7 @@ class KeYmaeraGymEnv(gym.Env):
         self._debug_print(f"DEBUG: step method: solver_failed = {{solver_failed}}")
         if solver_failed:
             terminated = True # Terminate if ODE solver fails or domain constraint violated
+            termination_reason = self.last_dynamics_failure_reason or "ode_failure"
             reward += self.config.get('ode_failure_penalty', -100.0) # Penalty for ODE failure (configurable)
 
         # Evaluate reward (from problem definition)
@@ -961,12 +1008,27 @@ class KeYmaeraGymEnv(gym.Env):
             evaluated_termination_cond = self._evaluate_expression(termination_expr, self.current_state)
             self._debug_print(f"DEBUG: step method: evaluated_termination_cond = {{evaluated_termination_cond}}")
             terminated = bool(evaluated_termination_cond)
+            if terminated:
+                if not self._evaluate_expression(
+                    self.config.get('problem', {}).get('goal', 'True'),
+                    self.current_state
+                ):
+                    termination_reason = "model_safety_postcondition_violation"
+                elif any(
+                    not self._evaluate_expression(invariant, self.current_state)
+                    for invariant in self.config.get('problem', {}).get('loop_invariants', [])
+                ):
+                    termination_reason = "model_loop_invariant_violation"
+                else:
+                    termination_reason = "model_termination_condition"
         self._debug_print(f"DEBUG: step method: final terminated status = {{terminated}}")
 
         # Check for truncation (max steps or global time)
         self.current_step_count += 1
         if self.current_step_count >= self.max_episode_steps:
             truncated = True
+            if not terminated:
+                termination_reason = "time_limit_truncation"
         
         # Update global_time_remaining from current_state['T'] after ODE step.
         self.global_time_remaining = self.current_state.get('T', 0.0)
@@ -978,7 +1040,13 @@ class KeYmaeraGymEnv(gym.Env):
         if self.render_mode == "human":
             self._render_frame()
 
-        return observation, reward, terminated, truncated, self._get_info()
+        info = self._get_info()
+        info["control_action"] = control_action
+        info["attempted_action"] = attempted_action
+        info["action_repaired"] = action_repaired
+        info["termination_reason"] = termination_reason
+        info["ode_failure_reason"] = self.last_dynamics_failure_reason
+        return observation, reward, terminated, truncated, info
 
     def _generate_valid_initial_state(self, max_attempts=None):
         # Generates a single initial state that satisfies the initial_condition.

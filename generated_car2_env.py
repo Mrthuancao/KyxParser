@@ -23,7 +23,7 @@ from ast_config import (
 )
 
 # Embedded environment config (generator will replace the placeholder)
-_ENV_CONFIG_JSON = '    {\n        "environment_name": "KeYmaeraCar2",\n        "variables": [\n            {\n                "name": "xr",\n                "type": "Real",\n                "lower_bound": "0.0",\n                "upper_bound": "100.0",\n                "initial_value": null\n            },\n            {\n                "name": "vr",\n                "type": "Real",\n                "lower_bound": "0.0",\n                "upper_bound": "20.0",\n                "initial_value": null\n            },\n            {\n                "name": "ar",\n                "type": "Real",\n                "lower_bound": "-10.0",\n                "upper_bound": "10.0",\n                "initial_value": null\n            },\n            {\n                "name": "xg",\n                "type": "Real",\n                "lower_bound": "0.0",\n                "upper_bound": "100.0",\n                "initial_value": null\n            },\n            {\n                "name": "t",\n                "type": "Real",\n                "lower_bound": "0.0",\n                "upper_bound": "1.0",\n                "initial_value": null\n            },\n            {\n                "name": "T",\n                "type": "Real",\n                "lower_bound": "0.0",\n                "upper_bound": "1000.0",\n                "initial_value": null\n            }\n        ],\n        "constants": [\n            {\n                "name": "ep",\n                "value": "1.0"\n            },\n            {\n                "name": "b",\n                "value": "1.0"\n            },\n            {\n                "name": "A",\n                "value": "1.0"\n            },\n            {\n                "name": "GDelta",\n                "value": "1.0"\n            },\n            {\n                "name": "Vmax",\n                "value": "1.0"\n            }\n        ],\n        "function_definitions": [\n            {\n                "name": "waypointStartDist",\n                "args": [\n                    "xg"\n                ],\n                "body": "(xg - GDelta)"\n            },\n            {\n                "name": "waypointEndDist",\n                "args": [\n                    "xg"\n                ],\n                "body": "(xg + GDelta)"\n            },\n            {\n                "name": "minV",\n                "args": [],\n                "body": "(A * ep)"\n            },\n            {\n                "name": "maxTravelTime",\n                "args": [\n                    "g"\n                ],\n                "body": "(self._waypointStartDist_impl(g) / self._minV_impl())"\n            },\n            {\n                "name": "stopTime",\n                "args": [\n                    "v"\n                ],\n                "body": "(v / b)"\n            },\n            {\n                "name": "speedUpTime",\n                "args": [\n                    "v"\n                ],\n                "body": "(ep - (v / A))"\n            },\n            {\n                "name": "stopDist",\n                "args": [\n                    "v"\n                ],\n                "body": "((v ** 2.0) / (2.0 * b))"\n            },\n            {\n                "name": "accComp",\n                "args": [\n                    "v"\n                ],\n                "body": "(((A / b) + 1.0) * (((A / 2.0) * (ep ** 2.0)) + (ep * v)))"\n            },\n            {\n                "name": "bounds",\n                "args": [],\n                "body": "(((((A > 0.0) and (b > 0.0)) and (ep > 0.0)) and (Vmax >= ((2.0 * A) * ep))) and (GDelta > ((Vmax * ep) + ((Vmax ** 2.0) / (2.0 * b)))))"\n            },\n            {\n                "name": "initialState",\n                "args": [\n                    "xr",\n                    "vr",\n                    "xg",\n                    "T"\n                ],\n                "body": "(((vr == 0.0) and (xr < self._waypointStartDist_impl(xg))) and (T > (((ep + self._maxTravelTime_impl((xg - xr))) + ep) + self._stopTime_impl(Vmax))))"\n            },\n            {\n                "name": "assumptions",\n                "args": [\n                    "xr",\n                    "vr",\n                    "xg",\n                    "T"\n                ],\n                "body": "(self._bounds_impl() and self._initialState_impl(xr, vr, xg, T))"\n            },\n            {\n                "name": "loopinv",\n                "args": [\n                    "xr",\n                    "vr",\n                    "xg",\n                    "T"\n                ],\n                "body": "(((((0.0 <= vr) and (vr <= Vmax)) and ((xr + self._stopDist_impl(vr)) < self._waypointEndDist_impl(xg))) and (not ((self._waypointStartDist_impl(xg) < xr)) or (((vr == 0.0) or (T >= self._stopTime_impl(vr)))))) and (not ((xr <= self._waypointStartDist_impl(xg))) or ((((vr >= self._minV_impl()) and (T > ((self._maxTravelTime_impl((xg - xr)) + ep) + self._stopTime_impl(Vmax)))) or ((vr <= self._minV_impl()) and (T > (((self._speedUpTime_impl(vr) + self._maxTravelTime_impl((xg - xr))) + ep) + self._stopTime_impl(Vmax))))))))"\n            },\n            {\n                "name": "ensure",\n                "args": [\n                    "xr",\n                    "vr",\n                    "xg"\n                ],\n                "body": "(((self._waypointStartDist_impl(xg) < xr) and (vr < 0.2)) and (vr >= 0.0))"\n            }\n        ],\n        "hp_definitions": [\n            {\n                "name": "controlFunc",\n                "args": [],\n                "body": "{({(?((xr > self._waypointStartDist_impl(xg))); ar := -(b))} ++ ({(?(((xr > self._waypointStartDist_impl(xg)) and (vr == 0.0))); ar := 0.0)} ++ ({(?(((xr <= self._waypointStartDist_impl(xg)) and ((((xr + self._stopDist_impl(vr)) + self._accComp_impl(vr)) < self._waypointEndDist_impl(xg)) and ((vr + (A * ep)) <= Vmax)))); ar := A)} ++ {(?(((xr <= self._waypointStartDist_impl(xg)) and (not (((((xr + self._stopDist_impl(vr)) + self._accComp_impl(vr)) < self._waypointEndDist_impl(xg)) and ((vr + (A * ep)) <= Vmax)))))); ar := 0.0)})))}"\n            },\n            {\n                "name": "stepFunc",\n                "args": [],\n                "body": "{(xr\' = vr, vr\' = ar, t\' = 1.0, T\' = -(1.0)@@@DOMAIN_CONSTRAINT@@@sympy.And(sympy.Le(t, ep), sympy.Ge(vr, 0.0)))}"\n            },\n            {\n                "name": "dwwpdl",\n                "args": [],\n                "body": "{({({(controlFunc; t := 0.0)}; {stepFunc})})*@invariant(self._loopinv_impl(xr, vr, xg, T))}"\n            }\n        ],\n        "problem": {\n            "initial_condition": "self._assumptions_impl(xr, vr, xg, T)",\n            "program": "(xr\' = vr, vr\' = ar, t\' = 1.0, T\' = -(1.0)@@@DOMAIN_CONSTRAINT@@@sympy.And(sympy.Le(t, ep), sympy.Ge(vr, 0.0)))",\n            "goal": "((xr < self._waypointEndDist_impl(xg)) and (not ((T <= 0.0)) or (self._ensure_impl(xr, vr, xg))))",\n            "loop_invariants": [\n                "self._loopinv_impl(xr, vr, xg, T)"\n            ],\n            "differential_invariants": [],\n            "differential_ghosts": []\n        },\n        "action_space_type": "continuous",\n        "action_space_bounds": {\n            "ar": {\n                "min": "-10.0",\n                "max": "10.0"\n            }\n        },\n        "observation_space_type": "continuous",\n        "observation_space_bounds": {\n            "xr": {\n                "min": "0.0",\n                "max": "100.0"\n            },\n            "vr": {\n                "min": "0.0",\n                "max": "20.0"\n            },\n            "ar": {\n                "min": "-10.0",\n                "max": "10.0"\n            },\n            "xg": {\n                "min": "0.0",\n                "max": "100.0"\n            },\n            "t": {\n                "min": "0.0",\n                "max": "1.0"\n            },\n            "T": {\n                "min": "0.0",\n                "max": "1000.0"\n            }\n        },\n        "reward_function_body": "(((0.0) + ((0.0) if (self._loopinv_impl(xr, vr, xg, T)) else ((-(0.05) * vr)))) + (((100.0 - (5.0 * (vr ** 2.0)))) + ((1000.0) if (self._ensure_impl(xr, vr, xg)) else (0.0)))) if not (((not (((xr < self._waypointEndDist_impl(xg)) and (not ((T <= 0.0)) or (self._ensure_impl(xr, vr, xg)))))) or (not (self._loopinv_impl(xr, vr, xg, T))))) else ((-(0.05) * vr))",\n        "termination_condition_body": "(((not (((xr < self._waypointEndDist_impl(xg)) and (not ((T <= 0.0)) or (self._ensure_impl(xr, vr, xg)))))) or (not (self._loopinv_impl(xr, vr, xg, T)))) or (self._ensure_impl(xr, vr, xg)))",\n        "max_episode_steps": 200,\n        "time_step": 0.01,\n        "ode_solver_method": "DOP853",\n        "ode_solver_step_size": 0.001,\n        "ode_solver_tolerance": 1e-06,\n        "initial_state_sampling_config": {\n            "xr": {\n                "min": "0.0",\n                "max": "100.0"\n            },\n            "vr": {\n                "min": "0.0",\n                "max": "20.0"\n            },\n            "ar": {\n                "min": "-10.0",\n                "max": "10.0"\n            },\n            "xg": {\n                "min": "0.0",\n                "max": "100.0"\n            },\n            "t": {\n                "min": "0.0",\n                "max": "1.0"\n            },\n            "T": {\n                "min": "0.0",\n                "max": "1000.0"\n            },\n            "ep": {\n                "value": "1.0"\n            },\n            "b": {\n                "value": "1.0"\n            },\n            "A": {\n                "value": "1.0"\n            },\n            "GDelta": {\n                "value": "1.0"\n            },\n            "Vmax": {\n                "value": "1.0"\n            }\n        },\n        "seed": null,\n        "render_mode": null,\n        "metadata": {\n            "render_modes": [\n                "human",\n                "rgb_array"\n            ],\n            "render_fps": 30\n        },\n        "initial_state_buffer_config": {\n            "enabled": false,\n            "capacity": 100,\n            "populate_on_init": true,\n            "max_populate_attempts": 1000,\n            "strategy": "random"\n        },\n        "control_flow_program_ast_json": null\n    }'
+_ENV_CONFIG_JSON = '    {\n        "environment_name": "KeYmaeraCar2",\n        "variables": [\n            {\n                "name": "xr",\n                "type": "Real",\n                "lower_bound": "0.0",\n                "upper_bound": "100.0",\n                "initial_value": null\n            },\n            {\n                "name": "vr",\n                "type": "Real",\n                "lower_bound": "0.0",\n                "upper_bound": "20.0",\n                "initial_value": null\n            },\n            {\n                "name": "ar",\n                "type": "Real",\n                "lower_bound": "-10.0",\n                "upper_bound": "10.0",\n                "initial_value": null\n            },\n            {\n                "name": "xg",\n                "type": "Real",\n                "lower_bound": "0.0",\n                "upper_bound": "100.0",\n                "initial_value": null\n            },\n            {\n                "name": "t",\n                "type": "Real",\n                "lower_bound": "0.0",\n                "upper_bound": "1.0",\n                "initial_value": null\n            },\n            {\n                "name": "T",\n                "type": "Real",\n                "lower_bound": "0.0",\n                "upper_bound": "1000.0",\n                "initial_value": null\n            }\n        ],\n        "constants": [\n            {\n                "name": "ep",\n                "value": "0.2",\n                "lower_bound": null,\n                "upper_bound": null\n            },\n            {\n                "name": "b",\n                "value": "1.0",\n                "lower_bound": null,\n                "upper_bound": null\n            },\n            {\n                "name": "A",\n                "value": "1.0",\n                "lower_bound": null,\n                "upper_bound": null\n            },\n            {\n                "name": "GDelta",\n                "value": "40.0",\n                "lower_bound": null,\n                "upper_bound": null\n            },\n            {\n                "name": "Vmax",\n                "value": "5.0",\n                "lower_bound": null,\n                "upper_bound": null\n            }\n        ],\n        "function_definitions": [\n            {\n                "name": "waypointStartDist",\n                "args": [\n                    "xg"\n                ],\n                "body": "(xg - GDelta)"\n            },\n            {\n                "name": "waypointEndDist",\n                "args": [\n                    "xg"\n                ],\n                "body": "(xg + GDelta)"\n            },\n            {\n                "name": "minV",\n                "args": [],\n                "body": "(A * ep)"\n            },\n            {\n                "name": "maxTravelTime",\n                "args": [\n                    "g"\n                ],\n                "body": "(self._waypointStartDist_impl(g) / self._minV_impl())"\n            },\n            {\n                "name": "stopTime",\n                "args": [\n                    "v"\n                ],\n                "body": "(v / b)"\n            },\n            {\n                "name": "speedUpTime",\n                "args": [\n                    "v"\n                ],\n                "body": "(ep - (v / A))"\n            },\n            {\n                "name": "stopDist",\n                "args": [\n                    "v"\n                ],\n                "body": "((v ** 2.0) / (2.0 * b))"\n            },\n            {\n                "name": "accComp",\n                "args": [\n                    "v"\n                ],\n                "body": "(((A / b) + 1.0) * (((A / 2.0) * (ep ** 2.0)) + (ep * v)))"\n            },\n            {\n                "name": "bounds",\n                "args": [],\n                "body": "(((((A > 0.0) and (b > 0.0)) and (ep > 0.0)) and (Vmax >= ((2.0 * A) * ep))) and (GDelta > ((Vmax * ep) + ((Vmax ** 2.0) / (2.0 * b)))))"\n            },\n            {\n                "name": "initialState",\n                "args": [\n                    "xr",\n                    "vr",\n                    "xg",\n                    "T"\n                ],\n                "body": "(((vr == 0.0) and (xr < self._waypointStartDist_impl(xg))) and (T > (((ep + self._maxTravelTime_impl((xg - xr))) + ep) + self._stopTime_impl(Vmax))))"\n            },\n            {\n                "name": "assumptions",\n                "args": [\n                    "xr",\n                    "vr",\n                    "xg",\n                    "T"\n                ],\n                "body": "(self._bounds_impl() and self._initialState_impl(xr, vr, xg, T))"\n            },\n            {\n                "name": "loopinv",\n                "args": [\n                    "xr",\n                    "vr",\n                    "xg",\n                    "T"\n                ],\n                "body": "(((((0.0 <= vr) and (vr <= Vmax)) and ((xr + self._stopDist_impl(vr)) < self._waypointEndDist_impl(xg))) and (not ((self._waypointStartDist_impl(xg) < xr)) or (((vr == 0.0) or (T >= self._stopTime_impl(vr)))))) and (not ((xr <= self._waypointStartDist_impl(xg))) or ((((vr >= self._minV_impl()) and (T > ((self._maxTravelTime_impl((xg - xr)) + ep) + self._stopTime_impl(Vmax)))) or ((vr <= self._minV_impl()) and (T > (((self._speedUpTime_impl(vr) + self._maxTravelTime_impl((xg - xr))) + ep) + self._stopTime_impl(Vmax))))))))"\n            },\n            {\n                "name": "ensure",\n                "args": [\n                    "xr",\n                    "vr",\n                    "xg"\n                ],\n                "body": "(((self._waypointStartDist_impl(xg) < xr) and (vr < 0.2)) and (vr >= 0.0))"\n            }\n        ],\n        "hp_definitions": [\n            {\n                "name": "controlFunc",\n                "args": [],\n                "body": "{({(?((xr > self._waypointStartDist_impl(xg))); ar := -(b))} ++ ({(?(((xr > self._waypointStartDist_impl(xg)) and (vr == 0.0))); ar := 0.0)} ++ ({(?(((xr <= self._waypointStartDist_impl(xg)) and ((((xr + self._stopDist_impl(vr)) + self._accComp_impl(vr)) < self._waypointEndDist_impl(xg)) and ((vr + (A * ep)) <= Vmax)))); ar := A)} ++ {(?(((xr <= self._waypointStartDist_impl(xg)) and (not (((((xr + self._stopDist_impl(vr)) + self._accComp_impl(vr)) < self._waypointEndDist_impl(xg)) and ((vr + (A * ep)) <= Vmax)))))); ar := 0.0)})))}"\n            },\n            {\n                "name": "stepFunc",\n                "args": [],\n                "body": "{(xr\' = vr, vr\' = ar, t\' = 1.0, T\' = -(1.0)@@@DOMAIN_CONSTRAINT@@@sympy.And(sympy.Le(t, ep), sympy.Ge(vr, 0.0)))}"\n            },\n            {\n                "name": "dwwpdl",\n                "args": [],\n                "body": "{({({(controlFunc; t := 0.0)}; {stepFunc})})*@invariant(self._loopinv_impl(xr, vr, xg, T))}"\n            }\n        ],\n        "problem": {\n            "initial_condition": "self._assumptions_impl(xr, vr, xg, T)",\n            "program": "(xr\' = vr, vr\' = ar, t\' = 1.0, T\' = -(1.0)@@@DOMAIN_CONSTRAINT@@@sympy.And(sympy.Le(t, ep), sympy.Ge(vr, 0.0)))",\n            "goal": "((xr < self._waypointEndDist_impl(xg)) and (not ((T <= 0.0)) or (self._ensure_impl(xr, vr, xg))))",\n            "loop_invariants": [\n                "self._loopinv_impl(xr, vr, xg, T)"\n            ],\n            "differential_invariants": [],\n            "differential_ghosts": []\n        },\n        "action_space_type": "discrete",\n        "action_space_bounds": {\n            "n": 4\n        },\n        "observation_space_type": "continuous",\n        "observation_space_bounds": {\n            "xr": {\n                "min": "0.0",\n                "max": "100.0"\n            },\n            "vr": {\n                "min": "0.0",\n                "max": "20.0"\n            },\n            "ar": {\n                "min": "-10.0",\n                "max": "10.0"\n            },\n            "xg": {\n                "min": "0.0",\n                "max": "100.0"\n            },\n            "t": {\n                "min": "0.0",\n                "max": "1.0"\n            },\n            "T": {\n                "min": "0.0",\n                "max": "1000.0"\n            }\n        },\n        "reward_function_body": "(((0.0) + ((0.0) if (self._loopinv_impl(xr, vr, xg, T)) else ((-(0.05) * vr)))) + (((100.0 - (5.0 * (vr ** 2.0)))) + ((1000.0) if (self._ensure_impl(xr, vr, xg)) else (0.0)))) if not (((not (((xr < self._waypointEndDist_impl(xg)) and (not ((T <= 0.0)) or (self._ensure_impl(xr, vr, xg)))))) or (not (self._loopinv_impl(xr, vr, xg, T))))) else ((-(0.05) * vr))",\n        "termination_condition_body": "(((not (((xr < self._waypointEndDist_impl(xg)) and (not ((T <= 0.0)) or (self._ensure_impl(xr, vr, xg)))))) or (not (self._loopinv_impl(xr, vr, xg, T)))) or (self._ensure_impl(xr, vr, xg)))",\n        "max_episode_steps": 200,\n        "time_step": 0.01,\n        "ode_solver_method": "DOP853",\n        "ode_solver_step_size": 0.001,\n        "ode_solver_tolerance": 1e-06,\n        "initial_state_sampling_config": {\n            "xr": {\n                "min": "0.0",\n                "max": "100.0"\n            },\n            "vr": {\n                "min": "0.0",\n                "max": "20.0"\n            },\n            "ar": {\n                "min": "-10.0",\n                "max": "10.0"\n            },\n            "xg": {\n                "min": "0.0",\n                "max": "100.0"\n            },\n            "t": {\n                "min": "0.0",\n                "max": "1.0"\n            },\n            "T": {\n                "min": "0.0",\n                "max": "1000.0"\n            },\n            "ep": {\n                "value": "0.2"\n            },\n            "b": {\n                "value": "1.0"\n            },\n            "A": {\n                "value": "1.0"\n            },\n            "GDelta": {\n                "value": "40.0"\n            },\n            "Vmax": {\n                "value": "5.0"\n            }\n        },\n        "seed": null,\n        "render_mode": null,\n        "metadata": {\n            "render_modes": [\n                "human",\n                "rgb_array"\n            ],\n            "render_fps": 30\n        },\n        "initial_state_buffer_config": {\n            "enabled": false,\n            "capacity": 100,\n            "populate_on_init": true,\n            "max_populate_attempts": 1000,\n            "strategy": "random"\n        },\n        "control_flow_program_ast_json": {\n            "_type": "Choice",\n            "left": {\n                "_type": "HPBlock",\n                "program": {\n                    "_type": "Sequence",\n                    "programs": [\n                        {\n                            "_type": "Test",\n                            "condition": {\n                                "_type": "Comparison",\n                                "op": ">",\n                                "left": {\n                                    "_type": "VarRef",\n                                    "name": "xr"\n                                },\n                                "right": {\n                                    "_type": "FunctionCall",\n                                    "name": "waypointStartDist",\n                                    "args": [\n                                        {\n                                            "_type": "VarRef",\n                                            "name": "xg"\n                                        }\n                                    ]\n                                }\n                            }\n                        },\n                        {\n                            "_type": "Assignment",\n                            "var": {\n                                "_type": "VarRef",\n                                "name": "ar"\n                            },\n                            "expr": {\n                                "_type": "UnaryTermOp",\n                                "op": "-",\n                                "operand": {\n                                    "_type": "VarRef",\n                                    "name": "b"\n                                }\n                            }\n                        }\n                    ]\n                }\n            },\n            "right": {\n                "_type": "Choice",\n                "left": {\n                    "_type": "HPBlock",\n                    "program": {\n                        "_type": "Sequence",\n                        "programs": [\n                            {\n                                "_type": "Test",\n                                "condition": {\n                                    "_type": "BinaryFormulaOp",\n                                    "op": "&",\n                                    "left": {\n                                        "_type": "Comparison",\n                                        "op": ">",\n                                        "left": {\n                                            "_type": "VarRef",\n                                            "name": "xr"\n                                        },\n                                        "right": {\n                                            "_type": "FunctionCall",\n                                            "name": "waypointStartDist",\n                                            "args": [\n                                                {\n                                                    "_type": "VarRef",\n                                                    "name": "xg"\n                                                }\n                                            ]\n                                        }\n                                    },\n                                    "right": {\n                                        "_type": "Comparison",\n                                        "op": "=",\n                                        "left": {\n                                            "_type": "VarRef",\n                                            "name": "vr"\n                                        },\n                                        "right": {\n                                            "_type": "Literal",\n                                            "value": 0.0\n                                        }\n                                    }\n                                }\n                            },\n                            {\n                                "_type": "Assignment",\n                                "var": {\n                                    "_type": "VarRef",\n                                    "name": "ar"\n                                },\n                                "expr": {\n                                    "_type": "Literal",\n                                    "value": 0.0\n                                }\n                            }\n                        ]\n                    }\n                },\n                "right": {\n                    "_type": "Choice",\n                    "left": {\n                        "_type": "HPBlock",\n                        "program": {\n                            "_type": "Sequence",\n                            "programs": [\n                                {\n                                    "_type": "Test",\n                                    "condition": {\n                                        "_type": "BinaryFormulaOp",\n                                        "op": "&",\n                                        "left": {\n                                            "_type": "Comparison",\n                                            "op": "<=",\n                                            "left": {\n                                                "_type": "VarRef",\n                                                "name": "xr"\n                                            },\n                                            "right": {\n                                                "_type": "FunctionCall",\n                                                "name": "waypointStartDist",\n                                                "args": [\n                                                    {\n                                                        "_type": "VarRef",\n                                                        "name": "xg"\n                                                    }\n                                                ]\n                                            }\n                                        },\n                                        "right": {\n                                            "_type": "BinaryFormulaOp",\n                                            "op": "&",\n                                            "left": {\n                                                "_type": "Comparison",\n                                                "op": "<",\n                                                "left": {\n                                                    "_type": "BinaryTermOp",\n                                                    "op": "+",\n                                                    "left": {\n                                                        "_type": "BinaryTermOp",\n                                                        "op": "+",\n                                                        "left": {\n                                                            "_type": "VarRef",\n                                                            "name": "xr"\n                                                        },\n                                                        "right": {\n                                                            "_type": "FunctionCall",\n                                                            "name": "stopDist",\n                                                            "args": [\n                                                                {\n                                                                    "_type": "VarRef",\n                                                                    "name": "vr"\n                                                                }\n                                                            ]\n                                                        }\n                                                    },\n                                                    "right": {\n                                                        "_type": "FunctionCall",\n                                                        "name": "accComp",\n                                                        "args": [\n                                                            {\n                                                                "_type": "VarRef",\n                                                                "name": "vr"\n                                                            }\n                                                        ]\n                                                    }\n                                                },\n                                                "right": {\n                                                    "_type": "FunctionCall",\n                                                    "name": "waypointEndDist",\n                                                    "args": [\n                                                        {\n                                                            "_type": "VarRef",\n                                                            "name": "xg"\n                                                        }\n                                                    ]\n                                                }\n                                            },\n                                            "right": {\n                                                "_type": "Comparison",\n                                                "op": "<=",\n                                                "left": {\n                                                    "_type": "BinaryTermOp",\n                                                    "op": "+",\n                                                    "left": {\n                                                        "_type": "VarRef",\n                                                        "name": "vr"\n                                                    },\n                                                    "right": {\n                                                        "_type": "BinaryTermOp",\n                                                        "op": "*",\n                                                        "left": {\n                                                            "_type": "VarRef",\n                                                            "name": "A"\n                                                        },\n                                                        "right": {\n                                                            "_type": "VarRef",\n                                                            "name": "ep"\n                                                        }\n                                                    }\n                                                },\n                                                "right": {\n                                                    "_type": "VarRef",\n                                                    "name": "Vmax"\n                                                }\n                                            }\n                                        }\n                                    }\n                                },\n                                {\n                                    "_type": "Assignment",\n                                    "var": {\n                                        "_type": "VarRef",\n                                        "name": "ar"\n                                    },\n                                    "expr": {\n                                        "_type": "VarRef",\n                                        "name": "A"\n                                    }\n                                }\n                            ]\n                        }\n                    },\n                    "right": {\n                        "_type": "HPBlock",\n                        "program": {\n                            "_type": "Sequence",\n                            "programs": [\n                                {\n                                    "_type": "Test",\n                                    "condition": {\n                                        "_type": "BinaryFormulaOp",\n                                        "op": "&",\n                                        "left": {\n                                            "_type": "Comparison",\n                                            "op": "<=",\n                                            "left": {\n                                                "_type": "VarRef",\n                                                "name": "xr"\n                                            },\n                                            "right": {\n                                                "_type": "FunctionCall",\n                                                "name": "waypointStartDist",\n                                                "args": [\n                                                    {\n                                                        "_type": "VarRef",\n                                                        "name": "xg"\n                                                    }\n                                                ]\n                                            }\n                                        },\n                                        "right": {\n                                            "_type": "UnaryFormulaOp",\n                                            "op": "!",\n                                            "operand": {\n                                                "_type": "BinaryFormulaOp",\n                                                "op": "&",\n                                                "left": {\n                                                    "_type": "Comparison",\n                                                    "op": "<",\n                                                    "left": {\n                                                        "_type": "BinaryTermOp",\n                                                        "op": "+",\n                                                        "left": {\n                                                            "_type": "BinaryTermOp",\n                                                            "op": "+",\n                                                            "left": {\n                                                                "_type": "VarRef",\n                                                                "name": "xr"\n                                                            },\n                                                            "right": {\n                                                                "_type": "FunctionCall",\n                                                                "name": "stopDist",\n                                                                "args": [\n                                                                    {\n                                                                        "_type": "VarRef",\n                                                                        "name": "vr"\n                                                                    }\n                                                                ]\n                                                            }\n                                                        },\n                                                        "right": {\n                                                            "_type": "FunctionCall",\n                                                            "name": "accComp",\n                                                            "args": [\n                                                                {\n                                                                    "_type": "VarRef",\n                                                                    "name": "vr"\n                                                                }\n                                                            ]\n                                                        }\n                                                    },\n                                                    "right": {\n                                                        "_type": "FunctionCall",\n                                                        "name": "waypointEndDist",\n                                                        "args": [\n                                                            {\n                                                                "_type": "VarRef",\n                                                                "name": "xg"\n                                                            }\n                                                        ]\n                                                    }\n                                                },\n                                                "right": {\n                                                    "_type": "Comparison",\n                                                    "op": "<=",\n                                                    "left": {\n                                                        "_type": "BinaryTermOp",\n                                                        "op": "+",\n                                                        "left": {\n                                                            "_type": "VarRef",\n                                                            "name": "vr"\n                                                        },\n                                                        "right": {\n                                                            "_type": "BinaryTermOp",\n                                                            "op": "*",\n                                                            "left": {\n                                                                "_type": "VarRef",\n                                                                "name": "A"\n                                                            },\n                                                            "right": {\n                                                                "_type": "VarRef",\n                                                                "name": "ep"\n                                                            }\n                                                        }\n                                                    },\n                                                    "right": {\n                                                        "_type": "VarRef",\n                                                        "name": "Vmax"\n                                                    }\n                                                }\n                                            }\n                                        }\n                                    }\n                                },\n                                {\n                                    "_type": "Assignment",\n                                    "var": {\n                                        "_type": "VarRef",\n                                        "name": "ar"\n                                    },\n                                    "expr": {\n                                        "_type": "Literal",\n                                        "value": 0.0\n                                    }\n                                }\n                            ]\n                        }\n                    }\n                }\n            }\n        }\n    }'
 
 
 class KeYmaeraGymEnv(gym.Env):
@@ -74,6 +74,7 @@ class KeYmaeraGymEnv(gym.Env):
         # Initialize user_defined_functions before _setup_constants calls _evaluate_expression
         self.user_defined_functions = {} 
 
+        self._resolve_constants_with_solver()
         self._setup_constants()
         self._setup_functions() 
 
@@ -336,6 +337,11 @@ class KeYmaeraGymEnv(gym.Env):
                     existing_constants_map = {c['name']: c for c in config.get('constants', [])}
                     for ov_const in override_value:
                         if ov_const['name'] in existing_constants_map:
+                            if 'value' in ov_const and not {
+                                'lower_bound', 'upper_bound'
+                            }.intersection(ov_const):
+                                existing_constants_map[ov_const['name']].pop('lower_bound', None)
+                                existing_constants_map[ov_const['name']].pop('upper_bound', None)
                             existing_constants_map[ov_const['name']].update(ov_const)
                         else:
                             existing_constants_map[ov_const['name']] = ov_const # Add new constant
@@ -356,6 +362,109 @@ class KeYmaeraGymEnv(gym.Env):
                     # For other keys, just replace the value
                     config[key] = override_value
         return config
+
+    def _resolve_constants_with_solver(self):
+        constants = self.config.get('constants', [])
+        ranged_constants = [
+            constant for constant in constants
+            if constant.get('lower_bound') is not None
+            and constant.get('upper_bound') is not None
+        ]
+        has_bounds_predicate = any(
+            function.get('name') == 'bounds'
+            for function in self.config.get('function_definitions', [])
+        )
+        if not ranged_constants and not has_bounds_predicate:
+            return
+
+        z3_symbols = {
+            constant['name']: z3.Real(constant['name'])
+            for constant in ranged_constants
+        }
+        fixed_constants_map = {}
+        for constant in constants:
+            name = constant['name']
+            if name in z3_symbols:
+                continue
+            try:
+                fixed_constants_map[name] = float(constant['value'])
+            except (TypeError, ValueError):
+                continue
+
+        solver = z3.Solver()
+        for constant in ranged_constants:
+            symbol = z3_symbols[constant['name']]
+            low = float(constant['lower_bound'])
+            high = float(constant['upper_bound'])
+            if low > high:
+                raise ValueError(
+                    f"Invalid @const range for {constant['name']}: [{low}, {high}]"
+                )
+            solver.add(symbol >= low, symbol <= high)
+
+        if has_bounds_predicate:
+            bounds_condition = self._expr_to_z3(
+                'self._bounds_impl()', z3_symbols, fixed_constants_map
+            )
+            solver.add(bounds_condition)
+
+        result = solver.check()
+        if result == z3.unsat:
+            if has_bounds_predicate:
+                fixed_validation = z3.Solver()
+                fixed_validation.add(self._expr_to_z3(
+                    'self._bounds_impl()', {}, fixed_constants_map
+                ))
+                fixed_result = fixed_validation.check()
+                if fixed_result == z3.unsat:
+                    raise ValueError(
+                        "Fixed @const values do not satisfy the model bounds() predicate."
+                    )
+                if fixed_result != z3.sat:
+                    raise RuntimeError(
+                        "Z3 could not validate fixed constants against bounds(): "
+                        f"{fixed_validation.reason_unknown()}"
+                    )
+            constraint_description = (
+                "the @const ranges and model bounds() predicate"
+                if has_bounds_predicate else "the @const ranges"
+            )
+            raise ValueError(
+                f"No constant assignment satisfies {constraint_description}."
+            )
+        if result != z3.sat:
+            raise RuntimeError(
+                f"Z3 could not resolve model constants: {solver.reason_unknown()}"
+            )
+
+        model = solver.model()
+        for constant in ranged_constants:
+            value = model.evaluate(
+                z3_symbols[constant['name']], model_completion=True
+            )
+            constant['value'] = str(value)
+
+        if has_bounds_predicate:
+            concrete_constants = {}
+            for constant in constants:
+                try:
+                    concrete_constants[constant['name']] = float(constant['value'])
+                except (TypeError, ValueError):
+                    continue
+            validation = z3.Solver()
+            validation.add(self._expr_to_z3(
+                'self._bounds_impl()', {}, concrete_constants
+            ))
+            validation_result = validation.check()
+            if validation_result == z3.unsat:
+                raise ValueError(
+                    "Fixed @const values do not satisfy the model bounds() predicate."
+                )
+            if validation_result != z3.sat:
+                raise RuntimeError(
+                    "Z3 could not validate fixed constants against bounds(): "
+                    f"{validation.reason_unknown()}"
+                )
 
     def _setup_spaces(self):
         # Give the agent an opaque ID for a complete path through the control AST.
@@ -694,6 +803,7 @@ class KeYmaeraGymEnv(gym.Env):
         return derivs
 
     def _run_continuous_dynamics(self, action_to_apply):
+        self.last_dynamics_failure_reason = None
         # Apply action to relevant variables before ODE integration
         # This block is now only relevant if action_space_type is 'continuous'
         # and controlFunc is NOT being used to set variables.
@@ -765,13 +875,35 @@ class KeYmaeraGymEnv(gym.Env):
                 if not bool(constraint_met): # Convert SymPy boolean to Python bool
                     print(f"Differential domain constraint violated: {self.differential_domain_constraint}")
                     self._debug_print(f"DEBUG: _run_continuous_dynamics returning True due to domain violation.")
+                    self.last_dynamics_failure_reason = "ode_domain_violation"
                     return True # Indicate episode should terminate due to violation
             self._debug_print(f"DEBUG: _run_continuous_dynamics returning False (solver success, no domain violation).")
             return False # Indicate episode continues
         else:
             print(f"ODE solver failed: {sol.message}")
             self._debug_print(f"DEBUG: _run_continuous_dynamics returning True due to solver failure.")
+            self.last_dynamics_failure_reason = "ode_solver_failure"
             return True # Indicate episode should terminate
+
+    def action_masks(self):
+        """Boolean mask of controller choice paths whose guards hold in the current state."""
+        if self.action_space_type != 'discrete' or not self.control_flow_program_ast:
+            return np.ones(getattr(self.action_space, 'n', 1), dtype=bool)
+        saved_state = dict(self.current_state)
+        mask = np.zeros(len(self.control_choice_paths), dtype=bool)
+        try:
+            for index, path in enumerate(self.control_choice_paths):
+                self.current_state.clear()
+                self.current_state.update(saved_state)
+                result = self._execute_hp_node(self.control_flow_program_ast, path, [0])
+                mask[index] = not result["terminated"]
+        finally:
+            self.current_state.clear()
+            self.current_state.update(saved_state)
+        if not mask.any():
+            # No legal choice: let the environment report the failed guard instead of hiding it.
+            mask[:] = True
+        return mask
 
     def _execute_control_flow(self, action_choice: int) -> Dict[str, Any]:
         """
@@ -923,17 +1055,40 @@ class KeYmaeraGymEnv(gym.Env):
         terminated = False
         truncated = False
         reward = 0.0 # Initialize reward
+        termination_reason = None
+        control_action = None
+        attempted_action = None
+        action_repaired = False
 
         # Execute discrete control flow based on agent's action
         if self.control_flow_program_ast:
+            control_action = int(np.asarray(action).item())
+            invalid_mode = self.config.get('invalid_action_mode', 'mask')
+            if invalid_mode not in ('mask', 'penalize', 'repair'):
+                raise ValueError(f"Unsupported invalid_action_mode: {invalid_mode}")
+            if invalid_mode == 'repair':
+                legal = self.action_masks()
+                in_range = 0 <= control_action < len(legal)
+                if in_range and not legal[control_action] and legal.any() and not legal.all():
+                    attempted_action = control_action
+                    control_action = int(np.flatnonzero(legal)[0])
+                    action = control_action
+                    action_repaired = True
+                    reward += self.config.get('repair_penalty', 0.0)
+            # 'mask' relies on a mask-aware algorithm; an illegal action that still arrives is penalized.
             control_flow_status = self._execute_control_flow(action)
             terminated = control_flow_status["terminated"]
             reward += control_flow_status["reward_delta"]
             if terminated:
+                termination_reason = f"control_flow:{control_flow_status['info']}"
                 self._debug_print(f"DEBUG: step method: Terminated by control flow: {control_flow_status['info']}")
                 observation = self._get_observation()
                 info = self._get_info()
                 info["control_flow_info"] = control_flow_status["info"]
+                info["control_action"] = control_action
+                info["attempted_action"] = attempted_action
+                info["action_repaired"] = action_repaired
+                info["termination_reason"] = termination_reason
                 if self.render_mode == "human":
                     self._render_frame()
                 return observation, reward, terminated, truncated, info
@@ -957,6 +1112,7 @@ class KeYmaeraGymEnv(gym.Env):
         self._debug_print(f"DEBUG: step method: solver_failed = {solver_failed}")
         if solver_failed:
             terminated = True # Terminate if ODE solver fails or domain constraint violated
+            termination_reason = self.last_dynamics_failure_reason or "ode_failure"
             reward += self.config.get('ode_failure_penalty', -100.0) # Penalty for ODE failure (configurable)
 
         # Evaluate reward (from problem definition)
@@ -971,12 +1127,27 @@ class KeYmaeraGymEnv(gym.Env):
             evaluated_termination_cond = self._evaluate_expression(termination_expr, self.current_state)
             self._debug_print(f"DEBUG: step method: evaluated_termination_cond = {evaluated_termination_cond}")
             terminated = bool(evaluated_termination_cond)
+            if terminated:
+                if not self._evaluate_expression(
+                    self.config.get('problem', {}).get('goal', 'True'),
+                    self.current_state
+                ):
+                    termination_reason = "model_safety_postcondition_violation"
+                elif any(
+                    not self._evaluate_expression(invariant, self.current_state)
+                    for invariant in self.config.get('problem', {}).get('loop_invariants', [])
+                ):
+                    termination_reason = "model_loop_invariant_violation"
+                else:
+                    termination_reason = "model_termination_condition"
         self._debug_print(f"DEBUG: step method: final terminated status = {terminated}")
 
         # Check for truncation (max steps or global time)
         self.current_step_count += 1
         if self.current_step_count >= self.max_episode_steps:
             truncated = True
+            if not terminated:
+                termination_reason = "time_limit_truncation"
         
         # Update global_time_remaining from current_state['T'] after ODE step.
         self.global_time_remaining = self.current_state.get('T', 0.0)
@@ -988,7 +1159,13 @@ class KeYmaeraGymEnv(gym.Env):
         if self.render_mode == "human":
             self._render_frame()
 
-        return observation, reward, terminated, truncated, self._get_info()
+        info = self._get_info()
+        info["control_action"] = control_action
+        info["attempted_action"] = attempted_action
+        info["action_repaired"] = action_repaired
+        info["termination_reason"] = termination_reason
+        info["ode_failure_reason"] = self.last_dynamics_failure_reason
+        return observation, reward, terminated, truncated, info
 
     def _generate_valid_initial_state(self, max_attempts=None):
         # Generates a single initial state that satisfies the initial_condition.
