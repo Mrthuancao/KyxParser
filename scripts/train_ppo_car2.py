@@ -105,7 +105,7 @@ def plot_training_curve(callback: EpisodeStatsCallback, out_path: Path):
         offset = len(rewards) - len(ma)
         axes[0].plot(range(offset, len(rewards)), ma, color='tab:red', label=f'Moving average (w={window})')
     axes[0].set_ylabel('Total episode reward')
-    axes[0].set_title('Training: reward per episode (car2)')
+    axes[0].set_title('Training: reward per episode')
     axes[0].legend()
 
     axes[1].plot(lengths, alpha=0.3, color='tab:purple', label='Episode length')
@@ -283,18 +283,6 @@ def evaluate_policy_metrics(episodes: list, out_path: Path):
     for reason, count in termination_counts.most_common():
         print(f"  {reason}: {count}/{n_episodes}")
     print(f"Controller action counts (0-based path IDs): {dict(action_counts)}")
-    for index, episode in enumerate(episodes, start=1):
-        final = episode['final_state']
-        state_summary = {
-            name: round(float(final[name]), 4)
-            for name in ('xr', 'vr', 'ar', 'xg', 'T')
-            if name in final
-        }
-        print(
-            f"Episode {index}: success={episode['success']}, "
-            f"reason={episode['termination_reason']}, "
-            f"actions={episode['chosen_actions']}, final_state={state_summary}"
-        )
 
     diagnostics_path = out_path.with_name(f"{out_path.stem}_episodes.csv")
     with diagnostics_path.open('w', newline='', encoding='utf-8') as csv_file:

@@ -20,7 +20,7 @@ Definitions
     Real b;       /* minimum braking capability of the robot */
     // @const: bound=1.0; def="maximum acceleration"
     Real A;       /* maximum acceleration -b <= a <= A */
-    // @const: bound=40.0; def="goal area size"
+    // @const: bound=15.0; def="goal area size"
     Real GDelta;	 /* goal area size */
     // @const: bound=5.0; def="maximum robot velocity"
     Real Vmax;    /* robot cannot go faster than this */
@@ -98,7 +98,7 @@ ProgramVariables
     Real vr;
     // @var: bound=[-10:10], def="robot translational acceleration"
     Real ar;
-    // @var: bound=[0:100], def="goal position: x"
+    // @var: bound=[0:200], def="goal position: x"
     Real xg;
     // @var: bound=[0:1], def="time elapsed in current control step"
     Real t;
