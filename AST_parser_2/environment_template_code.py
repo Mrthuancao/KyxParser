@@ -5,6 +5,7 @@ import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
 import json
+import sys
 from scipy.integrate import solve_ivp
 import sympy
 import z3
@@ -1356,7 +1357,41 @@ class KeYmaeraGymEnv(gym.Env):
             low, high = sample_ranges.get(var_name, (-100.0, 100.0))
             opt.add(z3_var >= low, z3_var <= high)
 
+        progress_width = 30
+        progress_is_tty = sys.stderr.isatty()
+        progress_interval = max(1, min(100, max_populate_attempts_total // 20))
+        last_progress_attempt = -1
+
+        def report_progress(final=False):
+            nonlocal last_progress_attempt
+            filled = min(
+                progress_width,
+                progress_width * len(self.initial_state_buffer) // max(capacity, 1),
+            )
+            line = (
+                "\\rZ3 initial-state buffer: [%s%s] %d/%d states "
+                "| attempts %d/%d"
+                % (
+                    "#" * filled,
+                    "-" * (progress_width - filled),
+                    len(self.initial_state_buffer),
+                    capacity,
+                    attempts_made,
+                    max_populate_attempts_total,
+                )
+            )
+            if progress_is_tty:
+                sys.stderr.write(line)
+                if final:
+                    sys.stderr.write("\\n")
+                sys.stderr.flush()
+                last_progress_attempt = attempts_made
+            elif final or attempts_made % progress_interval == 0:
+                print(line.lstrip("\\r"), file=sys.stderr, flush=True)
+                last_progress_attempt = attempts_made
+
         attempts_made = 0
+        report_progress()
         while len(self.initial_state_buffer) < capacity and attempts_made < max_populate_attempts_total:
             attempts_made += 1
             opt.push()
@@ -1415,7 +1450,13 @@ class KeYmaeraGymEnv(gym.Env):
             else:
                 print(f"DEBUG: Z3 UNKNOWN during diverse buffer population. Retrying with new soft constraints.")
                 opt.pop()
+            report_progress()
 
+        if progress_is_tty:
+            sys.stderr.write("\\n")
+            sys.stderr.flush()
+        elif last_progress_attempt != attempts_made:
+            report_progress(final=True)
         if len(self.initial_state_buffer) < capacity:
             print(f"Warning: Diverse initial state buffer could only be filled to {{len(self.initial_state_buffer)}}/{{capacity}} after {{attempts_made}} attempts.")
 
