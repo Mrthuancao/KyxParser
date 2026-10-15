@@ -1609,6 +1609,49 @@ End.
         self.assertIsInstance(parsed_formula2, UnaryFormulaOp)
         self.assertEqual(parsed_formula2.op, '!')
 
+    def test_parse_nested_quantifiers_in_cruise_control_stability_problem(self):
+        model_path = (
+            Path(__file__).resolve().parents[1]
+            / "test"
+            / "input"
+            / "withBound"
+            / "CruiseControlStability.txt"
+        )
+        model = KeYmaeraParser(model_path.read_text(encoding="utf-8")).parse()
+        formula = model.entries[0].problem.formula
+
+        self.assertIsInstance(formula, Quantifier)
+        self.assertEqual(formula.quantifier_type, "forall")
+        self.assertEqual([variable.name for variable in formula.variables], ["eps"])
+
+        implication = formula.body
+        self.assertIsInstance(implication, BinaryFormulaOp)
+        self.assertEqual(implication.op, "->")
+        self.assertIsInstance(implication.left, Comparison)
+
+        existential = implication.right
+        self.assertIsInstance(existential, Quantifier)
+        self.assertEqual(existential.quantifier_type, "exists")
+        self.assertEqual([variable.name for variable in existential.variables], ["del"])
+
+        conjunction = existential.body
+        self.assertIsInstance(conjunction, BinaryFormulaOp)
+        self.assertEqual(conjunction.op, "&")
+        self.assertIsInstance(conjunction.left, Comparison)
+
+        universal = conjunction.right
+        self.assertIsInstance(universal, Quantifier)
+        self.assertEqual(universal.quantifier_type, "forall")
+        self.assertEqual([variable.name for variable in universal.variables], ["v"])
+
+        implication = universal.body
+        self.assertIsInstance(implication, BinaryFormulaOp)
+        self.assertEqual(implication.op, "->")
+        self.assertIsInstance(implication.left, Comparison)
+        self.assertIsInstance(implication.right, ModalFormula)
+        self.assertEqual(implication.right.modality, "box")
+        self.assertIsInstance(implication.right.formula, Comparison)
+
 
     def test_parse_hybrid_program_expressions(self):
         print("\n--- Testing parse_hybrid_program ---")
