@@ -50,6 +50,12 @@ Definitions
   Real sbrakeact = 4;
   Real sbrakefull = 5;
 
+  // @safety: penalty=-100, on_failure=truncate:status=failure, on_success=continue:status=none
+  Bool cruiseSafe() <-> -500 <= x & x <= 500 & -20 <= v & v <= 40 & 0 <= t & t <= 2.5 & 0 <= mode & mode <= 5;
+
+  // @progress: reward=10, shape={-abs(v)}, on_success=continue:status=none, on_failure=continue:status=none
+  Bool nearZeroSpeed() <-> abs(v) <= 1;
+
   HP initializeMode ::= {
     mode:=ebrakeact()
     ++ mode:=ebrakefull()
@@ -108,9 +114,13 @@ Definitions
 End.
 
 ProgramVariables
+  // @var: bound=[-500:500], plot=line, def="position error"
   Real x;
+  // @var: bound=[0:2.5], plot=line, def="elapsed time in the active braking phase"
   Real t;
+  // @var: bound=[-20:40], plot=line, def="cruise-control velocity"
   Real v;
+  // @var: bound=[0:5], plot=hist, def="active controller mode"
   Real mode;
 End.
 

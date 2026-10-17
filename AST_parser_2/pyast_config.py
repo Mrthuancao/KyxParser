@@ -78,3 +78,9 @@ class GymEnvironmentConfig:
     })
     # New field to store the serialized controlFunc AST
     control_flow_program_ast_json: Optional[Dict[str, Any]] = None
+    simulation_mode: bool = False
+    simulation_initialization_ast_json: Optional[Dict[str, Any]] = None
+    simulation_step_ast_json: Optional[Dict[str, Any]] = None
+    verification_formula_ast_json: Optional[Dict[str, Any]] = None
+    simulation_reward_terms: List[str] = field(default_factory=list)
+    simulation_predicate_rules: List[Dict[str, str]] = field(default_factory=list)

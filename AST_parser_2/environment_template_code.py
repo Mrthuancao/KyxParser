@@ -47,6 +47,7 @@ class KeYmaeraGymEnv(gym.Env):
         self.render_mode = render_mode
         self.current_state = OrderedDict()
         self.time = 0.0 # Time elapsed within current control step (t in dL)
+        self.simulation_elapsed_time = 0.0
         self.global_time_remaining = 0.0 # T in dL
         self.current_step_count = 0 # Number of control steps taken
         self.max_episode_steps = self.config.get('max_episode_steps', 200)
@@ -94,6 +95,16 @@ class KeYmaeraGymEnv(gym.Env):
             self.control_flow_program_ast = self._deserialize_ast_node(self.config['control_flow_program_ast_json'])
             self._debug_print(f"DEBUG: Deserialized control_flow_program_ast: {{self.control_flow_program_ast._repr_indented(0)}}")
 
+        self.simulation_mode = self.config.get('simulation_mode', False)
+        self.simulation_initialization_ast = (
+            self._deserialize_ast_node(self.config['simulation_initialization_ast_json'])
+            if self.config.get('simulation_initialization_ast_json') else None
+        )
+        self.simulation_step_ast = (
+            self._deserialize_ast_node(self.config['simulation_step_ast_json'])
+            if self.config.get('simulation_step_ast_json') else None
+        )
+        self._simulation_expression_cache = {}
         self.control_choice_paths = (
             self._enumerate_control_choice_paths(self.control_flow_program_ast)
             if self.control_flow_program_ast else []
@@ -638,6 +649,266 @@ class KeYmaeraGymEnv(gym.Env):
             # If it's a pure Python object that doesn't have a .subs method, return it as is.
             return sympy_expr_node
 
+    def _simulation_domain_comparisons(self, formula):
+        if isinstance(formula, BinaryFormulaOp) and formula.op in ('&', '&&'):
+            return (
+                self._simulation_domain_comparisons(formula.left)
+                + self._simulation_domain_comparisons(formula.right)
+            )
+        if isinstance(formula, Comparison):
+            return [formula]
+        return []
+
+    def _compile_simulation_term(self, term):
+        cache_key = id(term)
+        if cache_key not in self._simulation_expression_cache:
+            expression = self._term_to_python_eval_str_env(term)
+            self._simulation_expression_cache[cache_key] = compile(
+                expression, "<hybrid-program-term>", "eval"
+            )
+        return self._simulation_expression_cache[cache_key]
+
+    def _flatten_simulation_choice(self, choice):
+        if isinstance(choice, Choice):
+            return (
+                self._flatten_simulation_choice(choice.left)
+                + self._flatten_simulation_choice(choice.right)
+            )
+        return [choice]
+
+    def _integrate_simulation_ode(self, ode):
+        if ode.domain_constraint is not None and not self._evaluate_expression(
+            ode.domain_constraint, self.current_state
+        ):
+            return False
+
+        if ode.domain_constraint is not None:
+            snap_tolerance = max(1e-9, self.ode_solver_tolerance * 10)
+            for comparison in self._simulation_domain_comparisons(ode.domain_constraint):
+                if not isinstance(comparison.left, VarRef) and not isinstance(
+                    comparison.right, VarRef
+                ):
+                    continue
+                left_value = float(self._evaluate_expression(comparison.left, self.current_state))
+                right_value = float(self._evaluate_expression(comparison.right, self.current_state))
+                if abs(left_value - right_value) > snap_tolerance:
+                    continue
+                if isinstance(comparison.left, VarRef):
+                    self.current_state[comparison.left.name] = right_value
+                else:
+                    self.current_state[comparison.right.name] = left_value
+
+        variables = [equation.var.name for equation in ode.equations]
+        initial_values = [float(self.current_state[name]) for name in variables]
+        initial_state = dict(self.current_state)
+        eval_globals = {
+            "__builtins__": None,
+            "self": self,
+            "np": np,
+            "math": math,
+            "abs": abs,
+            "min": min,
+            "max": max,
+            "float": float,
+            "int": int,
+            "bool": bool,
+        }
+        derivative_codes = [
+            self._compile_simulation_term(equation.expr) for equation in ode.equations
+        ]
+
+        def state_at(values):
+            state = dict(initial_state)
+            state.update(zip(variables, values))
+            return state
+
+        def derivatives(_time, values):
+            state = state_at(values)
+            return [float(eval(code, eval_globals, state)) for code in derivative_codes]
+
+        events = []
+        if ode.domain_constraint is not None:
+            for comparison in self._simulation_domain_comparisons(ode.domain_constraint):
+                if comparison.op not in ('<', '<=', '>', '>='):
+                    continue
+
+                def boundary(_time, values, comparison=comparison):
+                    state = state_at(values)
+                    left = self._compile_simulation_term(comparison.left)
+                    right = self._compile_simulation_term(comparison.right)
+                    return float(
+                        eval(left, eval_globals, state)
+                        - eval(right, eval_globals, state)
+                    )
+
+                boundary.terminal = True
+                boundary.direction = 1 if comparison.op in ('<', '<=') else -1
+                events.append(boundary)
+
+        solution = solve_ivp(
+            derivatives,
+            (0.0, float(self.time_step)),
+            initial_values,
+            method=self.ode_solver_method,
+            max_step=self.ode_solver_step_size,
+            rtol=self.ode_solver_tolerance,
+            atol=self.ode_solver_tolerance,
+            events=events or None,
+        )
+        if not solution.success:
+            raise RuntimeError(f"Hybrid-program ODE integration failed: {{solution.message}}")
+
+        self.current_state.update(zip(variables, solution.y[:, -1]))
+        self.simulation_elapsed_time += float(solution.t[-1])
+        if ode.domain_constraint is not None:
+            final_state = dict(self.current_state)
+            if not self._evaluate_expression(ode.domain_constraint, final_state):
+                raise RuntimeError(
+                    "Hybrid-program ODE integration ended outside its evolution domain."
+                )
+        return True
+
+    def _execute_simulation_program(self, program, probe=False):
+        if isinstance(program, HPBlock):
+            return self._execute_simulation_program(program.program, probe)
+        if isinstance(program, Sequence):
+            for child in program.programs:
+                if not self._execute_simulation_program(child, probe):
+                    return False
+            return True
+        if isinstance(program, Choice):
+            enabled_branches = []
+            for branch in self._flatten_simulation_choice(program):
+                saved_state = copy.deepcopy(self.current_state)
+                try:
+                    if self._execute_simulation_program(branch, probe=True):
+                        enabled_branches.append(branch)
+                finally:
+                    self.current_state.clear()
+                    self.current_state.update(saved_state)
+            if not enabled_branches:
+                return False
+            selected = int(self.np_random.integers(len(enabled_branches)))
+            return self._execute_simulation_program(enabled_branches[selected], probe)
+        if isinstance(program, Test):
+            return bool(self._evaluate_expression(program.condition, self.current_state))
+        if isinstance(program, Assignment):
+            value = self._evaluate_expression(program.expr, self.current_state)
+            self.current_state[program.var.name] = value
+            return True
+        if isinstance(program, NondetAssignment):
+            raise ValueError(
+                "Hybrid-program simulation does not support unbounded nondeterministic assignments."
+            )
+        if isinstance(program, ODE):
+            if probe:
+                return (
+                    program.domain_constraint is None
+                    or bool(self._evaluate_expression(
+                        program.domain_constraint, self.current_state
+                    ))
+                )
+            return self._integrate_simulation_ode(program)
+        if isinstance(program, Iteration):
+            raise ValueError(
+                "Nested hybrid-program loops are not supported inside one simulation step."
+            )
+        if isinstance(program, VarRef):
+            raise ValueError(
+                f"Unexpanded hybrid-program reference in simulation: {{program.name}}"
+            )
+        raise ValueError(
+            f"Unsupported hybrid-program node in simulation: {{type(program).__name__}}"
+        )
+
+    def _reset_modal_simulation_state(self):
+        constants = {
+            constant['name']: self.current_state[constant['name']]
+            for constant in self.config['constants']
+        }
+        max_attempts = self.initial_state_buffer_config.get('max_populate_attempts', 1000)
+        for _attempt in range(max_attempts):
+            self.current_state.clear()
+            self.current_state.update(constants)
+            self.current_state.update(self._generate_valid_initial_state(max_attempts=1))
+            if self.simulation_initialization_ast is not None:
+                if not self._execute_simulation_program(self.simulation_initialization_ast):
+                    continue
+            if self._simulation_program_is_enabled(self.simulation_step_ast):
+                return
+        raise RuntimeError(
+            "Could not sample an initial state with an enabled execution of the modal program "
+            f"after {{max_attempts}} attempts."
+        )
+
+    def _simulation_program_is_enabled(self, program):
+        saved_state = copy.deepcopy(self.current_state)
+        try:
+            return self._execute_simulation_program(program, probe=True)
+        finally:
+            self.current_state.clear()
+            self.current_state.update(saved_state)
+
+    def _step_modal_simulation(self, action):
+        if not self.action_space.contains(action):
+            raise ValueError(f"Invalid no-op simulation action: {{action}}")
+        original_state = copy.deepcopy(self.current_state)
+        try:
+            executed = self._execute_simulation_program(self.simulation_step_ast)
+        except Exception:
+            self.current_state.clear()
+            self.current_state.update(original_state)
+            raise
+        if not executed:
+            self.current_state.clear()
+            self.current_state.update(original_state)
+            terminated = True
+            termination_reason = "no_enabled_hybrid_program_execution"
+        else:
+            terminated = False
+            termination_reason = None
+
+        reward = sum(
+            float(self._evaluate_expression(term, self.current_state))
+            for term in self.config.get('simulation_reward_terms', [])
+        )
+        truncated = False
+        annotation_status = None
+        for rule in self.config.get('simulation_predicate_rules', []):
+            predicate_holds = bool(
+                self._evaluate_expression(rule['predicate'], self.current_state)
+            )
+            action_key = 'on_success' if predicate_holds else 'on_failure'
+            status_key = 'success_status' if predicate_holds else 'failure_status'
+            action = rule[action_key]
+            status = rule[status_key]
+            if action == 'terminate':
+                terminated = True
+                annotation_status = status if status != 'none' else annotation_status
+                termination_reason = f"annotation:{rule['kind']}_{action_key[3:]}"
+            elif action == 'truncate':
+                truncated = True
+                annotation_status = status if status != 'none' else annotation_status
+                termination_reason = f"annotation:{rule['kind']}_{action_key[3:]}"
+
+        self.current_step_count += 1
+        truncated = truncated or self.current_step_count >= self.max_episode_steps
+        observation = self._get_observation()
+        info = self._get_info()
+        info.update({
+            "control_action": None,
+            "attempted_action": None,
+            "action_repaired": False,
+            "termination_reason": termination_reason,
+            "simulation_mode": True,
+            "simulation_elapsed_time": self.simulation_elapsed_time,
+        })
+        if annotation_status is not None:
+            info["status"] = annotation_status
+        if self.render_mode == "human":
+            self._render_frame()
+        return observation, reward, terminated, truncated, info
+
     def _get_ode_system(self, t_ode, y):
         # Map y (from solver) back to named variables
         state_map = {{var: y[i] for i, var in enumerate(self.differential_variables)}}
@@ -934,6 +1205,9 @@ class KeYmaeraGymEnv(gym.Env):
 
 
     def step(self, action):
+        if self.simulation_mode:
+            return self._step_modal_simulation(action)
+
         terminated = False
         truncated = False
         reward = 0.0 # Initialize reward
@@ -1492,6 +1766,7 @@ class KeYmaeraGymEnv(gym.Env):
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
         self.current_step_count = 0
+        self.simulation_elapsed_time = 0.0
         self.current_state = OrderedDict()
 
         # Re-apply constants (already done in __init__, but good to ensure for reset)
@@ -1542,12 +1817,17 @@ class KeYmaeraGymEnv(gym.Env):
 
         if ep_value is not None:
             self.time_step = ep_value
+
+        if self.simulation_mode:
+            self._reset_modal_simulation_state()
         
         # Ensure global_time_remaining is updated from the state
         self.global_time_remaining = self.current_state.get('T', 0.0)
 
         observation = self._get_observation()
         info = self._get_info()
+        if self.simulation_mode:
+            info["simulation_elapsed_time"] = self.simulation_elapsed_time
 
         if self.render_mode == "human":
             self._render_frame()

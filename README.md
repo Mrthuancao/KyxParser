@@ -52,3 +52,27 @@ Below is an overview of the main directories and their contents:
 ---
 
 This README aims to provide a quick guide to navigating the repository. For detailed information on specific components, please refer to the documentation within the `documents/` folder or the comments within the source code.
+
+## Quantified Box-Modal Simulation
+
+`AST_parser_2` can generate a simulator for quantified problems containing exactly one
+box modality and a hybrid program with one top-level loop at the end of the program.
+For example, the `CruiseControlStability.txt` problem's `forall`/`exists` formula is
+preserved in the generated config as verification metadata; the quantifiers are not
+sampled or treated as a per-step reward or termination condition.
+
+The modal program's prefix (such as cruise-control initialization) runs during
+`reset()`. Each `step(0)` then runs one iteration of the loop. Enabled nondeterministic
+choices are sampled uniformly, ODE branches advance by the configured `time_step`,
+and integration stops at detected evolution-domain boundaries. The resulting Gym
+environment has a single no-op discrete action. When predicates carry `@safety` or
+`@progress` annotations, their shaping/reward/penalty and success/failure actions are
+applied after each simulated loop iteration; otherwise the reward is `0.0`. Episodes
+end at the configured step limit or if the hybrid program has no enabled execution.
+This is a simulator for sampling executions, not a proof checker for the quantified
+stability claim.
+
+The simulation currently rejects quantified modal formulas with multiple or diamond
+modalities, programs without exactly one final top-level loop, recursive hybrid-program
+references, nested loops inside a simulation step, and unbounded nondeterministic
+assignments.

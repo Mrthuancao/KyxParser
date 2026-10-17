@@ -1652,6 +1652,130 @@ End.
         self.assertEqual(implication.right.modality, "box")
         self.assertIsInstance(implication.right.formula, Comparison)
 
+    def test_generator_simulates_quantified_cruise_control_modal_program(self):
+        model_path = (
+            Path(__file__).resolve().parents[1]
+            / "test"
+            / "input"
+            / "withBound"
+            / "CruiseControlStability.txt"
+        )
+        model_ast = KeYmaeraParser(
+            model_path.read_text(encoding="utf-8")
+        ).parse()
+        generator = GymnasiumEnvironmentGenerator("CruiseControlSimulation")
+        generated_code = generator.generate_environment_code(model_ast)
+
+        self.assertTrue(generator.config.simulation_mode)
+        self.assertIn("nearZeroSpeed", generator.config.reward_function_body)
+        self.assertEqual(generator.config.termination_condition_body, "False")
+        self.assertEqual(
+            generator.config.verification_formula_ast_json["_type"], "Quantifier"
+        )
+        self.assertIsNotNone(generator.config.simulation_initialization_ast_json)
+        self.assertIsNotNone(generator.config.simulation_step_ast_json)
+
+        namespace = {"__name__": "generated_cruise_control_simulation_test"}
+        exec(
+            compile(generated_code, "<generated-cruise-control-simulation>", "exec"),
+            namespace,
+        )
+        env = namespace["KeYmaeraGymEnv"]()
+        try:
+            initial_observation, initial_info = env.reset(seed=7)
+            self.assertEqual(env.action_space.n, 1)
+            self.assertEqual(initial_info["state"]["mode"], 3.0)
+            self.assertEqual(initial_info["simulation_elapsed_time"], 0.0)
+
+            initial_position = initial_info["state"]["x"]
+            for _ in range(5):
+                observation, reward, terminated, truncated, info = env.step(0)
+                speed = abs(info["state"]["v"])
+                self.assertAlmostEqual(
+                    reward, -speed + (10.0 if speed <= 1.0 else 0.0)
+                )
+                self.assertFalse(terminated)
+                self.assertFalse(truncated)
+
+            self.assertNotEqual(info["state"]["x"], initial_position)
+            self.assertGreater(info["simulation_elapsed_time"], 0.0)
+            self.assertEqual(len(observation), len(initial_observation))
+
+            env.reset(seed=5)
+            env.current_state.update({"mode": 1.0, "v": 39.99, "t": 2.49, "x": 0.0})
+            for _ in range(8):
+                _, _, terminated, _, info = env.step(0)
+                self.assertFalse(terminated)
+                if info["state"]["mode"] == 2.0:
+                    break
+            self.assertEqual(info["state"]["mode"], 2.0)
+            self.assertAlmostEqual(info["state"]["t"], 2.5)
+        finally:
+            env.close()
+
+    def test_cruise_control_annotations_drive_simulation_reward_and_safety(self):
+        model_path = (
+            Path(__file__).resolve().parents[1]
+            / "test"
+            / "input"
+            / "withBound"
+            / "CruiseControlStability.txt"
+        )
+        model_ast = KeYmaeraParser(
+            model_path.read_text(encoding="utf-8")
+        ).parse()
+        definitions = {
+            definition.name: definition
+            for definition in model_ast.entries[0].definitions.defs
+        }
+        self.assertEqual(
+            definitions["cruiseSafe"].annotations["safety"]["on_failure"],
+            "truncate:status=failure",
+        )
+        self.assertEqual(
+            definitions["nearZeroSpeed"].annotations["progress"]["shape"],
+            "{-abs(v)}",
+        )
+        generator = GymnasiumEnvironmentGenerator("CruiseControlAnnotated")
+        generated_code = generator.generate_environment_code(model_ast)
+        self.assertEqual(len(generator.config.simulation_reward_terms), 2)
+        self.assertIn("abs(v)", generator.config.simulation_reward_terms[1])
+        velocity_config = next(
+            variable for variable in generator.config.variables if variable.name == "v"
+        )
+        self.assertEqual(
+            (velocity_config.lower_bound, velocity_config.upper_bound),
+            ("-20.0", "40.0"),
+        )
+        self.assertEqual(
+            generator._parse_annotation_action("truncate:failure"),
+            ("truncate", "failure"),
+        )
+
+        namespace = {"__name__": "generated_cruise_control_annotation_test"}
+        exec(
+            compile(generated_code, "<generated-cruise-control-annotations>", "exec"),
+            namespace,
+        )
+        env = namespace["KeYmaeraGymEnv"]()
+        try:
+            env.reset(seed=11)
+            env.current_state.update({"x": 0.0, "t": 0.0, "v": 0.5, "mode": 3.0})
+            _, reward, terminated, truncated, info = env.step(0)
+            self.assertAlmostEqual(reward, 10.0 - abs(info["state"]["v"]))
+            self.assertFalse(terminated)
+            self.assertFalse(truncated)
+
+            env.current_state.update({"x": 0.0, "t": 0.0, "v": 41.0, "mode": 3.0})
+            _, reward, terminated, truncated, info = env.step(0)
+            self.assertEqual(reward, -141.0)
+            self.assertTrue(terminated)
+            self.assertTrue(truncated)
+            self.assertEqual(info["status"], "failure")
+            self.assertEqual(info["termination_reason"], "annotation:safety_failure")
+        finally:
+            env.close()
+
 
     def test_parse_hybrid_program_expressions(self):
         print("\n--- Testing parse_hybrid_program ---")

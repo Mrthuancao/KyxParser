@@ -62,11 +62,14 @@ class GymnasiumEnvironmentGenerator:
         if isinstance(value, (int, float)):
             return str(value)
         if isinstance(value, str):
+            expression = value.strip()
+            if expression.startswith("{") and expression.endswith("}"):
+                expression = expression[1:-1].strip()
             try:
-                term = self._expr_parser.parse_term(expression=value)
+                term = self._expr_parser.parse_term(expression=expression)
                 return self._term_to_string_python(term)
             except Exception:
-                return value
+                return expression
         return str(value)
 
     def _indent(self, text: str) -> str:
@@ -690,11 +693,188 @@ class GymnasiumEnvironmentGenerator:
         archive_entry = model_ast.entries[0]
         problem_block_formula = archive_entry.problem.formula
         extracted_components = self._extract_problem_components(problem_block_formula)
+        simulation_programs = self._quantified_simulation_programs(problem_block_formula)
+        if simulation_programs is not None:
+            initialization_program, step_program = simulation_programs
+            self.config.simulation_mode = True
+            self.config.simulation_initialization_ast_json = (
+                self._serialize_ast_node(initialization_program)
+                if initialization_program is not None else None
+            )
+            self.config.simulation_step_ast_json = self._serialize_ast_node(step_program)
+            self.config.verification_formula_ast_json = self._serialize_ast_node(problem_block_formula)
+            self._build_simulation_annotation_metadata()
+            extracted_components.update({
+                "initial_condition": "True",
+                "program": "",
+                "goal": "True",
+                "loop_invariants": [],
+                "termination_condition_body": "False",
+                "reward_function_body": " + ".join(
+                    self.config.simulation_reward_terms
+                ) or "0.0",
+            })
         self.config.problem = ProblemConfig(initial_condition=extracted_components["initial_condition"], program=extracted_components["program"], goal=extracted_components["goal"], loop_invariants=extracted_components["loop_invariants"], differential_invariants=extracted_components["differential_invariants"], differential_ghosts=extracted_components["differential_ghosts"])
         self.config.termination_condition_body = extracted_components["termination_condition_body"]
         self.config.reward_function_body = extracted_components["reward_function_body"]
 
+    @staticmethod
+    def _parse_annotation_action(action_value: Any) -> tuple[str, str]:
+        if not isinstance(action_value, str):
+            return "continue", "none"
+        action, separator, status = action_value.partition(":status=")
+        if not separator:
+            action, separator, status = action_value.partition(":")
+        action = action.strip().lower()
+        if action not in {"terminate", "truncate", "continue"}:
+            raise ValueError(f"Unsupported RL annotation action: {action_value}")
+        return action, status.strip() if separator else "none"
+
+    def _build_simulation_annotation_metadata(self) -> None:
+        for pred_name, pred_def in self.pred_definition_map.items():
+            annotations = pred_def.annotations
+            kinds = [kind for kind in ("safety", "progress") if kind in annotations]
+            if not kinds:
+                continue
+            if len(kinds) > 1:
+                raise ValueError(
+                    f"Predicate '{pred_name}' cannot use both @safety and @progress."
+                )
+            if pred_def.args:
+                raise ValueError(
+                    f"Annotated predicate '{pred_name}' must have no arguments "
+                    "for quantified simulation."
+                )
+
+            kind = kinds[0]
+            annotation = annotations[kind]
+            predicate = f"self._{pred_name}_impl()"
+            components = self._extract_reward_components_from_annotation(annotation)
+            shape = components["shape"]
+            reward = components["reward"]
+            penalty = components["penalty"]
+            self.config.simulation_reward_terms.append(
+                f"(({shape}) + (({reward}) if ({predicate}) else ({penalty})))"
+            )
+
+            on_success, success_status = self._parse_annotation_action(
+                annotation.get("on_success", "continue")
+            )
+            on_failure, failure_status = self._parse_annotation_action(
+                annotation.get("on_failure", "continue")
+            )
+            self.config.simulation_predicate_rules.append({
+                "predicate": predicate,
+                "kind": kind,
+                "on_success": on_success,
+                "success_status": success_status,
+                "on_failure": on_failure,
+                "failure_status": failure_status,
+            })
+
+    def _quantified_simulation_programs(
+        self, formula: Formula
+    ) -> Optional[tuple[Optional[HybridProgram], HybridProgram]]:
+        has_quantifier = False
+        modal_formulas: List[ModalFormula] = []
+
+        def collect(node: Formula) -> None:
+            nonlocal has_quantifier
+            if isinstance(node, Quantifier):
+                has_quantifier = True
+                collect(node.body)
+            elif isinstance(node, ModalFormula):
+                modal_formulas.append(node)
+            elif isinstance(node, BinaryFormulaOp):
+                collect(node.left)
+                collect(node.right)
+            elif isinstance(node, UnaryFormulaOp):
+                collect(node.operand)
+            elif isinstance(node, C_Formula):
+                collect(node.formula)
+
+        collect(formula)
+        if not has_quantifier or not modal_formulas:
+            return None
+        if len(modal_formulas) != 1 or modal_formulas[0].modality != "box":
+            raise ValueError(
+                "Quantified simulation generation currently requires exactly one box modality."
+            )
+
+        program = self._expand_hybrid_program_references(modal_formulas[0].program)
+        while isinstance(program, HPBlock):
+            program = program.program
+        programs = program.programs if isinstance(program, Sequence) else [program]
+        iteration_indices = [
+            index for index, item in enumerate(programs) if isinstance(item, Iteration)
+        ]
+        if len(iteration_indices) != 1:
+            raise ValueError(
+                "Quantified simulation generation requires exactly one top-level hybrid-program loop."
+            )
+        iteration_index = iteration_indices[0]
+        if iteration_index != len(programs) - 1:
+            raise ValueError(
+                "Quantified simulation generation requires initialization before its final loop."
+            )
+        initialization_parts = programs[:iteration_index]
+        initialization = (
+            Sequence(initialization_parts) if len(initialization_parts) > 1
+            else initialization_parts[0] if initialization_parts
+            else None
+        )
+        return initialization, programs[iteration_index].program
+
+    def _expand_hybrid_program_references(
+        self, program: HybridProgram, expansion_stack: Optional[set[str]] = None
+    ) -> HybridProgram:
+        if expansion_stack is None:
+            expansion_stack = set()
+        if isinstance(program, VarRef) and program.name in self.hp_definition_map:
+            if program.name in expansion_stack:
+                cycle = " -> ".join((*sorted(expansion_stack), program.name))
+                raise ValueError(f"Recursive hybrid-program definition: {cycle}")
+            definition = self.hp_definition_map[program.name]
+            return self._expand_hybrid_program_references(
+                definition.body, expansion_stack | {program.name}
+            )
+        if isinstance(program, HPBlock):
+            return self._expand_hybrid_program_references(program.program, expansion_stack)
+        if isinstance(program, Sequence):
+            return Sequence([
+                self._expand_hybrid_program_references(child, expansion_stack)
+                for child in program.programs
+            ])
+        if isinstance(program, Choice):
+            return Choice(
+                self._expand_hybrid_program_references(program.left, expansion_stack),
+                self._expand_hybrid_program_references(program.right, expansion_stack),
+            )
+        if isinstance(program, Iteration):
+            return Iteration(
+                self._expand_hybrid_program_references(program.program, expansion_stack),
+                program.invariant,
+            )
+        return program
+
     def _determine_action_and_observation_spaces(self):
+        if self.config.simulation_mode:
+            self.config.action_space_type = "discrete"
+            self.config.action_space_bounds = {"n": 1}
+            self.config.observation_space_type = "continuous"
+            self.config.observation_space_bounds = {
+                var.name: {
+                    "min": var.lower_bound if var.lower_bound is not None else "-float('inf')",
+                    "max": var.upper_bound if var.upper_bound is not None else "float('inf')",
+                }
+                for var in self.config.variables
+            }
+            if not self.config.observation_space_bounds:
+                self.config.observation_space_bounds = {
+                    "dummy_obs": {"min": -1.0, "max": 1.0}
+                }
+            return
+
         action_variables = []
         observation_variables = []
         if self.config.control_flow_program_ast_json is not None:
