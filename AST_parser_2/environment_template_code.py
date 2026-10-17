@@ -722,11 +722,23 @@ class KeYmaeraGymEnv(gym.Env):
             state.update(zip(variables, values))
             return state
 
+        def evaluate_at_state(code, state):
+            previous_state = self.current_state
+            self.current_state = state
+            try:
+                return eval(code, eval_globals, state)
+            finally:
+                self.current_state = previous_state
+
         def derivatives(_time, values):
             state = state_at(values)
-            return [float(eval(code, eval_globals, state)) for code in derivative_codes]
+            return [
+                float(evaluate_at_state(code, state))
+                for code in derivative_codes
+            ]
 
         events = []
+        event_comparisons = []
         if ode.domain_constraint is not None:
             for comparison in self._simulation_domain_comparisons(ode.domain_constraint):
                 if comparison.op not in ('<', '<=', '>', '>='):
@@ -736,14 +748,24 @@ class KeYmaeraGymEnv(gym.Env):
                     state = state_at(values)
                     left = self._compile_simulation_term(comparison.left)
                     right = self._compile_simulation_term(comparison.right)
-                    return float(
-                        eval(left, eval_globals, state)
-                        - eval(right, eval_globals, state)
+                    boundary_value = float(
+                        evaluate_at_state(left, state)
+                        - evaluate_at_state(right, state)
                     )
+                    if _time == 0.0 and abs(boundary_value) <= snap_tolerance:
+                        crossing_direction = (
+                            1 if comparison.op in ('<', '<=') else -1
+                        )
+                        event_epsilon = max(
+                            1e-12, self.ode_solver_tolerance * 1e-3
+                        )
+                        return -crossing_direction * event_epsilon
+                    return boundary_value
 
                 boundary.terminal = True
                 boundary.direction = 1 if comparison.op in ('<', '<=') else -1
                 events.append(boundary)
+                event_comparisons.append(comparison)
 
         solution = solve_ivp(
             derivatives,
@@ -759,6 +781,17 @@ class KeYmaeraGymEnv(gym.Env):
             raise RuntimeError(f"Hybrid-program ODE integration failed: {{solution.message}}")
 
         self.current_state.update(zip(variables, solution.y[:, -1]))
+        for comparison, event_times in zip(event_comparisons, solution.t_events):
+            if not len(event_times):
+                continue
+            if isinstance(comparison.left, VarRef):
+                self.current_state[comparison.left.name] = self._evaluate_expression(
+                    comparison.right, self.current_state
+                )
+            elif isinstance(comparison.right, VarRef):
+                self.current_state[comparison.right.name] = self._evaluate_expression(
+                    comparison.left, self.current_state
+                )
         self.simulation_elapsed_time += float(solution.t[-1])
         if ode.domain_constraint is not None:
             final_state = dict(self.current_state)
@@ -851,27 +884,40 @@ class KeYmaeraGymEnv(gym.Env):
 
     def _step_modal_simulation(self, action):
         if not self.action_space.contains(action):
-            raise ValueError(f"Invalid no-op simulation action: {{action}}")
+            raise ValueError(f"Invalid modal simulation action: {{action}}")
         original_state = copy.deepcopy(self.current_state)
-        try:
-            executed = self._execute_simulation_program(self.simulation_step_ast)
-        except Exception:
-            self.current_state.clear()
-            self.current_state.update(original_state)
-            raise
-        if not executed:
-            self.current_state.clear()
-            self.current_state.update(original_state)
-            terminated = True
-            termination_reason = "no_enabled_hybrid_program_execution"
-        else:
-            terminated = False
-            termination_reason = None
+        control_action = None
+        terminated = False
+        termination_reason = None
+        control_flow_info = None
+        if self.control_flow_program_ast is not None:
+            control_action = int(np.asarray(action).reshape(-1)[0])
+            control_status = self._execute_control_flow(control_action)
+            if control_status["terminated"]:
+                self.current_state.clear()
+                self.current_state.update(original_state)
+                terminated = True
+                termination_reason = f"control_flow:{{control_status['info']}}"
+                control_flow_info = control_status["info"]
+        if not terminated:
+            try:
+                executed = self._execute_simulation_program(self.simulation_step_ast)
+            except Exception:
+                self.current_state.clear()
+                self.current_state.update(original_state)
+                raise
+            if not executed:
+                self.current_state.clear()
+                self.current_state.update(original_state)
+                terminated = True
+                termination_reason = "no_enabled_hybrid_program_execution"
 
         reward = sum(
             float(self._evaluate_expression(term, self.current_state))
             for term in self.config.get('simulation_reward_terms', [])
         )
+        if control_flow_info is not None:
+            reward += float(control_status["reward_delta"])
         truncated = False
         annotation_status = None
         for rule in self.config.get('simulation_predicate_rules', []):
@@ -896,13 +942,15 @@ class KeYmaeraGymEnv(gym.Env):
         observation = self._get_observation()
         info = self._get_info()
         info.update({
-            "control_action": None,
+            "control_action": control_action,
             "attempted_action": None,
             "action_repaired": False,
             "termination_reason": termination_reason,
             "simulation_mode": True,
             "simulation_elapsed_time": self.simulation_elapsed_time,
         })
+        if control_flow_info is not None:
+            info["control_flow_info"] = control_flow_info
         if annotation_status is not None:
             info["status"] = annotation_status
         if self.render_mode == "human":

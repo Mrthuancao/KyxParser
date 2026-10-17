@@ -71,7 +71,7 @@ Definitions
     x:=0
   };
 
-  HP transitions ::= {
+  HP controlFunc ::= {
     ?mode = ebrakeact(); ?15 <= v & v <= 40 & t = 2.5; mode:=ebrakefull()
     ++ ?mode = ebrakeact(); ?15 <= v & v <= 16 & 0 <= t & t <= 2.5; t:=0; mode:=sbrakeact()
     ++ ?mode = ebrakeact(); mode:=mode
@@ -101,7 +101,7 @@ Definitions
   };
 
   HP transitionAndFlow ::= {
-    transitions;
+    controlFunc;
     continuousDynamics
   };
 

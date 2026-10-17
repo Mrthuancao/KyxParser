@@ -801,7 +801,21 @@ class GymnasiumEnvironmentGenerator:
                 "Quantified simulation generation currently requires exactly one box modality."
             )
 
-        program = self._expand_hybrid_program_references(modal_formulas[0].program)
+        program = self._expand_hybrid_program_references(
+            modal_formulas[0].program, preserve_controller=True
+        )
+        program, controller_references = self._remove_controller_references(program)
+        if controller_references:
+            if self.config.control_flow_program_ast_json is None:
+                raise ValueError(
+                    "The modal program references controlFunc/ctrl, but no agent "
+                    "controller definition was found."
+                )
+            if controller_references != 1:
+                raise ValueError(
+                    "Quantified simulation currently requires exactly one "
+                    "controlFunc/ctrl call in the modal loop."
+                )
         while isinstance(program, HPBlock):
             program = program.program
         programs = program.programs if isinstance(program, Sequence) else [program]
@@ -826,36 +840,83 @@ class GymnasiumEnvironmentGenerator:
         return initialization, programs[iteration_index].program
 
     def _expand_hybrid_program_references(
-        self, program: HybridProgram, expansion_stack: Optional[set[str]] = None
+        self,
+        program: HybridProgram,
+        expansion_stack: Optional[set[str]] = None,
+        preserve_controller: bool = False,
     ) -> HybridProgram:
         if expansion_stack is None:
             expansion_stack = set()
+        if (
+            preserve_controller
+            and isinstance(program, VarRef)
+            and program.name in {"controlFunc", "ctrl"}
+        ):
+            return program
         if isinstance(program, VarRef) and program.name in self.hp_definition_map:
             if program.name in expansion_stack:
                 cycle = " -> ".join((*sorted(expansion_stack), program.name))
                 raise ValueError(f"Recursive hybrid-program definition: {cycle}")
             definition = self.hp_definition_map[program.name]
             return self._expand_hybrid_program_references(
-                definition.body, expansion_stack | {program.name}
+                definition.body,
+                expansion_stack | {program.name},
+                preserve_controller,
             )
         if isinstance(program, HPBlock):
-            return self._expand_hybrid_program_references(program.program, expansion_stack)
+            return self._expand_hybrid_program_references(
+                program.program, expansion_stack, preserve_controller
+            )
         if isinstance(program, Sequence):
             return Sequence([
-                self._expand_hybrid_program_references(child, expansion_stack)
+                self._expand_hybrid_program_references(
+                    child, expansion_stack, preserve_controller
+                )
                 for child in program.programs
             ])
         if isinstance(program, Choice):
             return Choice(
-                self._expand_hybrid_program_references(program.left, expansion_stack),
-                self._expand_hybrid_program_references(program.right, expansion_stack),
+                self._expand_hybrid_program_references(
+                    program.left, expansion_stack, preserve_controller
+                ),
+                self._expand_hybrid_program_references(
+                    program.right, expansion_stack, preserve_controller
+                ),
             )
         if isinstance(program, Iteration):
             return Iteration(
-                self._expand_hybrid_program_references(program.program, expansion_stack),
+                self._expand_hybrid_program_references(
+                    program.program, expansion_stack, preserve_controller
+                ),
                 program.invariant,
             )
         return program
+
+    def _remove_controller_references(
+        self, program: HybridProgram
+    ) -> tuple[HybridProgram, int]:
+        if isinstance(program, VarRef) and program.name in {"controlFunc", "ctrl"}:
+            return Sequence([]), 1
+        if isinstance(program, HPBlock):
+            program.program, count = self._remove_controller_references(program.program)
+            return program, count
+        if isinstance(program, Sequence):
+            cleaned_programs = []
+            total_references = 0
+            for child in program.programs:
+                cleaned_child, count = self._remove_controller_references(child)
+                cleaned_programs.append(cleaned_child)
+                total_references += count
+            program.programs = cleaned_programs
+            return program, total_references
+        if isinstance(program, Choice):
+            program.left, left_count = self._remove_controller_references(program.left)
+            program.right, right_count = self._remove_controller_references(program.right)
+            return program, left_count + right_count
+        if isinstance(program, Iteration):
+            program.program, count = self._remove_controller_references(program.program)
+            return program, count
+        return program, 0
 
     def _determine_action_and_observation_spaces(self):
         if self.config.simulation_mode:

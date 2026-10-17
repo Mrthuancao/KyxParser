@@ -62,17 +62,42 @@ preserved in the generated config as verification metadata; the quantifiers are 
 sampled or treated as a per-step reward or termination condition.
 
 The modal program's prefix (such as cruise-control initialization) runs during
-`reset()`. Each `step(0)` then runs one iteration of the loop. Enabled nondeterministic
-choices are sampled uniformly, ODE branches advance by the configured `time_step`,
-and integration stops at detected evolution-domain boundaries. The resulting Gym
-environment has a single no-op discrete action. When predicates carry `@safety` or
-`@progress` annotations, their shaping/reward/penalty and success/failure actions are
-applied after each simulated loop iteration; otherwise the reward is `0.0`. Episodes
-end at the configured step limit or if the hybrid program has no enabled execution.
-This is a simulator for sampling executions, not a proof checker for the quantified
-stability claim.
+`reset()`. If the loop calls a named `controlFunc` (or `ctrl`), each complete choice
+path in that controller is exposed as a discrete Gym action and checked by
+`action_masks()` against its guards; the chosen controller path runs before the
+remaining loop body. Without such a controller, the environment uses a single no-op
+discrete action. Other enabled nondeterministic choices are sampled uniformly, ODE
+branches advance by the configured `time_step`, and integration stops at detected
+evolution-domain boundaries. When predicates carry `@safety` or `@progress`
+annotations, their shaping/reward/penalty and success/failure actions are applied
+after each simulated loop iteration; otherwise the reward is `0.0`. Episodes end at
+the configured step limit or if the hybrid program has no enabled execution. This is
+a simulator for sampling executions, not a proof checker for the quantified stability
+claim.
 
 The simulation currently rejects quantified modal formulas with multiple or diamond
 modalities, programs without exactly one final top-level loop, recursive hybrid-program
 references, nested loops inside a simulation step, and unbounded nondeterministic
 assignments.
+
+### Training a Cruise Control Policy
+
+Train and evaluate a masked PPO policy over the enabled `controlFunc` paths with:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\train_ppo_cruise_control.py --timesteps 10000
+```
+
+The policy is saved as `models/ppo_cruise_control.zip`; training and evaluation
+diagnostics are written under `logs/cruise_control/`. The generated Python
+environment is retained at `generated_cruise_control_env.py` for inspection and is
+overwritten on the next run; pass `--generated-env <path>` to choose another location.
+Set the per-episode step limit for both training and evaluation with
+`--max-episode-steps` (default: `200`), for example:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\train_ppo_cruise_control.py --timesteps 10000 --max-episode-steps 1000
+```
+
+This trains on the generated simulation and is not evidence that the quantified
+stability theorem is proved.

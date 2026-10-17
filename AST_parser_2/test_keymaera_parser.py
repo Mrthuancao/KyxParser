@@ -1,6 +1,7 @@
 import unittest
 import re
 import tempfile
+import numpy as np
 from pathlib import Path
 from typing import List, Optional, Union, Dict, Any
 import os # Import os module for file path manipulation
@@ -1683,13 +1684,19 @@ End.
         env = namespace["KeYmaeraGymEnv"]()
         try:
             initial_observation, initial_info = env.reset(seed=7)
-            self.assertEqual(env.action_space.n, 1)
+            self.assertEqual(env.action_space.n, len(env.control_choice_paths))
+            self.assertEqual(env.action_space.n, 17)
             self.assertEqual(initial_info["state"]["mode"], 3.0)
             self.assertEqual(initial_info["simulation_elapsed_time"], 0.0)
 
             initial_position = initial_info["state"]["x"]
             for _ in range(5):
-                observation, reward, terminated, truncated, info = env.step(0)
+                action_mask = env.action_masks()
+                legal_actions = np.flatnonzero(action_mask)
+                self.assertGreater(len(legal_actions), 0)
+                action = int(legal_actions[0])
+                observation, reward, terminated, truncated, info = env.step(action)
+                self.assertEqual(info["control_action"], action)
                 speed = abs(info["state"]["v"])
                 self.assertAlmostEqual(
                     reward, -speed + (10.0 if speed <= 1.0 else 0.0)
@@ -1701,10 +1708,21 @@ End.
             self.assertGreater(info["simulation_elapsed_time"], 0.0)
             self.assertEqual(len(observation), len(initial_observation))
 
+            env.current_state.update({"mode": 4.0, "v": 11.436, "t": 0.0, "x": 0.0})
+            observation, _, terminated, truncated, info = env.step(8)
+            self.assertFalse(terminated)
+            self.assertFalse(truncated)
+            self.assertAlmostEqual(info["simulation_elapsed_time"], 0.06)
+            self.assertAlmostEqual(info["state"]["t"], 0.005)
+            self.assertAlmostEqual(info["state"]["v"], 11.423975, places=6)
+            self.assertEqual(len(observation), len(initial_observation))
+
             env.reset(seed=5)
             env.current_state.update({"mode": 1.0, "v": 39.99, "t": 2.49, "x": 0.0})
             for _ in range(8):
-                _, _, terminated, _, info = env.step(0)
+                legal_actions = np.flatnonzero(env.action_masks())
+                self.assertGreater(len(legal_actions), 0)
+                _, _, terminated, _, info = env.step(int(legal_actions[0]))
                 self.assertFalse(terminated)
                 if info["state"]["mode"] == 2.0:
                     break
@@ -1761,14 +1779,18 @@ End.
         try:
             env.reset(seed=11)
             env.current_state.update({"x": 0.0, "t": 0.0, "v": 0.5, "mode": 3.0})
-            _, reward, terminated, truncated, info = env.step(0)
+            legal_actions = np.flatnonzero(env.action_masks())
+            self.assertGreater(len(legal_actions), 0)
+            _, reward, terminated, truncated, info = env.step(int(legal_actions[0]))
             self.assertAlmostEqual(reward, 10.0 - abs(info["state"]["v"]))
             self.assertFalse(terminated)
             self.assertFalse(truncated)
 
-            env.current_state.update({"x": 0.0, "t": 0.0, "v": 41.0, "mode": 3.0})
-            _, reward, terminated, truncated, info = env.step(0)
-            self.assertEqual(reward, -141.0)
+            env.current_state.update({"x": 501.0, "t": 0.0, "v": 0.5, "mode": 3.0})
+            legal_actions = np.flatnonzero(env.action_masks())
+            self.assertGreater(len(legal_actions), 0)
+            _, reward, terminated, truncated, info = env.step(int(legal_actions[0]))
+            self.assertAlmostEqual(reward, -90.5)
             self.assertTrue(terminated)
             self.assertTrue(truncated)
             self.assertEqual(info["status"], "failure")
