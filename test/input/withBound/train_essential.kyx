@@ -25,7 +25,7 @@ SharedDefinitions
   Real emOn  = 1;
   Real emOff = 0;
 
-  HP controlFunc ::= {
+  HP spd ::= {
         ?v <= vdes; a:=*; ?-b<=a&a<=A;
      ++ ?v >= vdes; a:=*; ?-b<=a&a<=0;
   };

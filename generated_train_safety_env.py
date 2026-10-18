@@ -3,6 +3,7 @@ import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
 import json
+import sys
 from scipy.integrate import solve_ivp
 import sympy
 import z3
@@ -23,7 +24,7 @@ from ast_config import (
 )
 
 # Embedded environment config (generator will replace the placeholder)
-_ENV_CONFIG_JSON = '    {\n        "environment_name": "KeYmaeraTrainSafety",\n        "variables": [\n            {\n                "name": "vdes",\n                "type": "Real",\n                "lower_bound": null,\n                "upper_bound": null,\n                "initial_value": null\n            },\n            {\n                "name": "sb",\n                "type": "Real",\n                "lower_bound": null,\n                "upper_bound": null,\n                "initial_value": null\n            },\n            {\n                "name": "mo",\n                "type": "Real",\n                "lower_bound": null,\n                "upper_bound": null,\n                "initial_value": null\n            },\n            {\n                "name": "t",\n                "type": "Real",\n                "lower_bound": null,\n                "upper_bound": null,\n                "initial_value": null\n            },\n            {\n                "name": "a",\n                "type": "Real",\n                "lower_bound": null,\n                "upper_bound": null,\n                "initial_value": null\n            },\n            {\n                "name": "v",\n                "type": "Real",\n                "lower_bound": null,\n                "upper_bound": null,\n                "initial_value": null\n            },\n            {\n                "name": "z",\n                "type": "Real",\n                "lower_bound": null,\n                "upper_bound": null,\n                "initial_value": null\n            },\n            {\n                "name": "m",\n                "type": "Real",\n                "lower_bound": null,\n                "upper_bound": null,\n                "initial_value": null\n            },\n            {\n                "name": "d",\n                "type": "Real",\n                "lower_bound": null,\n                "upper_bound": null,\n                "initial_value": null\n            },\n            {\n                "name": "do",\n                "type": "Real",\n                "lower_bound": null,\n                "upper_bound": null,\n                "initial_value": null\n            },\n            {\n                "name": "em",\n                "type": "Real",\n                "lower_bound": null,\n                "upper_bound": null,\n                "initial_value": null\n            }\n        ],\n        "constants": [\n            {\n                "name": "ep",\n                "value": "1.0"\n            },\n            {\n                "name": "b",\n                "value": "1.0"\n            },\n            {\n                "name": "A",\n                "value": "1.0"\n            }\n        ],\n        "function_definitions": [\n            {\n                "name": "Assumptions",\n                "args": [\n                    "v",\n                    "d"\n                ],\n                "body": "(((v >= 0.0) and (d >= 0.0)) and (b > 0.0))"\n            },\n            {\n                "name": "Controllable",\n                "args": [\n                    "m",\n                    "z",\n                    "v",\n                    "d"\n                ],\n                "body": "((((v ** 2.0) - (d ** 2.0)) <= ((2.0 * b) * (m - z))) and self._Assumptions_impl(v, d))"\n            },\n            {\n                "name": "M",\n                "args": [\n                    "d",\n                    "do",\n                    "m",\n                    "mo"\n                ],\n                "body": "(((((do ** 2.0) - (d ** 2.0)) <= ((2.0 * b) * (m - mo))) and (do >= 0.0)) and (d >= 0.0))"\n            },\n            {\n                "name": "stopDist",\n                "args": [\n                    "v"\n                ],\n                "body": "((v ** 2.0) / (2.0 * b))"\n            },\n            {\n                "name": "safe",\n                "args": [\n                    "m",\n                    "z",\n                    "v",\n                    "d"\n                ],\n                "body": "(not ((z >= m)) or ((v <= d)))"\n            },\n            {\n                "name": "emOn",\n                "args": [],\n                "body": "1.0"\n            },\n            {\n                "name": "emOff",\n                "args": [],\n                "body": "0.0"\n            },\n            {\n                "name": "brakeDist",\n                "args": [\n                    "v",\n                    "d"\n                ],\n                "body": "(((v ** 2.0) - (d ** 2.0)) / (2.0 * b))"\n            },\n            {\n                "name": "accCompensation",\n                "args": [\n                    "v"\n                ],\n                "body": "(((A / b) + 1.0) * (((A / 2.0) * (ep ** 2.0)) + (ep * v)))"\n            },\n            {\n                "name": "SB",\n                "args": [\n                    "v",\n                    "d"\n                ],\n                "body": "(self._brakeDist_impl(v, d) + self._accCompensation_impl(v))"\n            },\n            {\n                "name": "loopInv",\n                "args": [\n                    "m",\n                    "z",\n                    "v",\n                    "d"\n                ],\n                "body": "(((m - z) >= self._brakeDist_impl(v, d)) and (d >= 0.0))"\n            }\n        ],\n        "hp_definitions": [\n            {\n                "name": "spd",\n                "args": [],\n                "body": "{((?((v <= vdes)); {a := *}; ?(((-(b) <= a) and (a <= A)))) ++ (?((v >= vdes)); {a := *}; ?(((-(b) <= a) and (a <= 0.0)))))}"\n            },\n            {\n                "name": "atp",\n                "args": [],\n                "body": "{(?((((m - z) <= sb) or (em == self._emOn_impl()))); a := -(b))}"\n            },\n            {\n                "name": "drive",\n                "args": [],\n                "body": "{(t := 0.0; {(z\' = v, v\' = a, t\' = 1.0@@@DOMAIN_CONSTRAINT@@@sympy.And(sympy.Ge(v, 0.0), sympy.Le(t, ep)))})}"\n            },\n            {\n                "name": "rbc",\n                "args": [],\n                "body": "{(em := self._emOn_impl() ++ ({m := *}; {d := *}; ?((d > 0.0))))}"\n            },\n            {\n                "name": "atpr",\n                "args": [],\n                "body": "{(sb := self._SB_impl(v, d); atp)}"\n            },\n            {\n                "name": "rbcr",\n                "args": [],\n                "body": "{(em := self._emOn_impl() ++ (mo := m; {m := *}; {vdes := *}; ?((vdes >= 0.0)); do := d; {d := *}; ?(self._M_impl(d, do, m, mo))))}"\n            }\n        ],\n        "problem": {\n            "initial_condition": "(((self._Controllable_impl(m, z, v, d) and (em == self._emOff_impl())) and (A >= 0.0)) and (ep >= 0.0))",\n            "program": "",\n            "goal": "self._safe_impl(m, z, v, d)",\n            "loop_invariants": [],\n            "differential_invariants": [],\n            "differential_ghosts": []\n        },\n        "action_space_type": "discrete",\n        "action_space_bounds": {\n            "n": 1\n        },\n        "observation_space_type": "continuous",\n        "observation_space_bounds": {\n            "vdes": {\n                "min": "-float(\'inf\')",\n                "max": "float(\'inf\')"\n            },\n            "sb": {\n                "min": "-float(\'inf\')",\n                "max": "float(\'inf\')"\n            },\n            "mo": {\n                "min": "-float(\'inf\')",\n                "max": "float(\'inf\')"\n            },\n            "t": {\n                "min": "-float(\'inf\')",\n                "max": "float(\'inf\')"\n            },\n            "a": {\n                "min": "-float(\'inf\')",\n                "max": "float(\'inf\')"\n            },\n            "v": {\n                "min": "-float(\'inf\')",\n                "max": "float(\'inf\')"\n            },\n            "z": {\n                "min": "-float(\'inf\')",\n                "max": "float(\'inf\')"\n            },\n            "m": {\n                "min": "-float(\'inf\')",\n                "max": "float(\'inf\')"\n            },\n            "d": {\n                "min": "-float(\'inf\')",\n                "max": "float(\'inf\')"\n            },\n            "do": {\n                "min": "-float(\'inf\')",\n                "max": "float(\'inf\')"\n            },\n            "em": {\n                "min": "-float(\'inf\')",\n                "max": "float(\'inf\')"\n            }\n        },\n        "reward_function_body": "1.0 if (self._safe_impl(m, z, v, d)) else ((-100.0) if ((not (self._safe_impl(m, z, v, d)))) else 0.0)",\n        "termination_condition_body": "(not (self._safe_impl(m, z, v, d)))",\n        "max_episode_steps": 200,\n        "time_step": 0.01,\n        "ode_solver_method": "DOP853",\n        "ode_solver_step_size": 0.001,\n        "ode_solver_tolerance": 1e-06,\n        "initial_state_sampling_config": {\n            "vdes": {\n                "min": "-1.0",\n                "max": "1.0"\n            },\n            "sb": {\n                "min": "-1.0",\n                "max": "1.0"\n            },\n            "mo": {\n                "min": "-1.0",\n                "max": "1.0"\n            },\n            "t": {\n                "min": "-1.0",\n                "max": "1.0"\n            },\n            "a": {\n                "min": "-1.0",\n                "max": "1.0"\n            },\n            "v": {\n                "min": "-1.0",\n                "max": "1.0"\n            },\n            "z": {\n                "min": "-1.0",\n                "max": "1.0"\n            },\n            "m": {\n                "min": "-1.0",\n                "max": "1.0"\n            },\n            "d": {\n                "min": "-1.0",\n                "max": "1.0"\n            },\n            "do": {\n                "min": "-1.0",\n                "max": "1.0"\n            },\n            "em": {\n                "min": "-1.0",\n                "max": "1.0"\n            },\n            "ep": {\n                "value": "1.0"\n            },\n            "b": {\n                "value": "1.0"\n            },\n            "A": {\n                "value": "1.0"\n            }\n        },\n        "seed": null,\n        "render_mode": null,\n        "metadata": {\n            "render_modes": [\n                "human",\n                "rgb_array"\n            ],\n            "render_fps": 30\n        },\n        "initial_state_buffer_config": {\n            "enabled": false,\n            "capacity": 100,\n            "populate_on_init": true,\n            "max_populate_attempts": 1000,\n            "strategy": "random"\n        },\n        "control_flow_program_ast_json": null\n    }'
+_ENV_CONFIG_JSON = '    {\n        "environment_name": "KeYmaeraTrainSafety",\n        "variables": [\n            {\n                "name": "vdes",\n                "type": "Real",\n                "lower_bound": "0.0",\n                "upper_bound": "3.0",\n                "initial_value": null\n            },\n            {\n                "name": "sb",\n                "type": "Real",\n                "lower_bound": "0.0",\n                "upper_bound": "10.0",\n                "initial_value": null\n            },\n            {\n                "name": "mo",\n                "type": "Real",\n                "lower_bound": "8.0",\n                "upper_bound": "12.0",\n                "initial_value": null\n            },\n            {\n                "name": "t",\n                "type": "Real",\n                "lower_bound": "0.0",\n                "upper_bound": "0.2",\n                "initial_value": null\n            },\n            {\n                "name": "a",\n                "type": "Real",\n                "lower_bound": "-1.5",\n                "upper_bound": "1.5",\n                "initial_value": null\n            },\n            {\n                "name": "v",\n                "type": "Real",\n                "lower_bound": "0.0",\n                "upper_bound": "3.0",\n                "initial_value": null\n            },\n            {\n                "name": "z",\n                "type": "Real",\n                "lower_bound": "0.0",\n                "upper_bound": "12.0",\n                "initial_value": null\n            },\n            {\n                "name": "m",\n                "type": "Real",\n                "lower_bound": "8.0",\n                "upper_bound": "12.0",\n                "initial_value": null\n            },\n            {\n                "name": "d",\n                "type": "Real",\n                "lower_bound": "0.0",\n                "upper_bound": "3.0",\n                "initial_value": null\n            },\n            {\n                "name": "do",\n                "type": "Real",\n                "lower_bound": "0.0",\n                "upper_bound": "3.0",\n                "initial_value": null\n            },\n            {\n                "name": "em",\n                "type": "Real",\n                "lower_bound": "0.0",\n                "upper_bound": "1.0",\n                "initial_value": "0"\n            }\n        ],\n        "constants": [\n            {\n                "name": "ep",\n                "value": "0.05",\n                "lower_bound": "0.05",\n                "upper_bound": "0.2"\n            },\n            {\n                "name": "b",\n                "value": "0.8",\n                "lower_bound": "0.8",\n                "upper_bound": "1.2"\n            },\n            {\n                "name": "A",\n                "value": "0.5",\n                "lower_bound": "0.5",\n                "upper_bound": "1.5"\n            }\n        ],\n        "function_definitions": [\n            {\n                "name": "Assumptions",\n                "args": [\n                    "v",\n                    "d"\n                ],\n                "body": "(((v >= 0.0) and (d >= 0.0)) and (b > 0.0))"\n            },\n            {\n                "name": "Controllable",\n                "args": [\n                    "m",\n                    "z",\n                    "v",\n                    "d"\n                ],\n                "body": "((((v ** 2.0) - (d ** 2.0)) <= ((2.0 * b) * (m - z))) and self._Assumptions_impl(v, d))"\n            },\n            {\n                "name": "M",\n                "args": [\n                    "d",\n                    "do",\n                    "m",\n                    "mo"\n                ],\n                "body": "(((((do ** 2.0) - (d ** 2.0)) <= ((2.0 * b) * (m - mo))) and (do >= 0.0)) and (d >= 0.0))"\n            },\n            {\n                "name": "stopDist",\n                "args": [\n                    "v"\n                ],\n                "body": "((v ** 2.0) / (2.0 * b))"\n            },\n            {\n                "name": "safe",\n                "args": [\n                    "m",\n                    "z",\n                    "v",\n                    "d"\n                ],\n                "body": "(not ((z >= m)) or ((v <= d)))"\n            },\n            {\n                "name": "emOn",\n                "args": [],\n                "body": "1.0"\n            },\n            {\n                "name": "emOff",\n                "args": [],\n                "body": "0.0"\n            },\n            {\n                "name": "brakeDist",\n                "args": [\n                    "v",\n                    "d"\n                ],\n                "body": "(((v ** 2.0) - (d ** 2.0)) / (2.0 * b))"\n            },\n            {\n                "name": "accCompensation",\n                "args": [\n                    "v"\n                ],\n                "body": "(((A / b) + 1.0) * (((A / 2.0) * (ep ** 2.0)) + (ep * v)))"\n            },\n            {\n                "name": "SB",\n                "args": [\n                    "v",\n                    "d"\n                ],\n                "body": "(self._brakeDist_impl(v, d) + self._accCompensation_impl(v))"\n            },\n            {\n                "name": "loopInv",\n                "args": [\n                    "m",\n                    "z",\n                    "v",\n                    "d"\n                ],\n                "body": "(((m - z) >= self._brakeDist_impl(v, d)) and (d >= 0.0))"\n            }\n        ],\n        "hp_definitions": [\n            {\n                "name": "controlFunc",\n                "args": [],\n                "body": "{((?((v <= vdes)); {a := *}; ?(((-(b) <= a) and (a <= A)))) ++ (?((v >= vdes)); {a := *}; ?(((-(b) <= a) and (a <= 0.0)))))}"\n            },\n            {\n                "name": "atp",\n                "args": [],\n                "body": "{(?((((m - z) <= sb) or (em == self._emOn_impl()))); a := -(b))}"\n            },\n            {\n                "name": "drive",\n                "args": [],\n                "body": "{(t := 0.0; {(z\' = v, v\' = a, t\' = 1.0@@@DOMAIN_CONSTRAINT@@@sympy.And(sympy.Ge(v, 0.0), sympy.Le(t, ep)))})}"\n            },\n            {\n                "name": "rbc",\n                "args": [],\n                "body": "{(em := self._emOn_impl() ++ ({m := *}; {d := *}; ?((d > 0.0))))}"\n            },\n            {\n                "name": "atpr",\n                "args": [],\n                "body": "{(sb := self._SB_impl(v, d); atp)}"\n            },\n            {\n                "name": "rbcr",\n                "args": [],\n                "body": "{(em := self._emOn_impl() ++ (mo := m; {m := *}; {vdes := *}; ?((vdes >= 0.0)); do := d; {d := *}; ?(self._M_impl(d, do, m, mo))))}"\n            }\n        ],\n        "problem": {\n            "initial_condition": "(((self._Controllable_impl(m, z, v, d) and (em == self._emOff_impl())) and (A >= 0.0)) and (ep >= 0.0))",\n            "program": "(z\' = v, v\' = a, t\' = 1.0@@@DOMAIN_CONSTRAINT@@@sympy.And(sympy.Ge(v, 0.0), sympy.Le(t, ep)))",\n            "goal": "self._safe_impl(m, z, v, d)",\n            "loop_invariants": [\n                "self._loopInv_impl(m, z, v, d)"\n            ],\n            "differential_invariants": [],\n            "differential_ghosts": []\n        },\n        "action_space_type": "discrete",\n        "action_space_bounds": {\n            "n": 2\n        },\n        "observation_space_type": "continuous",\n        "observation_space_bounds": {\n            "vdes": {\n                "min": "0.0",\n                "max": "3.0"\n            },\n            "sb": {\n                "min": "0.0",\n                "max": "10.0"\n            },\n            "mo": {\n                "min": "8.0",\n                "max": "12.0"\n            },\n            "t": {\n                "min": "0.0",\n                "max": "0.2"\n            },\n            "a": {\n                "min": "-1.5",\n                "max": "1.5"\n            },\n            "v": {\n                "min": "0.0",\n                "max": "3.0"\n            },\n            "z": {\n                "min": "0.0",\n                "max": "12.0"\n            },\n            "m": {\n                "min": "8.0",\n                "max": "12.0"\n            },\n            "d": {\n                "min": "0.0",\n                "max": "3.0"\n            },\n            "do": {\n                "min": "0.0",\n                "max": "3.0"\n            },\n            "em": {\n                "min": "0.0",\n                "max": "1.0"\n            }\n        },\n        "reward_function_body": "(((((-(0.05) * (v ** 2.0)) - (0.05 / (0.1 + max(((m - z) - self._brakeDist_impl(v, d)), 0.0))))) + ((0.25) if (self._loopInv_impl(m, z, v, d)) else (-100.0)))) if not (((not (self._safe_impl(m, z, v, d))) or (not (self._loopInv_impl(m, z, v, d))))) else (-100.0)",\n        "termination_condition_body": "((not (self._safe_impl(m, z, v, d))) or (not (self._loopInv_impl(m, z, v, d))))",\n        "max_episode_steps": 200,\n        "time_step": 0.01,\n        "ode_solver_method": "DOP853",\n        "ode_solver_step_size": 0.001,\n        "ode_solver_tolerance": 1e-06,\n        "initial_state_sampling_config": {\n            "vdes": {\n                "min": "0.0",\n                "max": "3.0"\n            },\n            "sb": {\n                "min": "0.0",\n                "max": "10.0"\n            },\n            "mo": {\n                "min": "8.0",\n                "max": "12.0"\n            },\n            "t": {\n                "min": "0.0",\n                "max": "0.2"\n            },\n            "a": {\n                "min": "-1.5",\n                "max": "1.5"\n            },\n            "v": {\n                "min": "0.0",\n                "max": "3.0"\n            },\n            "z": {\n                "min": "0.0",\n                "max": "12.0"\n            },\n            "m": {\n                "min": "8.0",\n                "max": "12.0"\n            },\n            "d": {\n                "min": "0.0",\n                "max": "3.0"\n            },\n            "do": {\n                "min": "0.0",\n                "max": "3.0"\n            },\n            "em": {\n                "value": "0"\n            },\n            "ep": {\n                "value": "0.05"\n            },\n            "b": {\n                "value": "0.8"\n            },\n            "A": {\n                "value": "0.5"\n            }\n        },\n        "seed": null,\n        "render_mode": null,\n        "metadata": {\n            "render_modes": [\n                "human",\n                "rgb_array"\n            ],\n            "render_fps": 30\n        },\n        "initial_state_buffer_config": {\n            "enabled": false,\n            "capacity": 100,\n            "populate_on_init": true,\n            "max_populate_attempts": 1000,\n            "strategy": "random"\n        },\n        "control_flow_program_ast_json": {\n            "_type": "Choice",\n            "left": {\n                "_type": "Sequence",\n                "programs": [\n                    {\n                        "_type": "Test",\n                        "condition": {\n                            "_type": "Comparison",\n                            "op": "<=",\n                            "left": {\n                                "_type": "VarRef",\n                                "name": "v"\n                            },\n                            "right": {\n                                "_type": "VarRef",\n                                "name": "vdes"\n                            }\n                        }\n                    },\n                    {\n                        "_type": "NondetAssignment",\n                        "var": {\n                            "_type": "VarRef",\n                            "name": "a"\n                        }\n                    },\n                    {\n                        "_type": "Test",\n                        "condition": {\n                            "_type": "BinaryFormulaOp",\n                            "op": "&",\n                            "left": {\n                                "_type": "Comparison",\n                                "op": "<=",\n                                "left": {\n                                    "_type": "UnaryTermOp",\n                                    "op": "-",\n                                    "operand": {\n                                        "_type": "VarRef",\n                                        "name": "b"\n                                    }\n                                },\n                                "right": {\n                                    "_type": "VarRef",\n                                    "name": "a"\n                                }\n                            },\n                            "right": {\n                                "_type": "Comparison",\n                                "op": "<=",\n                                "left": {\n                                    "_type": "VarRef",\n                                    "name": "a"\n                                },\n                                "right": {\n                                    "_type": "VarRef",\n                                    "name": "A"\n                                }\n                            }\n                        }\n                    }\n                ]\n            },\n            "right": {\n                "_type": "Sequence",\n                "programs": [\n                    {\n                        "_type": "Test",\n                        "condition": {\n                            "_type": "Comparison",\n                            "op": ">=",\n                            "left": {\n                                "_type": "VarRef",\n                                "name": "v"\n                            },\n                            "right": {\n                                "_type": "VarRef",\n                                "name": "vdes"\n                            }\n                        }\n                    },\n                    {\n                        "_type": "NondetAssignment",\n                        "var": {\n                            "_type": "VarRef",\n                            "name": "a"\n                        }\n                    },\n                    {\n                        "_type": "Test",\n                        "condition": {\n                            "_type": "BinaryFormulaOp",\n                            "op": "&",\n                            "left": {\n                                "_type": "Comparison",\n                                "op": "<=",\n                                "left": {\n                                    "_type": "UnaryTermOp",\n                                    "op": "-",\n                                    "operand": {\n                                        "_type": "VarRef",\n                                        "name": "b"\n                                    }\n                                },\n                                "right": {\n                                    "_type": "VarRef",\n                                    "name": "a"\n                                }\n                            },\n                            "right": {\n                                "_type": "Comparison",\n                                "op": "<=",\n                                "left": {\n                                    "_type": "VarRef",\n                                    "name": "a"\n                                },\n                                "right": {\n                                    "_type": "Literal",\n                                    "value": 0.0\n                                }\n                            }\n                        }\n                    }\n                ]\n            }\n        },\n        "simulation_mode": false,\n        "simulation_initialization_ast_json": null,\n        "simulation_step_ast_json": null,\n        "verification_formula_ast_json": null,\n        "simulation_reward_terms": [],\n        "simulation_predicate_rules": []\n    }'
 
 
 class KeYmaeraGymEnv(gym.Env):
@@ -50,6 +51,7 @@ class KeYmaeraGymEnv(gym.Env):
         self.render_mode = render_mode
         self.current_state = OrderedDict()
         self.time = 0.0 # Time elapsed within current control step (t in dL)
+        self.simulation_elapsed_time = 0.0
         self.global_time_remaining = 0.0 # T in dL
         self.current_step_count = 0 # Number of control steps taken
         self.max_episode_steps = self.config.get('max_episode_steps', 200)
@@ -74,6 +76,7 @@ class KeYmaeraGymEnv(gym.Env):
         # Initialize user_defined_functions before _setup_constants calls _evaluate_expression
         self.user_defined_functions = {} 
 
+        self._resolve_constants_with_solver()
         self._setup_constants()
         self._setup_functions() 
 
@@ -96,6 +99,20 @@ class KeYmaeraGymEnv(gym.Env):
             self.control_flow_program_ast = self._deserialize_ast_node(self.config['control_flow_program_ast_json'])
             self._debug_print(f"DEBUG: Deserialized control_flow_program_ast: {self.control_flow_program_ast._repr_indented(0)}")
 
+        self.simulation_mode = self.config.get('simulation_mode', False)
+        self.simulation_initialization_ast = (
+            self._deserialize_ast_node(self.config['simulation_initialization_ast_json'])
+            if self.config.get('simulation_initialization_ast_json') else None
+        )
+        self.simulation_step_ast = (
+            self._deserialize_ast_node(self.config['simulation_step_ast_json'])
+            if self.config.get('simulation_step_ast_json') else None
+        )
+        self._simulation_expression_cache = {}
+        self.control_choice_paths = (
+            self._enumerate_control_choice_paths(self.control_flow_program_ast)
+            if self.control_flow_program_ast else []
+        )
         self._setup_spaces()
         self._setup_initial_state_samplers()
         self._setup_hybrid_program()
@@ -267,9 +284,11 @@ class KeYmaeraGymEnv(gym.Env):
             operand_str = self._term_to_python_eval_str_env(term.operand)
             if term.op == "'":
                 raise ValueError(f"Derivative operator '{term.op}' not supported in Python term evaluation in environment: {term}")
-                return f"{term.op}({operand_str})"
+            return f"{term.op}({operand_str})"
         elif isinstance(term, FunctionCall):
             args_str = ", ".join(self._term_to_python_eval_str_env(arg) for arg in term.args)
+            if term.name in {'abs', 'min', 'max'}:
+                return f"{term.name}({args_str})"
             # Call the bound method from user_defined_functions
             return f"self.user_defined_functions['{term.name}']({args_str})"
         else:
@@ -316,6 +335,11 @@ class KeYmaeraGymEnv(gym.Env):
                     existing_constants_map = {c['name']: c for c in config.get('constants', [])}
                     for ov_const in override_value:
                         if ov_const['name'] in existing_constants_map:
+                            if 'value' in ov_const and not {
+                                'lower_bound', 'upper_bound'
+                            }.intersection(ov_const):
+                                existing_constants_map[ov_const['name']].pop('lower_bound', None)
+                                existing_constants_map[ov_const['name']].pop('upper_bound', None)
                             existing_constants_map[ov_const['name']].update(ov_const)
                         else:
                             existing_constants_map[ov_const['name']] = ov_const # Add new constant
@@ -337,29 +361,119 @@ class KeYmaeraGymEnv(gym.Env):
                     config[key] = override_value
         return config
 
+    def _resolve_constants_with_solver(self):
+        constants = self.config.get('constants', [])
+        ranged_constants = [
+            constant for constant in constants
+            if constant.get('lower_bound') is not None
+            and constant.get('upper_bound') is not None
+        ]
+        has_bounds_predicate = any(
+            function.get('name') == 'bounds'
+            for function in self.config.get('function_definitions', [])
+        )
+        if not ranged_constants and not has_bounds_predicate:
+            return
+
+        z3_symbols = {
+            constant['name']: z3.Real(constant['name'])
+            for constant in ranged_constants
+        }
+        fixed_constants_map = {}
+        for constant in constants:
+            name = constant['name']
+            if name in z3_symbols:
+                continue
+            try:
+                fixed_constants_map[name] = float(constant['value'])
+            except (TypeError, ValueError):
+                continue
+
+        solver = z3.Solver()
+        for constant in ranged_constants:
+            symbol = z3_symbols[constant['name']]
+            low = float(constant['lower_bound'])
+            high = float(constant['upper_bound'])
+            if low > high:
+                raise ValueError(
+                    f"Invalid @const range for {constant['name']}: [{low}, {high}]"
+                )
+            solver.add(symbol >= low, symbol <= high)
+
+        if has_bounds_predicate:
+            bounds_condition = self._expr_to_z3(
+                'self._bounds_impl()', z3_symbols, fixed_constants_map
+            )
+            solver.add(bounds_condition)
+
+        result = solver.check()
+        if result == z3.unsat:
+            if has_bounds_predicate:
+                fixed_validation = z3.Solver()
+                fixed_validation.add(self._expr_to_z3(
+                    'self._bounds_impl()', {}, fixed_constants_map
+                ))
+                fixed_result = fixed_validation.check()
+                if fixed_result == z3.unsat:
+                    raise ValueError(
+                        "Fixed @const values do not satisfy the model bounds() predicate."
+                    )
+                if fixed_result != z3.sat:
+                    raise RuntimeError(
+                        "Z3 could not validate fixed constants against bounds(): "
+                        f"{fixed_validation.reason_unknown()}"
+                    )
+            constraint_description = (
+                "the @const ranges and model bounds() predicate"
+                if has_bounds_predicate else "the @const ranges"
+            )
+            raise ValueError(
+                f"No constant assignment satisfies {constraint_description}."
+            )
+        if result != z3.sat:
+            raise RuntimeError(
+                f"Z3 could not resolve model constants: {solver.reason_unknown()}"
+            )
+
+        model = solver.model()
+        for constant in ranged_constants:
+            value = model.evaluate(
+                z3_symbols[constant['name']], model_completion=True
+            )
+            constant['value'] = str(value)
+
+        if has_bounds_predicate:
+            concrete_constants = {}
+            for constant in constants:
+                try:
+                    concrete_constants[constant['name']] = float(constant['value'])
+                except (TypeError, ValueError):
+                    continue
+            validation = z3.Solver()
+            validation.add(self._expr_to_z3(
+                'self._bounds_impl()', {}, concrete_constants
+            ))
+            validation_result = validation.check()
+            if validation_result == z3.unsat:
+                raise ValueError(
+                    "Fixed @const values do not satisfy the model bounds() predicate."
+                )
+            if validation_result != z3.sat:
+                raise RuntimeError(
+                    "Z3 could not validate fixed constants against bounds(): "
+                    f"{validation.reason_unknown()}"
+                )
+
     def _setup_spaces(self):
-        # Determine action space based on controlFunc AST if available
-        if self.control_flow_program_ast and isinstance(self.control_flow_program_ast, Choice):
-            # Assuming Choice between HPBlocks, each representing a distinct action branch
-            # We need to count the number of distinct choices.
-            # The example controlFunc is nested: ((A) ++ (B)) ++ ((C) ++ (D)).
-            # We need a BFS to find the leaf branches.
-            num_choices = 0
-            q = deque([self.control_flow_program_ast])
-            while q:
-                node = q.popleft()
-                if isinstance(node, Choice):
-                    # Add right branch first to process left-to-right from popleft
-                    q.append(node.right)
-                    q.append(node.left)
-                else: # This is a leaf branch (e.g., HPBlock, Assignment, Test, Sequence)
-                    num_choices += 1
+        # Give the agent an opaque ID for a complete path through the control AST.
+        if self.control_flow_program_ast:
+            num_choices = len(self.control_choice_paths)
             
             if num_choices > 0:
                 self.action_space_type = 'discrete'
                 self.action_space = spaces.Discrete(num_choices)
-                self.action_variable_names = ['control_choice'] # Placeholder name for discrete action
-                self._debug_print(f"DEBUG: Action space set to Discrete({num_choices}) based on controlFunc.")
+                self.action_variable_names = ['control_choice']
+                self._debug_print(f"DEBUG: Action space set to Discrete({num_choices}) based on complete control paths.")
             else:
                 raise ValueError("controlFunc is a Choice but no valid branches found.")
         elif self.control_flow_program_ast:
@@ -410,6 +524,29 @@ class KeYmaeraGymEnv(gym.Env):
             raise NotImplementedError("Discrete observation space not yet supported.")
         else:
             raise ValueError(f"Unsupported observation space type: {observation_space_type}")
+
+    def _enumerate_control_choice_paths(self, node):
+        if isinstance(node, HPBlock):
+            return self._enumerate_control_choice_paths(node.program)
+        if isinstance(node, Choice):
+            left_paths = self._enumerate_control_choice_paths(node.left)
+            right_paths = self._enumerate_control_choice_paths(node.right)
+            return [(0,) + path for path in left_paths] + [
+                (1,) + path for path in right_paths
+            ]
+        if isinstance(node, Sequence):
+            paths = [()]
+            for program in node.programs:
+                program_paths = self._enumerate_control_choice_paths(program)
+                paths = [
+                    prefix + suffix
+                    for prefix in paths
+                    for suffix in program_paths
+                ]
+            return paths
+        if isinstance(node, Iteration):
+            return self._enumerate_control_choice_paths(node.program)
+        return [()]
 
     def _setup_initial_state_samplers(self):
         self.initial_state_samplers = {}
@@ -529,6 +666,7 @@ class KeYmaeraGymEnv(gym.Env):
             'self': self, # Allow access to self for calling methods
             'np': np, # Allow numpy functions
             'math': math, # Allow math functions (e.g., for power `**`)
+            'abs': abs, 'min': min, 'max': max,
             'float': float, 'int': int, 'bool': bool,
             # Add sympy objects explicitly if any sympy constructs are still generated for eval
             'sympy': sympy,
@@ -612,6 +750,314 @@ class KeYmaeraGymEnv(gym.Env):
             # If it's a pure Python object that doesn't have a .subs method, return it as is.
             return sympy_expr_node
 
+    def _simulation_domain_comparisons(self, formula):
+        if isinstance(formula, BinaryFormulaOp) and formula.op in ('&', '&&'):
+            return (
+                self._simulation_domain_comparisons(formula.left)
+                + self._simulation_domain_comparisons(formula.right)
+            )
+        if isinstance(formula, Comparison):
+            return [formula]
+        return []
+
+    def _compile_simulation_term(self, term):
+        cache_key = id(term)
+        if cache_key not in self._simulation_expression_cache:
+            expression = self._term_to_python_eval_str_env(term)
+            self._simulation_expression_cache[cache_key] = compile(
+                expression, "<hybrid-program-term>", "eval"
+            )
+        return self._simulation_expression_cache[cache_key]
+
+    def _flatten_simulation_choice(self, choice):
+        if isinstance(choice, Choice):
+            return (
+                self._flatten_simulation_choice(choice.left)
+                + self._flatten_simulation_choice(choice.right)
+            )
+        return [choice]
+
+    def _integrate_simulation_ode(self, ode):
+        if ode.domain_constraint is not None and not self._evaluate_expression(
+            ode.domain_constraint, self.current_state
+        ):
+            return False
+
+        if ode.domain_constraint is not None:
+            snap_tolerance = max(1e-9, self.ode_solver_tolerance * 10)
+            for comparison in self._simulation_domain_comparisons(ode.domain_constraint):
+                if not isinstance(comparison.left, VarRef) and not isinstance(
+                    comparison.right, VarRef
+                ):
+                    continue
+                left_value = float(self._evaluate_expression(comparison.left, self.current_state))
+                right_value = float(self._evaluate_expression(comparison.right, self.current_state))
+                if abs(left_value - right_value) > snap_tolerance:
+                    continue
+                if isinstance(comparison.left, VarRef):
+                    self.current_state[comparison.left.name] = right_value
+                else:
+                    self.current_state[comparison.right.name] = left_value
+
+        variables = [equation.var.name for equation in ode.equations]
+        initial_values = [float(self.current_state[name]) for name in variables]
+        initial_state = dict(self.current_state)
+        eval_globals = {
+            "__builtins__": None,
+            "self": self,
+            "np": np,
+            "math": math,
+            "abs": abs,
+            "min": min,
+            "max": max,
+            "float": float,
+            "int": int,
+            "bool": bool,
+        }
+        derivative_codes = [
+            self._compile_simulation_term(equation.expr) for equation in ode.equations
+        ]
+
+        def state_at(values):
+            state = dict(initial_state)
+            state.update(zip(variables, values))
+            return state
+
+        def evaluate_at_state(code, state):
+            previous_state = self.current_state
+            self.current_state = state
+            try:
+                return eval(code, eval_globals, state)
+            finally:
+                self.current_state = previous_state
+
+        def derivatives(_time, values):
+            state = state_at(values)
+            return [
+                float(evaluate_at_state(code, state))
+                for code in derivative_codes
+            ]
+
+        events = []
+        event_comparisons = []
+        if ode.domain_constraint is not None:
+            for comparison in self._simulation_domain_comparisons(ode.domain_constraint):
+                if comparison.op not in ('<', '<=', '>', '>='):
+                    continue
+
+                def boundary(_time, values, comparison=comparison):
+                    state = state_at(values)
+                    left = self._compile_simulation_term(comparison.left)
+                    right = self._compile_simulation_term(comparison.right)
+                    boundary_value = float(
+                        evaluate_at_state(left, state)
+                        - evaluate_at_state(right, state)
+                    )
+                    if _time == 0.0 and abs(boundary_value) <= snap_tolerance:
+                        crossing_direction = (
+                            1 if comparison.op in ('<', '<=') else -1
+                        )
+                        event_epsilon = max(
+                            1e-12, self.ode_solver_tolerance * 1e-3
+                        )
+                        return -crossing_direction * event_epsilon
+                    return boundary_value
+
+                boundary.terminal = True
+                boundary.direction = 1 if comparison.op in ('<', '<=') else -1
+                events.append(boundary)
+                event_comparisons.append(comparison)
+
+        solution = solve_ivp(
+            derivatives,
+            (0.0, float(self.time_step)),
+            initial_values,
+            method=self.ode_solver_method,
+            max_step=self.ode_solver_step_size,
+            rtol=self.ode_solver_tolerance,
+            atol=self.ode_solver_tolerance,
+            events=events or None,
+        )
+        if not solution.success:
+            raise RuntimeError(f"Hybrid-program ODE integration failed: {solution.message}")
+
+        self.current_state.update(zip(variables, solution.y[:, -1]))
+        for comparison, event_times in zip(event_comparisons, solution.t_events):
+            if not len(event_times):
+                continue
+            if isinstance(comparison.left, VarRef):
+                self.current_state[comparison.left.name] = self._evaluate_expression(
+                    comparison.right, self.current_state
+                )
+            elif isinstance(comparison.right, VarRef):
+                self.current_state[comparison.right.name] = self._evaluate_expression(
+                    comparison.left, self.current_state
+                )
+        self.simulation_elapsed_time += float(solution.t[-1])
+        if ode.domain_constraint is not None:
+            final_state = dict(self.current_state)
+            if not self._evaluate_expression(ode.domain_constraint, final_state):
+                raise RuntimeError(
+                    "Hybrid-program ODE integration ended outside its evolution domain."
+                )
+        return True
+
+    def _execute_simulation_program(self, program, probe=False):
+        if isinstance(program, HPBlock):
+            return self._execute_simulation_program(program.program, probe)
+        if isinstance(program, Sequence):
+            for child in program.programs:
+                if not self._execute_simulation_program(child, probe):
+                    return False
+            return True
+        if isinstance(program, Choice):
+            enabled_branches = []
+            for branch in self._flatten_simulation_choice(program):
+                saved_state = copy.deepcopy(self.current_state)
+                try:
+                    if self._execute_simulation_program(branch, probe=True):
+                        enabled_branches.append(branch)
+                finally:
+                    self.current_state.clear()
+                    self.current_state.update(saved_state)
+            if not enabled_branches:
+                return False
+            selected = int(self.np_random.integers(len(enabled_branches)))
+            return self._execute_simulation_program(enabled_branches[selected], probe)
+        if isinstance(program, Test):
+            return bool(self._evaluate_expression(program.condition, self.current_state))
+        if isinstance(program, Assignment):
+            value = self._evaluate_expression(program.expr, self.current_state)
+            self.current_state[program.var.name] = value
+            return True
+        if isinstance(program, NondetAssignment):
+            raise ValueError(
+                "Hybrid-program simulation does not support unbounded nondeterministic assignments."
+            )
+        if isinstance(program, ODE):
+            if probe:
+                return (
+                    program.domain_constraint is None
+                    or bool(self._evaluate_expression(
+                        program.domain_constraint, self.current_state
+                    ))
+                )
+            return self._integrate_simulation_ode(program)
+        if isinstance(program, Iteration):
+            raise ValueError(
+                "Nested hybrid-program loops are not supported inside one simulation step."
+            )
+        if isinstance(program, VarRef):
+            raise ValueError(
+                f"Unexpanded hybrid-program reference in simulation: {program.name}"
+            )
+        raise ValueError(
+            f"Unsupported hybrid-program node in simulation: {type(program).__name__}"
+        )
+
+    def _reset_modal_simulation_state(self):
+        constants = {
+            constant['name']: self.current_state[constant['name']]
+            for constant in self.config['constants']
+        }
+        max_attempts = self.initial_state_buffer_config.get('max_populate_attempts', 1000)
+        for _attempt in range(max_attempts):
+            self.current_state.clear()
+            self.current_state.update(constants)
+            self.current_state.update(self._generate_valid_initial_state(max_attempts=1))
+            if self.simulation_initialization_ast is not None:
+                if not self._execute_simulation_program(self.simulation_initialization_ast):
+                    continue
+            if self._simulation_program_is_enabled(self.simulation_step_ast):
+                return
+        raise RuntimeError(
+            "Could not sample an initial state with an enabled execution of the modal program "
+            f"after {max_attempts} attempts."
+        )
+
+    def _simulation_program_is_enabled(self, program):
+        saved_state = copy.deepcopy(self.current_state)
+        try:
+            return self._execute_simulation_program(program, probe=True)
+        finally:
+            self.current_state.clear()
+            self.current_state.update(saved_state)
+
+    def _step_modal_simulation(self, action):
+        if not self.action_space.contains(action):
+            raise ValueError(f"Invalid modal simulation action: {action}")
+        original_state = copy.deepcopy(self.current_state)
+        control_action = None
+        terminated = False
+        termination_reason = None
+        control_flow_info = None
+        if self.control_flow_program_ast is not None:
+            control_action = int(np.asarray(action).reshape(-1)[0])
+            control_status = self._execute_control_flow(control_action)
+            if control_status["terminated"]:
+                self.current_state.clear()
+                self.current_state.update(original_state)
+                terminated = True
+                termination_reason = f"control_flow:{control_status['info']}"
+                control_flow_info = control_status["info"]
+        if not terminated:
+            try:
+                executed = self._execute_simulation_program(self.simulation_step_ast)
+            except Exception:
+                self.current_state.clear()
+                self.current_state.update(original_state)
+                raise
+            if not executed:
+                self.current_state.clear()
+                self.current_state.update(original_state)
+                terminated = True
+                termination_reason = "no_enabled_hybrid_program_execution"
+
+        reward = sum(
+            float(self._evaluate_expression(term, self.current_state))
+            for term in self.config.get('simulation_reward_terms', [])
+        )
+        if control_flow_info is not None:
+            reward += float(control_status["reward_delta"])
+        truncated = False
+        annotation_status = None
+        for rule in self.config.get('simulation_predicate_rules', []):
+            predicate_holds = bool(
+                self._evaluate_expression(rule['predicate'], self.current_state)
+            )
+            action_key = 'on_success' if predicate_holds else 'on_failure'
+            status_key = 'success_status' if predicate_holds else 'failure_status'
+            action = rule[action_key]
+            status = rule[status_key]
+            if action == 'terminate':
+                terminated = True
+                annotation_status = status if status != 'none' else annotation_status
+                termination_reason = f"annotation:{rule['kind']}_{action_key[3:]}"
+            elif action == 'truncate':
+                truncated = True
+                annotation_status = status if status != 'none' else annotation_status
+                termination_reason = f"annotation:{rule['kind']}_{action_key[3:]}"
+
+        self.current_step_count += 1
+        truncated = truncated or self.current_step_count >= self.max_episode_steps
+        observation = self._get_observation()
+        info = self._get_info()
+        info.update({
+            "control_action": control_action,
+            "attempted_action": None,
+            "action_repaired": False,
+            "termination_reason": termination_reason,
+            "simulation_mode": True,
+            "simulation_elapsed_time": self.simulation_elapsed_time,
+        })
+        if control_flow_info is not None:
+            info["control_flow_info"] = control_flow_info
+        if annotation_status is not None:
+            info["status"] = annotation_status
+        if self.render_mode == "human":
+            self._render_frame()
+        return observation, reward, terminated, truncated, info
+
     def _get_ode_system(self, t_ode, y):
         # Map y (from solver) back to named variables
         state_map = {var: y[i] for i, var in enumerate(self.differential_variables)}
@@ -659,6 +1105,7 @@ class KeYmaeraGymEnv(gym.Env):
         return derivs
 
     def _run_continuous_dynamics(self, action_to_apply):
+        self.last_dynamics_failure_reason = None
         # Apply action to relevant variables before ODE integration
         # This block is now only relevant if action_space_type is 'continuous'
         # and controlFunc is NOT being used to set variables.
@@ -730,13 +1177,35 @@ class KeYmaeraGymEnv(gym.Env):
                 if not bool(constraint_met): # Convert SymPy boolean to Python bool
                     print(f"Differential domain constraint violated: {self.differential_domain_constraint}")
                     self._debug_print(f"DEBUG: _run_continuous_dynamics returning True due to domain violation.")
+                    self.last_dynamics_failure_reason = "ode_domain_violation"
                     return True # Indicate episode should terminate due to violation
             self._debug_print(f"DEBUG: _run_continuous_dynamics returning False (solver success, no domain violation).")
             return False # Indicate episode continues
         else:
             print(f"ODE solver failed: {sol.message}")
             self._debug_print(f"DEBUG: _run_continuous_dynamics returning True due to solver failure.")
+            self.last_dynamics_failure_reason = "ode_solver_failure"
             return True # Indicate episode should terminate
+
+    def action_masks(self):
+        """Boolean mask of controller choice paths whose guards hold in the current state."""
+        if self.action_space_type != 'discrete' or not self.control_flow_program_ast:
+            return np.ones(getattr(self.action_space, 'n', 1), dtype=bool)
+        saved_state = dict(self.current_state)
+        mask = np.zeros(len(self.control_choice_paths), dtype=bool)
+        try:
+            for index, path in enumerate(self.control_choice_paths):
+                self.current_state.clear()
+                self.current_state.update(saved_state)
+                result = self._execute_hp_node(self.control_flow_program_ast, path, [0])
+                mask[index] = not result["terminated"]
+        finally:
+            self.current_state.clear()
+            self.current_state.update(saved_state)
+        if not mask.any():
+            # No legal choice: let the environment report the failed guard instead of hiding it.
+            mask[:] = True
+        return mask
 
     def _execute_control_flow(self, action_choice: int) -> Dict[str, Any]:
         """
@@ -751,67 +1220,73 @@ class KeYmaeraGymEnv(gym.Env):
             status["info"] = "no_control_flow_program"
             return status
 
-        # For a discrete action space, the agent provides an integer representing the choice.
-        # We need to map this integer to the correct branch in the Choice AST.
-        # The example controlFunc is nested: ((A) ++ (B)) ++ ((C) ++ (D)).
-        # We need a BFS to find the Nth leaf branch.
-        
-        selected_branch = None
-        current_choice_index = 0
-        q = deque([self.control_flow_program_ast])
-        
-        while q and selected_branch is None:
-            node = q.popleft()
-            if isinstance(node, Choice):
-                # Add right branch first to process left-to-right from popleft
-                q.append(node.right)
-                q.append(node.left)
-            else: # This is a leaf branch
-                if current_choice_index == action_choice:
-                    selected_branch = node
-                current_choice_index += 1
-        
-        if selected_branch is None:
-            self._debug_print(f"ERROR: Invalid action_choice {action_choice} for controlFunc. Max choices: {current_choice_index}.")
+        if not self.action_space.contains(action_choice):
             status["terminated"] = True
-            status["reward_delta"] = -100.0 # Penalty for invalid choice
+            status["reward_delta"] = -100.0
             status["info"] = "invalid_control_choice"
             return status
 
-        self._debug_print(f"DEBUG: Executing selected control branch: {selected_branch._repr_indented(0)}")
-        
-        # Now execute the selected_branch
-        return self._execute_hp_node(selected_branch)
+        try:
+            path_index = int(action_choice)
+        except (TypeError, ValueError, OverflowError):
+            status["terminated"] = True
+            status["reward_delta"] = -100.0
+            status["info"] = "invalid_control_choice"
+            return status
 
-    def _execute_hp_node(self, hp_node: HybridProgram) -> Dict[str, Any]:
+        if path_index < 0 or path_index >= len(self.control_choice_paths):
+            status["terminated"] = True
+            status["reward_delta"] = -100.0
+            status["info"] = "invalid_control_choice"
+            return status
+
+        self._debug_print(f"DEBUG: Executing complete control path {path_index}.")
+        cursor = [0]
+        return self._execute_hp_node(
+            self.control_flow_program_ast,
+            self.control_choice_paths[path_index],
+            cursor,
+        )
+
+    def _execute_hp_node(
+        self,
+        hp_node: HybridProgram,
+        choice_path=(),
+        choice_cursor=None,
+    ) -> Dict[str, Any]:
         """
         Recursively executes a hybrid program node.
         Returns execution status, potentially modifying self.current_state.
         """
         status = {"terminated": False, "reward_delta": 0.0, "info": ""}
+        if choice_cursor is None:
+            choice_cursor = [0]
 
         if isinstance(hp_node, HPBlock):
             # Execute the program inside the block
-            return self._execute_hp_node(hp_node.program)
+            return self._execute_hp_node(hp_node.program, choice_path, choice_cursor)
         
         elif isinstance(hp_node, Sequence):
             for program in hp_node.programs:
-                sub_status = self._execute_hp_node(program)
+                sub_status = self._execute_hp_node(program, choice_path, choice_cursor)
                 status["terminated"] = status["terminated"] or sub_status["terminated"]
                 status["reward_delta"] += sub_status["reward_delta"]
                 if status["terminated"]: # If any part of sequence terminates, the whole sequence terminates
-                    status["info"] = "sequence_terminated"
+                    status["info"] = sub_status["info"] or "sequence_terminated"
                     break
             return status
 
         elif isinstance(hp_node, Choice):
-            # This should ideally not be reached if _execute_control_flow already picked a branch.
-            # But if it is, it indicates a problem or a complex nested choice not handled by simple action_choice.
-            self._debug_print("WARNING: _execute_hp_node encountered a Choice node. This should be handled by _execute_control_flow.")
-            status["terminated"] = True
-            status["reward_delta"] = -100.0
-            status["info"] = "unexpected_choice_node"
-            return status
+            if choice_cursor[0] >= len(choice_path):
+                status.update(
+                    terminated=True,
+                    reward_delta=-100.0,
+                    info="invalid_control_choice_path",
+                )
+                return status
+            branch = hp_node.left if choice_path[choice_cursor[0]] == 0 else hp_node.right
+            choice_cursor[0] += 1
+            return self._execute_hp_node(branch, choice_path, choice_cursor)
         
         elif isinstance(hp_node, Test):
             condition_met = self._evaluate_expression(hp_node.condition, self.current_state)
@@ -825,11 +1300,18 @@ class KeYmaeraGymEnv(gym.Env):
         elif isinstance(hp_node, Assignment):
             var_name = hp_node.var.name
             expr_value = self._evaluate_expression(hp_node.expr, self.current_state)
+            handler = getattr(self, '_assignment_handler', None)
+            if handler is not None:
+                expr_value = handler(var_name, expr_value)
             self.current_state[var_name] = expr_value
             self._debug_print(f"DEBUG: Assignment: {var_name} := {expr_value}")
             return status
 
         elif isinstance(hp_node, NondetAssignment):
+            handler = getattr(self, '_nondeterministic_assignment_handler', None)
+            if handler is not None:
+                self.current_state[hp_node.var.name] = float(handler(hp_node.var.name))
+                return status
             # This is more complex. For now, we'll raise an error or apply a default.
             # A proper implementation would sample from the allowed range.
             self._debug_print(f"ERROR: Nondeterministic assignment '{hp_node.var.name} := *' not yet fully supported. Defaulting to 0.0.")
@@ -841,7 +1323,7 @@ class KeYmaeraGymEnv(gym.Env):
             self._debug_print("WARNING: Iteration node encountered in controlFunc. Iterations are typically handled by the RL loop, not directly executed here.")
             # If an iteration is part of controlFunc, it implies the agent decides to loop.
             # This is usually a higher-level concept. For now, treat as a single execution.
-            return self._execute_hp_node(hp_node.program)
+            return self._execute_hp_node(hp_node.program, choice_path, choice_cursor)
 
         elif isinstance(hp_node, VarRef):
             # If the HP is just a reference to another HPDef, resolve and execute it.
@@ -872,20 +1354,47 @@ class KeYmaeraGymEnv(gym.Env):
 
 
     def step(self, action):
+        if self.simulation_mode:
+            return self._step_modal_simulation(action)
+
         terminated = False
         truncated = False
         reward = 0.0 # Initialize reward
+        termination_reason = None
+        control_action = None
+        attempted_action = None
+        action_repaired = False
 
         # Execute discrete control flow based on agent's action
         if self.control_flow_program_ast:
+            action_values = np.asarray(action).reshape(-1)
+            control_action = int(action_values[0])
+            invalid_mode = self.config.get('invalid_action_mode', 'mask')
+            if invalid_mode not in ('mask', 'penalize', 'repair'):
+                raise ValueError(f"Unsupported invalid_action_mode: {invalid_mode}")
+            if invalid_mode == 'repair':
+                legal = self.action_masks()
+                in_range = 0 <= control_action < len(legal)
+                if in_range and not legal[control_action] and legal.any() and not legal.all():
+                    attempted_action = control_action
+                    control_action = int(np.flatnonzero(legal)[0])
+                    action = control_action
+                    action_repaired = True
+                    reward += self.config.get('repair_penalty', 0.0)
+            # 'mask' relies on a mask-aware algorithm; an illegal action that still arrives is penalized.
             control_flow_status = self._execute_control_flow(action)
             terminated = control_flow_status["terminated"]
             reward += control_flow_status["reward_delta"]
             if terminated:
+                termination_reason = f"control_flow:{control_flow_status['info']}"
                 self._debug_print(f"DEBUG: step method: Terminated by control flow: {control_flow_status['info']}")
                 observation = self._get_observation()
                 info = self._get_info()
                 info["control_flow_info"] = control_flow_status["info"]
+                info["control_action"] = control_action
+                info["attempted_action"] = attempted_action
+                info["action_repaired"] = action_repaired
+                info["termination_reason"] = termination_reason
                 if self.render_mode == "human":
                     self._render_frame()
                 return observation, reward, terminated, truncated, info
@@ -909,6 +1418,7 @@ class KeYmaeraGymEnv(gym.Env):
         self._debug_print(f"DEBUG: step method: solver_failed = {solver_failed}")
         if solver_failed:
             terminated = True # Terminate if ODE solver fails or domain constraint violated
+            termination_reason = self.last_dynamics_failure_reason or "ode_failure"
             reward += self.config.get('ode_failure_penalty', -100.0) # Penalty for ODE failure (configurable)
 
         # Evaluate reward (from problem definition)
@@ -923,12 +1433,27 @@ class KeYmaeraGymEnv(gym.Env):
             evaluated_termination_cond = self._evaluate_expression(termination_expr, self.current_state)
             self._debug_print(f"DEBUG: step method: evaluated_termination_cond = {evaluated_termination_cond}")
             terminated = bool(evaluated_termination_cond)
+            if terminated:
+                if not self._evaluate_expression(
+                    self.config.get('problem', {}).get('goal', 'True'),
+                    self.current_state
+                ):
+                    termination_reason = "model_safety_postcondition_violation"
+                elif any(
+                    not self._evaluate_expression(invariant, self.current_state)
+                    for invariant in self.config.get('problem', {}).get('loop_invariants', [])
+                ):
+                    termination_reason = "model_loop_invariant_violation"
+                else:
+                    termination_reason = "model_termination_condition"
         self._debug_print(f"DEBUG: step method: final terminated status = {terminated}")
 
         # Check for truncation (max steps or global time)
         self.current_step_count += 1
         if self.current_step_count >= self.max_episode_steps:
             truncated = True
+            if not terminated:
+                termination_reason = "time_limit_truncation"
         
         # Update global_time_remaining from current_state['T'] after ODE step.
         self.global_time_remaining = self.current_state.get('T', 0.0)
@@ -940,7 +1465,13 @@ class KeYmaeraGymEnv(gym.Env):
         if self.render_mode == "human":
             self._render_frame()
 
-        return observation, reward, terminated, truncated, self._get_info()
+        info = self._get_info()
+        info["control_action"] = control_action
+        info["attempted_action"] = attempted_action
+        info["action_repaired"] = action_repaired
+        info["termination_reason"] = termination_reason
+        info["ode_failure_reason"] = self.last_dynamics_failure_reason
+        return observation, reward, terminated, truncated, info
 
     def _generate_valid_initial_state(self, max_attempts=None):
         # Generates a single initial state that satisfies the initial_condition.
@@ -1249,7 +1780,41 @@ class KeYmaeraGymEnv(gym.Env):
             low, high = sample_ranges.get(var_name, (-100.0, 100.0))
             opt.add(z3_var >= low, z3_var <= high)
 
+        progress_width = 30
+        progress_is_tty = sys.stderr.isatty()
+        progress_interval = max(1, min(100, max_populate_attempts_total // 20))
+        last_progress_attempt = -1
+
+        def report_progress(final=False):
+            nonlocal last_progress_attempt
+            filled = min(
+                progress_width,
+                progress_width * len(self.initial_state_buffer) // max(capacity, 1),
+            )
+            line = (
+                "\rZ3 initial-state buffer: [%s%s] %d/%d states "
+                "| attempts %d/%d"
+                % (
+                    "#" * filled,
+                    "-" * (progress_width - filled),
+                    len(self.initial_state_buffer),
+                    capacity,
+                    attempts_made,
+                    max_populate_attempts_total,
+                )
+            )
+            if progress_is_tty:
+                sys.stderr.write(line)
+                if final:
+                    sys.stderr.write("\n")
+                sys.stderr.flush()
+                last_progress_attempt = attempts_made
+            elif final or attempts_made % progress_interval == 0:
+                print(line.lstrip("\r"), file=sys.stderr, flush=True)
+                last_progress_attempt = attempts_made
+
         attempts_made = 0
+        report_progress()
         while len(self.initial_state_buffer) < capacity and attempts_made < max_populate_attempts_total:
             attempts_made += 1
             opt.push()
@@ -1308,7 +1873,13 @@ class KeYmaeraGymEnv(gym.Env):
             else:
                 print(f"DEBUG: Z3 UNKNOWN during diverse buffer population. Retrying with new soft constraints.")
                 opt.pop()
+            report_progress()
 
+        if progress_is_tty:
+            sys.stderr.write("\n")
+            sys.stderr.flush()
+        elif last_progress_attempt != attempts_made:
+            report_progress(final=True)
         if len(self.initial_state_buffer) < capacity:
             print(f"Warning: Diverse initial state buffer could only be filled to {len(self.initial_state_buffer)}/{capacity} after {attempts_made} attempts.")
 
@@ -1344,6 +1915,7 @@ class KeYmaeraGymEnv(gym.Env):
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
         self.current_step_count = 0
+        self.simulation_elapsed_time = 0.0
         self.current_state = OrderedDict()
 
         # Re-apply constants (already done in __init__, but good to ensure for reset)
@@ -1394,12 +1966,17 @@ class KeYmaeraGymEnv(gym.Env):
 
         if ep_value is not None:
             self.time_step = ep_value
+
+        if self.simulation_mode:
+            self._reset_modal_simulation_state()
         
         # Ensure global_time_remaining is updated from the state
         self.global_time_remaining = self.current_state.get('T', 0.0)
 
         observation = self._get_observation()
         info = self._get_info()
+        if self.simulation_mode:
+            info["simulation_elapsed_time"] = self.simulation_elapsed_time
 
         if self.render_mode == "human":
             self._render_frame()

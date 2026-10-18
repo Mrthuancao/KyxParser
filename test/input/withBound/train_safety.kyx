@@ -25,7 +25,7 @@ SharedDefinitions
   Real emOn  = 1;
   Real emOff = 0;
 
-  HP spd ::= {
+  HP controlFunc ::= {
         ?v <= vdes; a:=*; ?-b<=a&a<=A;
      ++ ?v >= vdes; a:=*; ?-b<=a&a<=0;
   };
@@ -60,7 +60,7 @@ Definitions
   Real accCompensation(Real v) = (((A/b) + 1)*((A/2)*ep^2 + ep*v));     /* Distance to compensate speed increase. */
   Real SB(Real v, Real d) = (brakeDist(v,d) + accCompensation(v));   /* Distance needed to brake safely when accelerating once */
 
-  // @safety: shape=-0.05*v^2; reward=0.25; penalty=-100.0; on_failure=terminate:status=failure
+  // @safety: shape={-0.05*v^2 - 0.05/(0.1 + max(m-z-brakeDist(v,d), 0))}; reward=0.25; penalty=-100.0; on_failure=terminate:status=failure
   Bool loopInv(Real m, Real z, Real v, Real d) <-> (m-z >= brakeDist(v,d) & d>=0);  /* loop invariant: maintain sufficient braking distance */
 
   HP atpr ::= {
@@ -95,7 +95,7 @@ ProgramVariables
 	Real d;
   // @var: bound=[0:3]; plot=line; def="Previous permitted speed"
 	Real do;
-  // @var: bound=[0:1]; plot=none; def="Emergency-brake command state"
+  // @var: bound=[0:1]; initial_value=0; plot=none; def="Emergency-brake command state"
 	Real em;
 End.
 
@@ -104,7 +104,7 @@ Controllable(m,z,v,d) & em = emOff & A>=0 & ep>=0
   ->
   [{
        rbcr;
-    ++ spd; atpr; drive;
+    ++ controlFunc; atpr; drive;
    }*@invariant(loopInv(m,z,v,d))
   ]safe(m,z,v,d)
 End.

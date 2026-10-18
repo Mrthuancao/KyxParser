@@ -3,6 +3,7 @@ import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
 import json
+import sys
 from scipy.integrate import solve_ivp
 import sympy
 import z3
@@ -23,7 +24,7 @@ from ast_config import (
 )
 
 # Embedded environment config (generator will replace the placeholder)
-_ENV_CONFIG_JSON = '    {\n        "environment_name": "KeYmaeraTrainEssential",\n        "variables": [\n            {\n                "name": "a",\n                "type": "Real",\n                "lower_bound": "-1.0",\n                "upper_bound": "1.0",\n                "initial_value": null\n            },\n            {\n                "name": "v",\n                "type": "Real",\n                "lower_bound": "0.0",\n                "upper_bound": "3.0",\n                "initial_value": null\n            },\n            {\n                "name": "z",\n                "type": "Real",\n                "lower_bound": "0.0",\n                "upper_bound": "5.0",\n                "initial_value": null\n            },\n            {\n                "name": "t",\n                "type": "Real",\n                "lower_bound": "0.0",\n                "upper_bound": "0.1",\n                "initial_value": null\n            }\n        ],\n        "constants": [\n            {\n                "name": "ep",\n                "value": "0.1",\n                "lower_bound": null,\n                "upper_bound": null\n            },\n            {\n                "name": "b",\n                "value": "1.0",\n                "lower_bound": null,\n                "upper_bound": null\n            },\n            {\n                "name": "A",\n                "value": "1.0",\n                "lower_bound": null,\n                "upper_bound": null\n            },\n            {\n                "name": "m",\n                "value": "10.0",\n                "lower_bound": null,\n                "upper_bound": null\n            },\n            {\n                "name": "d",\n                "value": "0.2",\n                "lower_bound": null,\n                "upper_bound": null\n            },\n            {\n                "name": "delta",\n                "value": "0.5",\n                "lower_bound": null,\n                "upper_bound": null\n            }\n        ],\n        "function_definitions": [\n            {\n                "name": "stopDist",\n                "args": [\n                    "v"\n                ],\n                "body": "((v ** 2.0) / (2.0 * b))"\n            },\n            {\n                "name": "safe",\n                "args": [\n                    "m",\n                    "z",\n                    "v"\n                ],\n                "body": "(z <= m)"\n            },\n            {\n                "name": "accCompensation",\n                "args": [\n                    "v"\n                ],\n                "body": "(((A / b) + 1.0) * (((A / 2.0) * (ep ** 2.0)) + (ep * v)))"\n            },\n            {\n                "name": "SB",\n                "args": [\n                    "v"\n                ],\n                "body": "(self._stopDist_impl(v) + self._accCompensation_impl(v))"\n            },\n            {\n                "name": "loopInv",\n                "args": [\n                    "m",\n                    "z",\n                    "v"\n                ],\n                "body": "((v >= 0.0) and ((m - z) >= self._stopDist_impl(v)))"\n            },\n            {\n                "name": "initial",\n                "args": [\n                    "m",\n                    "z",\n                    "v"\n                ],\n                "body": "((v >= 0.0) and ((m - z) >= self._stopDist_impl(v)))"\n            },\n            {\n                "name": "reached",\n                "args": [\n                    "m",\n                    "z",\n                    "v",\n                    "d",\n                    "delta"\n                ],\n                "body": "((((z >= (m - delta)) and (z <= m)) and (v >= 0.0)) and (v <= d))"\n            }\n        ],\n        "hp_definitions": [\n            {\n                "name": "ctrl",\n                "args": [],\n                "body": "{((?(((m - z) <= self._SB_impl(v))); a := -(b)) ++ (?(((m - z) >= self._SB_impl(v))); a := A))}"\n            },\n            {\n                "name": "drive",\n                "args": [],\n                "body": "{(t := 0.0; {(z\' = v, v\' = a, t\' = 1.0@@@DOMAIN_CONSTRAINT@@@sympy.And(sympy.Ge(v, 0.0), sympy.Le(t, ep)))})}"\n            }\n        ],\n        "problem": {\n            "initial_condition": "self._initial_impl(m, z, v)",\n            "program": "(z\' = v, v\' = a, t\' = 1.0@@@DOMAIN_CONSTRAINT@@@sympy.And(sympy.Ge(v, 0.0), sympy.Le(t, ep)))",\n            "goal": "self._safe_impl(m, z, v)",\n            "loop_invariants": [\n                "self._loopInv_impl(m, z, v)"\n            ],\n            "differential_invariants": [],\n            "differential_ghosts": []\n        },\n        "action_space_type": "discrete",\n        "action_space_bounds": {\n            "n": 2\n        },\n        "observation_space_type": "continuous",\n        "observation_space_bounds": {\n            "a": {\n                "min": "-1.0",\n                "max": "1.0"\n            },\n            "v": {\n                "min": "0.0",\n                "max": "3.0"\n            },\n            "z": {\n                "min": "0.0",\n                "max": "5.0"\n            },\n            "t": {\n                "min": "0.0",\n                "max": "0.1"\n            }\n        },\n        "reward_function_body": "((((-(0.05) * (v ** 2.0))) + ((0.25) if (self._loopInv_impl(m, z, v)) else (-100.0))) + (((0.01 * z)) + ((100.0) if (self._reached_impl(m, z, v, d, delta)) else (0.0)))) if not (((not (self._safe_impl(m, z, v))) or (not (self._loopInv_impl(m, z, v))))) else (-100.0)",\n        "termination_condition_body": "(((not (self._safe_impl(m, z, v))) or (not (self._loopInv_impl(m, z, v)))) or (self._reached_impl(m, z, v, d, delta)))",\n        "max_episode_steps": 200,\n        "time_step": 0.01,\n        "ode_solver_method": "DOP853",\n        "ode_solver_step_size": 0.001,\n        "ode_solver_tolerance": 1e-06,\n        "initial_state_sampling_config": {\n            "a": {\n                "min": "-1.0",\n                "max": "1.0"\n            },\n            "v": {\n                "min": "0.0",\n                "max": "3.0"\n            },\n            "z": {\n                "min": "0.0",\n                "max": "5.0"\n            },\n            "t": {\n                "min": "0.0",\n                "max": "0.1"\n            },\n            "ep": {\n                "value": "0.1"\n            },\n            "b": {\n                "value": "1.0"\n            },\n            "A": {\n                "value": "1.0"\n            },\n            "m": {\n                "value": "10.0"\n            },\n            "d": {\n                "value": "0.2"\n            },\n            "delta": {\n                "value": "0.5"\n            }\n        },\n        "seed": null,\n        "render_mode": null,\n        "metadata": {\n            "render_modes": [\n                "human",\n                "rgb_array"\n            ],\n            "render_fps": 30\n        },\n        "initial_state_buffer_config": {\n            "enabled": false,\n            "capacity": 100,\n            "populate_on_init": true,\n            "max_populate_attempts": 1000,\n            "strategy": "random"\n        },\n        "control_flow_program_ast_json": {\n            "_type": "Choice",\n            "left": {\n                "_type": "Sequence",\n                "programs": [\n                    {\n                        "_type": "Test",\n                        "condition": {\n                            "_type": "Comparison",\n                            "op": "<=",\n                            "left": {\n                                "_type": "BinaryTermOp",\n                                "op": "-",\n                                "left": {\n                                    "_type": "VarRef",\n                                    "name": "m"\n                                },\n                                "right": {\n                                    "_type": "VarRef",\n                                    "name": "z"\n                                }\n                            },\n                            "right": {\n                                "_type": "FunctionCall",\n                                "name": "SB",\n                                "args": [\n                                    {\n                                        "_type": "VarRef",\n                                        "name": "v"\n                                    }\n                                ]\n                            }\n                        }\n                    },\n                    {\n                        "_type": "Assignment",\n                        "var": {\n                            "_type": "VarRef",\n                            "name": "a"\n                        },\n                        "expr": {\n                            "_type": "UnaryTermOp",\n                            "op": "-",\n                            "operand": {\n                                "_type": "VarRef",\n                                "name": "b"\n                            }\n                        }\n                    }\n                ]\n            },\n            "right": {\n                "_type": "Sequence",\n                "programs": [\n                    {\n                        "_type": "Test",\n                        "condition": {\n                            "_type": "Comparison",\n                            "op": ">=",\n                            "left": {\n                                "_type": "BinaryTermOp",\n                                "op": "-",\n                                "left": {\n                                    "_type": "VarRef",\n                                    "name": "m"\n                                },\n                                "right": {\n                                    "_type": "VarRef",\n                                    "name": "z"\n                                }\n                            },\n                            "right": {\n                                "_type": "FunctionCall",\n                                "name": "SB",\n                                "args": [\n                                    {\n                                        "_type": "VarRef",\n                                        "name": "v"\n                                    }\n                                ]\n                            }\n                        }\n                    },\n                    {\n                        "_type": "Assignment",\n                        "var": {\n                            "_type": "VarRef",\n                            "name": "a"\n                        },\n                        "expr": {\n                            "_type": "VarRef",\n                            "name": "A"\n                        }\n                    }\n                ]\n            }\n        }\n    }'
+_ENV_CONFIG_JSON = '    {\n        "environment_name": "KeYmaeraTrainEssential",\n        "variables": [\n            {\n                "name": "a",\n                "type": "Real",\n                "lower_bound": "-1.0",\n                "upper_bound": "1.0",\n                "initial_value": null\n            },\n            {\n                "name": "v",\n                "type": "Real",\n                "lower_bound": "0.0",\n                "upper_bound": "3.0",\n                "initial_value": null\n            },\n            {\n                "name": "z",\n                "type": "Real",\n                "lower_bound": "0.0",\n                "upper_bound": "5.0",\n                "initial_value": null\n            },\n            {\n                "name": "t",\n                "type": "Real",\n                "lower_bound": "0.0",\n                "upper_bound": "0.1",\n                "initial_value": null\n            }\n        ],\n        "constants": [\n            {\n                "name": "ep",\n                "value": "0.1",\n                "lower_bound": null,\n                "upper_bound": null\n            },\n            {\n                "name": "b",\n                "value": "1.0",\n                "lower_bound": null,\n                "upper_bound": null\n            },\n            {\n                "name": "A",\n                "value": "1.0",\n                "lower_bound": null,\n                "upper_bound": null\n            },\n            {\n                "name": "m",\n                "value": "10.0",\n                "lower_bound": null,\n                "upper_bound": null\n            },\n            {\n                "name": "d",\n                "value": "0.2",\n                "lower_bound": null,\n                "upper_bound": null\n            },\n            {\n                "name": "delta",\n                "value": "0.5",\n                "lower_bound": null,\n                "upper_bound": null\n            }\n        ],\n        "function_definitions": [\n            {\n                "name": "stopDist",\n                "args": [\n                    "v"\n                ],\n                "body": "((v ** 2.0) / (2.0 * b))"\n            },\n            {\n                "name": "safe",\n                "args": [\n                    "m",\n                    "z",\n                    "v"\n                ],\n                "body": "(z <= m)"\n            },\n            {\n                "name": "accCompensation",\n                "args": [\n                    "v"\n                ],\n                "body": "(((A / b) + 1.0) * (((A / 2.0) * (ep ** 2.0)) + (ep * v)))"\n            },\n            {\n                "name": "SB",\n                "args": [\n                    "v"\n                ],\n                "body": "(self._stopDist_impl(v) + self._accCompensation_impl(v))"\n            },\n            {\n                "name": "loopInv",\n                "args": [\n                    "m",\n                    "z",\n                    "v"\n                ],\n                "body": "((v >= 0.0) and ((m - z) >= self._stopDist_impl(v)))"\n            },\n            {\n                "name": "initial",\n                "args": [\n                    "m",\n                    "z",\n                    "v"\n                ],\n                "body": "((v >= 0.0) and ((m - z) >= self._stopDist_impl(v)))"\n            },\n            {\n                "name": "reached",\n                "args": [\n                    "m",\n                    "z",\n                    "v",\n                    "d",\n                    "delta"\n                ],\n                "body": "((((z >= (m - delta)) and (z <= m)) and (v >= 0.0)) and (v <= d))"\n            }\n        ],\n        "hp_definitions": [\n            {\n                "name": "ctrl",\n                "args": [],\n                "body": "{((?(((m - z) <= self._SB_impl(v))); a := -(b)) ++ (?(((m - z) >= self._SB_impl(v))); a := A))}"\n            },\n            {\n                "name": "drive",\n                "args": [],\n                "body": "{(t := 0.0; {(z\' = v, v\' = a, t\' = 1.0@@@DOMAIN_CONSTRAINT@@@sympy.And(sympy.Ge(v, 0.0), sympy.Le(t, ep)))})}"\n            }\n        ],\n        "problem": {\n            "initial_condition": "self._initial_impl(m, z, v)",\n            "program": "(z\' = v, v\' = a, t\' = 1.0@@@DOMAIN_CONSTRAINT@@@sympy.And(sympy.Ge(v, 0.0), sympy.Le(t, ep)))",\n            "goal": "self._safe_impl(m, z, v)",\n            "loop_invariants": [\n                "self._loopInv_impl(m, z, v)"\n            ],\n            "differential_invariants": [],\n            "differential_ghosts": []\n        },\n        "action_space_type": "discrete",\n        "action_space_bounds": {\n            "n": 2\n        },\n        "observation_space_type": "continuous",\n        "observation_space_bounds": {\n            "a": {\n                "min": "-1.0",\n                "max": "1.0"\n            },\n            "v": {\n                "min": "0.0",\n                "max": "3.0"\n            },\n            "z": {\n                "min": "0.0",\n                "max": "5.0"\n            },\n            "t": {\n                "min": "0.0",\n                "max": "0.1"\n            }\n        },\n        "reward_function_body": "((((-(0.05) * (v ** 2.0))) + ((0.25) if (self._loopInv_impl(m, z, v)) else (-100.0))) + (((0.01 * z)) + ((100.0) if (self._reached_impl(m, z, v, d, delta)) else (0.0)))) if not (((not (self._safe_impl(m, z, v))) or (not (self._loopInv_impl(m, z, v))))) else (-100.0)",\n        "termination_condition_body": "(((not (self._safe_impl(m, z, v))) or (not (self._loopInv_impl(m, z, v)))) or (self._reached_impl(m, z, v, d, delta)))",\n        "max_episode_steps": 200,\n        "time_step": 0.01,\n        "ode_solver_method": "DOP853",\n        "ode_solver_step_size": 0.001,\n        "ode_solver_tolerance": 1e-06,\n        "initial_state_sampling_config": {\n            "a": {\n                "min": "-1.0",\n                "max": "1.0"\n            },\n            "v": {\n                "min": "0.0",\n                "max": "3.0"\n            },\n            "z": {\n                "min": "0.0",\n                "max": "5.0"\n            },\n            "t": {\n                "min": "0.0",\n                "max": "0.1"\n            },\n            "ep": {\n                "value": "0.1"\n            },\n            "b": {\n                "value": "1.0"\n            },\n            "A": {\n                "value": "1.0"\n            },\n            "m": {\n                "value": "10.0"\n            },\n            "d": {\n                "value": "0.2"\n            },\n            "delta": {\n                "value": "0.5"\n            }\n        },\n        "seed": null,\n        "render_mode": null,\n        "metadata": {\n            "render_modes": [\n                "human",\n                "rgb_array"\n            ],\n            "render_fps": 30\n        },\n        "initial_state_buffer_config": {\n            "enabled": false,\n            "capacity": 100,\n            "populate_on_init": true,\n            "max_populate_attempts": 1000,\n            "strategy": "random"\n        },\n        "control_flow_program_ast_json": {\n            "_type": "Choice",\n            "left": {\n                "_type": "Sequence",\n                "programs": [\n                    {\n                        "_type": "Test",\n                        "condition": {\n                            "_type": "Comparison",\n                            "op": "<=",\n                            "left": {\n                                "_type": "BinaryTermOp",\n                                "op": "-",\n                                "left": {\n                                    "_type": "VarRef",\n                                    "name": "m"\n                                },\n                                "right": {\n                                    "_type": "VarRef",\n                                    "name": "z"\n                                }\n                            },\n                            "right": {\n                                "_type": "FunctionCall",\n                                "name": "SB",\n                                "args": [\n                                    {\n                                        "_type": "VarRef",\n                                        "name": "v"\n                                    }\n                                ]\n                            }\n                        }\n                    },\n                    {\n                        "_type": "Assignment",\n                        "var": {\n                            "_type": "VarRef",\n                            "name": "a"\n                        },\n                        "expr": {\n                            "_type": "UnaryTermOp",\n                            "op": "-",\n                            "operand": {\n                                "_type": "VarRef",\n                                "name": "b"\n                            }\n                        }\n                    }\n                ]\n            },\n            "right": {\n                "_type": "Sequence",\n                "programs": [\n                    {\n                        "_type": "Test",\n                        "condition": {\n                            "_type": "Comparison",\n                            "op": ">=",\n                            "left": {\n                                "_type": "BinaryTermOp",\n                                "op": "-",\n                                "left": {\n                                    "_type": "VarRef",\n                                    "name": "m"\n                                },\n                                "right": {\n                                    "_type": "VarRef",\n                                    "name": "z"\n                                }\n                            },\n                            "right": {\n                                "_type": "FunctionCall",\n                                "name": "SB",\n                                "args": [\n                                    {\n                                        "_type": "VarRef",\n                                        "name": "v"\n                                    }\n                                ]\n                            }\n                        }\n                    },\n                    {\n                        "_type": "Assignment",\n                        "var": {\n                            "_type": "VarRef",\n                            "name": "a"\n                        },\n                        "expr": {\n                            "_type": "VarRef",\n                            "name": "A"\n                        }\n                    }\n                ]\n            }\n        },\n        "simulation_mode": false,\n        "simulation_initialization_ast_json": null,\n        "simulation_step_ast_json": null,\n        "verification_formula_ast_json": null,\n        "simulation_reward_terms": [],\n        "simulation_predicate_rules": []\n    }'
 
 
 class KeYmaeraGymEnv(gym.Env):
@@ -50,6 +51,7 @@ class KeYmaeraGymEnv(gym.Env):
         self.render_mode = render_mode
         self.current_state = OrderedDict()
         self.time = 0.0 # Time elapsed within current control step (t in dL)
+        self.simulation_elapsed_time = 0.0
         self.global_time_remaining = 0.0 # T in dL
         self.current_step_count = 0 # Number of control steps taken
         self.max_episode_steps = self.config.get('max_episode_steps', 200)
@@ -97,6 +99,16 @@ class KeYmaeraGymEnv(gym.Env):
             self.control_flow_program_ast = self._deserialize_ast_node(self.config['control_flow_program_ast_json'])
             self._debug_print(f"DEBUG: Deserialized control_flow_program_ast: {self.control_flow_program_ast._repr_indented(0)}")
 
+        self.simulation_mode = self.config.get('simulation_mode', False)
+        self.simulation_initialization_ast = (
+            self._deserialize_ast_node(self.config['simulation_initialization_ast_json'])
+            if self.config.get('simulation_initialization_ast_json') else None
+        )
+        self.simulation_step_ast = (
+            self._deserialize_ast_node(self.config['simulation_step_ast_json'])
+            if self.config.get('simulation_step_ast_json') else None
+        )
+        self._simulation_expression_cache = {}
         self.control_choice_paths = (
             self._enumerate_control_choice_paths(self.control_flow_program_ast)
             if self.control_flow_program_ast else []
@@ -702,6 +714,314 @@ class KeYmaeraGymEnv(gym.Env):
             # If it's a pure Python object that doesn't have a .subs method, return it as is.
             return sympy_expr_node
 
+    def _simulation_domain_comparisons(self, formula):
+        if isinstance(formula, BinaryFormulaOp) and formula.op in ('&', '&&'):
+            return (
+                self._simulation_domain_comparisons(formula.left)
+                + self._simulation_domain_comparisons(formula.right)
+            )
+        if isinstance(formula, Comparison):
+            return [formula]
+        return []
+
+    def _compile_simulation_term(self, term):
+        cache_key = id(term)
+        if cache_key not in self._simulation_expression_cache:
+            expression = self._term_to_python_eval_str_env(term)
+            self._simulation_expression_cache[cache_key] = compile(
+                expression, "<hybrid-program-term>", "eval"
+            )
+        return self._simulation_expression_cache[cache_key]
+
+    def _flatten_simulation_choice(self, choice):
+        if isinstance(choice, Choice):
+            return (
+                self._flatten_simulation_choice(choice.left)
+                + self._flatten_simulation_choice(choice.right)
+            )
+        return [choice]
+
+    def _integrate_simulation_ode(self, ode):
+        if ode.domain_constraint is not None and not self._evaluate_expression(
+            ode.domain_constraint, self.current_state
+        ):
+            return False
+
+        if ode.domain_constraint is not None:
+            snap_tolerance = max(1e-9, self.ode_solver_tolerance * 10)
+            for comparison in self._simulation_domain_comparisons(ode.domain_constraint):
+                if not isinstance(comparison.left, VarRef) and not isinstance(
+                    comparison.right, VarRef
+                ):
+                    continue
+                left_value = float(self._evaluate_expression(comparison.left, self.current_state))
+                right_value = float(self._evaluate_expression(comparison.right, self.current_state))
+                if abs(left_value - right_value) > snap_tolerance:
+                    continue
+                if isinstance(comparison.left, VarRef):
+                    self.current_state[comparison.left.name] = right_value
+                else:
+                    self.current_state[comparison.right.name] = left_value
+
+        variables = [equation.var.name for equation in ode.equations]
+        initial_values = [float(self.current_state[name]) for name in variables]
+        initial_state = dict(self.current_state)
+        eval_globals = {
+            "__builtins__": None,
+            "self": self,
+            "np": np,
+            "math": math,
+            "abs": abs,
+            "min": min,
+            "max": max,
+            "float": float,
+            "int": int,
+            "bool": bool,
+        }
+        derivative_codes = [
+            self._compile_simulation_term(equation.expr) for equation in ode.equations
+        ]
+
+        def state_at(values):
+            state = dict(initial_state)
+            state.update(zip(variables, values))
+            return state
+
+        def evaluate_at_state(code, state):
+            previous_state = self.current_state
+            self.current_state = state
+            try:
+                return eval(code, eval_globals, state)
+            finally:
+                self.current_state = previous_state
+
+        def derivatives(_time, values):
+            state = state_at(values)
+            return [
+                float(evaluate_at_state(code, state))
+                for code in derivative_codes
+            ]
+
+        events = []
+        event_comparisons = []
+        if ode.domain_constraint is not None:
+            for comparison in self._simulation_domain_comparisons(ode.domain_constraint):
+                if comparison.op not in ('<', '<=', '>', '>='):
+                    continue
+
+                def boundary(_time, values, comparison=comparison):
+                    state = state_at(values)
+                    left = self._compile_simulation_term(comparison.left)
+                    right = self._compile_simulation_term(comparison.right)
+                    boundary_value = float(
+                        evaluate_at_state(left, state)
+                        - evaluate_at_state(right, state)
+                    )
+                    if _time == 0.0 and abs(boundary_value) <= snap_tolerance:
+                        crossing_direction = (
+                            1 if comparison.op in ('<', '<=') else -1
+                        )
+                        event_epsilon = max(
+                            1e-12, self.ode_solver_tolerance * 1e-3
+                        )
+                        return -crossing_direction * event_epsilon
+                    return boundary_value
+
+                boundary.terminal = True
+                boundary.direction = 1 if comparison.op in ('<', '<=') else -1
+                events.append(boundary)
+                event_comparisons.append(comparison)
+
+        solution = solve_ivp(
+            derivatives,
+            (0.0, float(self.time_step)),
+            initial_values,
+            method=self.ode_solver_method,
+            max_step=self.ode_solver_step_size,
+            rtol=self.ode_solver_tolerance,
+            atol=self.ode_solver_tolerance,
+            events=events or None,
+        )
+        if not solution.success:
+            raise RuntimeError(f"Hybrid-program ODE integration failed: {solution.message}")
+
+        self.current_state.update(zip(variables, solution.y[:, -1]))
+        for comparison, event_times in zip(event_comparisons, solution.t_events):
+            if not len(event_times):
+                continue
+            if isinstance(comparison.left, VarRef):
+                self.current_state[comparison.left.name] = self._evaluate_expression(
+                    comparison.right, self.current_state
+                )
+            elif isinstance(comparison.right, VarRef):
+                self.current_state[comparison.right.name] = self._evaluate_expression(
+                    comparison.left, self.current_state
+                )
+        self.simulation_elapsed_time += float(solution.t[-1])
+        if ode.domain_constraint is not None:
+            final_state = dict(self.current_state)
+            if not self._evaluate_expression(ode.domain_constraint, final_state):
+                raise RuntimeError(
+                    "Hybrid-program ODE integration ended outside its evolution domain."
+                )
+        return True
+
+    def _execute_simulation_program(self, program, probe=False):
+        if isinstance(program, HPBlock):
+            return self._execute_simulation_program(program.program, probe)
+        if isinstance(program, Sequence):
+            for child in program.programs:
+                if not self._execute_simulation_program(child, probe):
+                    return False
+            return True
+        if isinstance(program, Choice):
+            enabled_branches = []
+            for branch in self._flatten_simulation_choice(program):
+                saved_state = copy.deepcopy(self.current_state)
+                try:
+                    if self._execute_simulation_program(branch, probe=True):
+                        enabled_branches.append(branch)
+                finally:
+                    self.current_state.clear()
+                    self.current_state.update(saved_state)
+            if not enabled_branches:
+                return False
+            selected = int(self.np_random.integers(len(enabled_branches)))
+            return self._execute_simulation_program(enabled_branches[selected], probe)
+        if isinstance(program, Test):
+            return bool(self._evaluate_expression(program.condition, self.current_state))
+        if isinstance(program, Assignment):
+            value = self._evaluate_expression(program.expr, self.current_state)
+            self.current_state[program.var.name] = value
+            return True
+        if isinstance(program, NondetAssignment):
+            raise ValueError(
+                "Hybrid-program simulation does not support unbounded nondeterministic assignments."
+            )
+        if isinstance(program, ODE):
+            if probe:
+                return (
+                    program.domain_constraint is None
+                    or bool(self._evaluate_expression(
+                        program.domain_constraint, self.current_state
+                    ))
+                )
+            return self._integrate_simulation_ode(program)
+        if isinstance(program, Iteration):
+            raise ValueError(
+                "Nested hybrid-program loops are not supported inside one simulation step."
+            )
+        if isinstance(program, VarRef):
+            raise ValueError(
+                f"Unexpanded hybrid-program reference in simulation: {program.name}"
+            )
+        raise ValueError(
+            f"Unsupported hybrid-program node in simulation: {type(program).__name__}"
+        )
+
+    def _reset_modal_simulation_state(self):
+        constants = {
+            constant['name']: self.current_state[constant['name']]
+            for constant in self.config['constants']
+        }
+        max_attempts = self.initial_state_buffer_config.get('max_populate_attempts', 1000)
+        for _attempt in range(max_attempts):
+            self.current_state.clear()
+            self.current_state.update(constants)
+            self.current_state.update(self._generate_valid_initial_state(max_attempts=1))
+            if self.simulation_initialization_ast is not None:
+                if not self._execute_simulation_program(self.simulation_initialization_ast):
+                    continue
+            if self._simulation_program_is_enabled(self.simulation_step_ast):
+                return
+        raise RuntimeError(
+            "Could not sample an initial state with an enabled execution of the modal program "
+            f"after {max_attempts} attempts."
+        )
+
+    def _simulation_program_is_enabled(self, program):
+        saved_state = copy.deepcopy(self.current_state)
+        try:
+            return self._execute_simulation_program(program, probe=True)
+        finally:
+            self.current_state.clear()
+            self.current_state.update(saved_state)
+
+    def _step_modal_simulation(self, action):
+        if not self.action_space.contains(action):
+            raise ValueError(f"Invalid modal simulation action: {action}")
+        original_state = copy.deepcopy(self.current_state)
+        control_action = None
+        terminated = False
+        termination_reason = None
+        control_flow_info = None
+        if self.control_flow_program_ast is not None:
+            control_action = int(np.asarray(action).reshape(-1)[0])
+            control_status = self._execute_control_flow(control_action)
+            if control_status["terminated"]:
+                self.current_state.clear()
+                self.current_state.update(original_state)
+                terminated = True
+                termination_reason = f"control_flow:{control_status['info']}"
+                control_flow_info = control_status["info"]
+        if not terminated:
+            try:
+                executed = self._execute_simulation_program(self.simulation_step_ast)
+            except Exception:
+                self.current_state.clear()
+                self.current_state.update(original_state)
+                raise
+            if not executed:
+                self.current_state.clear()
+                self.current_state.update(original_state)
+                terminated = True
+                termination_reason = "no_enabled_hybrid_program_execution"
+
+        reward = sum(
+            float(self._evaluate_expression(term, self.current_state))
+            for term in self.config.get('simulation_reward_terms', [])
+        )
+        if control_flow_info is not None:
+            reward += float(control_status["reward_delta"])
+        truncated = False
+        annotation_status = None
+        for rule in self.config.get('simulation_predicate_rules', []):
+            predicate_holds = bool(
+                self._evaluate_expression(rule['predicate'], self.current_state)
+            )
+            action_key = 'on_success' if predicate_holds else 'on_failure'
+            status_key = 'success_status' if predicate_holds else 'failure_status'
+            action = rule[action_key]
+            status = rule[status_key]
+            if action == 'terminate':
+                terminated = True
+                annotation_status = status if status != 'none' else annotation_status
+                termination_reason = f"annotation:{rule['kind']}_{action_key[3:]}"
+            elif action == 'truncate':
+                truncated = True
+                annotation_status = status if status != 'none' else annotation_status
+                termination_reason = f"annotation:{rule['kind']}_{action_key[3:]}"
+
+        self.current_step_count += 1
+        truncated = truncated or self.current_step_count >= self.max_episode_steps
+        observation = self._get_observation()
+        info = self._get_info()
+        info.update({
+            "control_action": control_action,
+            "attempted_action": None,
+            "action_repaired": False,
+            "termination_reason": termination_reason,
+            "simulation_mode": True,
+            "simulation_elapsed_time": self.simulation_elapsed_time,
+        })
+        if control_flow_info is not None:
+            info["control_flow_info"] = control_flow_info
+        if annotation_status is not None:
+            info["status"] = annotation_status
+        if self.render_mode == "human":
+            self._render_frame()
+        return observation, reward, terminated, truncated, info
+
     def _get_ode_system(self, t_ode, y):
         # Map y (from solver) back to named variables
         state_map = {var: y[i] for i, var in enumerate(self.differential_variables)}
@@ -998,6 +1318,9 @@ class KeYmaeraGymEnv(gym.Env):
 
 
     def step(self, action):
+        if self.simulation_mode:
+            return self._step_modal_simulation(action)
+
         terminated = False
         truncated = False
         reward = 0.0 # Initialize reward
@@ -1421,7 +1744,41 @@ class KeYmaeraGymEnv(gym.Env):
             low, high = sample_ranges.get(var_name, (-100.0, 100.0))
             opt.add(z3_var >= low, z3_var <= high)
 
+        progress_width = 30
+        progress_is_tty = sys.stderr.isatty()
+        progress_interval = max(1, min(100, max_populate_attempts_total // 20))
+        last_progress_attempt = -1
+
+        def report_progress(final=False):
+            nonlocal last_progress_attempt
+            filled = min(
+                progress_width,
+                progress_width * len(self.initial_state_buffer) // max(capacity, 1),
+            )
+            line = (
+                "\rZ3 initial-state buffer: [%s%s] %d/%d states "
+                "| attempts %d/%d"
+                % (
+                    "#" * filled,
+                    "-" * (progress_width - filled),
+                    len(self.initial_state_buffer),
+                    capacity,
+                    attempts_made,
+                    max_populate_attempts_total,
+                )
+            )
+            if progress_is_tty:
+                sys.stderr.write(line)
+                if final:
+                    sys.stderr.write("\n")
+                sys.stderr.flush()
+                last_progress_attempt = attempts_made
+            elif final or attempts_made % progress_interval == 0:
+                print(line.lstrip("\r"), file=sys.stderr, flush=True)
+                last_progress_attempt = attempts_made
+
         attempts_made = 0
+        report_progress()
         while len(self.initial_state_buffer) < capacity and attempts_made < max_populate_attempts_total:
             attempts_made += 1
             opt.push()
@@ -1480,7 +1837,13 @@ class KeYmaeraGymEnv(gym.Env):
             else:
                 print(f"DEBUG: Z3 UNKNOWN during diverse buffer population. Retrying with new soft constraints.")
                 opt.pop()
+            report_progress()
 
+        if progress_is_tty:
+            sys.stderr.write("\n")
+            sys.stderr.flush()
+        elif last_progress_attempt != attempts_made:
+            report_progress(final=True)
         if len(self.initial_state_buffer) < capacity:
             print(f"Warning: Diverse initial state buffer could only be filled to {len(self.initial_state_buffer)}/{capacity} after {attempts_made} attempts.")
 
@@ -1516,6 +1879,7 @@ class KeYmaeraGymEnv(gym.Env):
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
         self.current_step_count = 0
+        self.simulation_elapsed_time = 0.0
         self.current_state = OrderedDict()
 
         # Re-apply constants (already done in __init__, but good to ensure for reset)
@@ -1566,12 +1930,17 @@ class KeYmaeraGymEnv(gym.Env):
 
         if ep_value is not None:
             self.time_step = ep_value
+
+        if self.simulation_mode:
+            self._reset_modal_simulation_state()
         
         # Ensure global_time_remaining is updated from the state
         self.global_time_remaining = self.current_state.get('T', 0.0)
 
         observation = self._get_observation()
         info = self._get_info()
+        if self.simulation_mode:
+            info["simulation_elapsed_time"] = self.simulation_elapsed_time
 
         if self.render_mode == "human":
             self._render_frame()

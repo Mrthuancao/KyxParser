@@ -124,3 +124,26 @@ evaluates seeds `1100` through `1119`:
 
 This trains on the generated simulation and is not evidence that the quantified
 stability theorem is proved.
+
+### Training the ETCS Safety Controller
+
+Train and evaluate the two masked `controlFunc` branches in `train_safety.kyx` with:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\train_ppo_train_safety.py --timesteps 20000 --eval-episodes 20 --out-dir logs\train_safety_controlfunc --model-dir models\train_safety_controlfunc
+```
+
+Training and evaluation show progress bars. The run saves the policy and plots in
+the specified output directories; the `em` program variable starts at zero to
+satisfy the model's initial condition while retaining its `[0, 1]` range for
+subsequent controller updates. Evaluation prints each episode's termination
+reason and final state, and saves per-episode diagnostics to JSON, including a
+configurable pre-failure trace of stopping margin, legal-action mask, selected
+branch, and state before/after each step. Evaluation disables the diverse-state
+buffer so `--eval-seed` produces reproducible initial-state samples. To inspect
+the saved policy without retraining and capture the same 20-step trace window
+for each invariant failure, run:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\train_ppo_train_safety.py --eval-only --eval-episodes 20 --eval-seed 1000 --trace-window-steps 20 --out-dir logs\train_safety_controlfunc\failure_traces_seed1000 --model-dir models\train_safety_controlfunc
+```
