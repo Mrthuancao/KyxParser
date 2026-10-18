@@ -26,8 +26,11 @@ SharedDefinitions
   Real emOff = 0;
 
   HP controlFunc ::= {
-        ?v <= vdes; a:=*; ?-b<=a&a<=A;
-     ++ ?v >= vdes; a:=*; ?-b<=a&a<=0;
+        ?v <= vdes; ?b > 0; a := -b;
+     ++ ?v <= vdes; ?A >= 0; a := 0;
+     ++ ?v <= vdes; ?A >= 0; a := A;
+     ++ ?v > vdes; ?b > 0; a := -b;
+     ++ ?v > vdes; ?A >= 0; a := 0;
   };
 
   HP atp ::= {

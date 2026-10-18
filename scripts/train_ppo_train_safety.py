@@ -172,8 +172,11 @@ def _stopping_margin(state: dict) -> float:
 
 def _control_branch_description(action: int) -> str:
     return {
-        0: 'v <= vdes; acceleration in [-b, A]',
-        1: 'v >= vdes; acceleration in [-b, 0]',
+        0: 'v <= vdes; a = -b (brake)',
+        1: 'v <= vdes; a = 0 (coast)',
+        2: 'v <= vdes; a = A (accelerate)',
+        3: 'v > vdes; a = -b (brake)',
+        4: 'v > vdes; a = 0 (coast)',
     }.get(action, 'unknown controller branch')
 
 
@@ -368,23 +371,23 @@ def main():
         validation_env = make_env(use_initial_state_buffer=False)
         action_space_n = getattr(validation_env.action_space, 'n', None)
         validation_env.close()
-        if action_space_n != 2:
+        if action_space_n != 5:
             raise RuntimeError(
-                "Expected controlFunc to expose two discrete controller choices, "
+                "Expected controlFunc to expose five discrete acceleration choices, "
                 f"but generated action space has n={action_space_n}. Ensure the "
-                "modal program calls controlFunc."
+                "modal program calls controlFunc with the expected branches."
             )
         model = MaskablePPO.load(str(model_path))
         print(f"Loaded saved PPO policy from {model_path}")
     else:
         train_env = DummyVecEnv([make_env])
         action_space_n = getattr(train_env.get_attr('action_space')[0], 'n', None)
-        if action_space_n != 2:
+        if action_space_n != 5:
             train_env.close()
             raise RuntimeError(
-                "Expected controlFunc to expose two discrete controller choices, "
+                "Expected controlFunc to expose five discrete acceleration choices, "
                 f"but generated action space has n={action_space_n}. Ensure the "
-                "modal program calls controlFunc."
+                "modal program calls controlFunc with the expected branches."
             )
         model = MaskablePPO('MlpPolicy', train_env, verbose=1)
         callback = EpisodeStatsCallback()

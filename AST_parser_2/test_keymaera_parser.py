@@ -209,7 +209,7 @@ class TestKeYmaeraParser(unittest.TestCase):
         self.assertEqual(
             definitions['loopInv'].annotations['safety'],
             {
-                'shape': '-0.05*v^2',
+                'shape': '{-0.05*v^2 - 0.05/(0.1 + max(m-z-brakeDist(v,d), 0))}',
                 'reward': 0.25,
                 'penalty': -100.0,
                 'on_failure': 'terminate:status=failure',
@@ -256,7 +256,6 @@ class TestKeYmaeraParser(unittest.TestCase):
                 'm': (8, 12),
                 'd': (0, 3),
                 'do': (0, 3),
-                'em': (0, 1),
             }.items()
         }
         self.assertEqual(
@@ -266,6 +265,10 @@ class TestKeYmaeraParser(unittest.TestCase):
                 if 'min' in config and 'max' in config
             },
             expected_sampling_ranges,
+        )
+        self.assertEqual(
+            generator.config.initial_state_sampling_config['em'],
+            {'value': '0'},
         )
         self.assertIn('0.05', generator.config.reward_function_body)
         self.assertIn('100.0', generator.config.reward_function_body)
@@ -285,6 +288,31 @@ class TestKeYmaeraParser(unittest.TestCase):
             for name, (low, high) in expected_sampling_ranges.items():
                 self.assertGreaterEqual(state[name], low - 1e-8, name)
                 self.assertLessEqual(state[name], high + 1e-8, name)
+            self.assertEqual(state['em'], 0.0)
+
+        self.assertEqual(env.action_space.n, 5)
+        self.assertEqual(len(env.control_choice_paths), 5)
+        for speed, expected_mask, legal_actions, expected_accelerations in (
+            (0.5, [True, True, True, False, False], [0, 1, 2], [-0.8, 0.0, 0.5]),
+            (2.0, [False, False, False, True, True], [3, 4], [-0.8, 0.0]),
+        ):
+            env.current_state.update({
+                'b': 0.8,
+                'A': 0.5,
+                'v': speed,
+                'vdes': 1.0,
+                'a': 0.0,
+            })
+            self.assertEqual(env.action_masks().tolist(), expected_mask)
+            for action, expected_acceleration in zip(
+                legal_actions, expected_accelerations
+            ):
+                env.current_state['a'] = 0.0
+                status = env._execute_control_flow(action)
+                self.assertFalse(status['terminated'])
+                self.assertAlmostEqual(
+                    env.current_state['a'], expected_acceleration
+                )
         env.close()
 
     def test_car1_named_control_and_step_programs_are_extracted(self):

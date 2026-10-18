@@ -127,7 +127,8 @@ stability theorem is proved.
 
 ### Training the ETCS Safety Controller
 
-Train and evaluate the two masked `controlFunc` branches in `train_safety.kyx` with:
+Train and evaluate the five masked discrete acceleration choices in
+`train_safety.kyx` with:
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\train_ppo_train_safety.py --timesteps 20000 --eval-episodes 20 --out-dir logs\train_safety_controlfunc --model-dir models\train_safety_controlfunc
@@ -147,3 +148,9 @@ for each invariant failure, run:
 ```powershell
 .\.venv\Scripts\python.exe scripts\train_ppo_train_safety.py --eval-only --eval-episodes 20 --eval-seed 1000 --trace-window-steps 20 --out-dir logs\train_safety_controlfunc\failure_traces_seed1000 --model-dir models\train_safety_controlfunc
 ```
+
+The finite action set uses `a=-b`, `a=0`, or `a=A` when `v <= vdes`, and
+`a=-b` or `a=0` when `v > vdes`. This replaces the model's previous continuous
+nondeterministic acceleration choices with a finite controller for RL; safety
+results for this discrete controller do not establish the original continuous
+nondeterministic model's safety.
