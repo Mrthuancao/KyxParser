@@ -154,3 +154,9 @@ The finite action set uses `a=-b`, `a=0`, or `a=A` when `v <= vdes`, and
 nondeterministic acceleration choices with a finite controller for RL; safety
 results for this discrete controller do not establish the original continuous
 nondeterministic model's safety.
+
+For conjunctive ODE evolution domains made from inequalities, integration stops
+at the first domain boundary and snaps directly constrained state variables to
+that boundary. For example, braking under `v >= 0` ends the flow at `v=0`
+instead of integrating to a negative velocity; the next control cycle can then
+choose a new action.

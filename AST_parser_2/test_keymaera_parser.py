@@ -313,6 +313,31 @@ class TestKeYmaeraParser(unittest.TestCase):
                 self.assertAlmostEqual(
                     env.current_state['a'], expected_acceleration
                 )
+
+        env.time_step = 0.05
+        env.current_state.update({
+            'ep': 0.05,
+            'b': 0.8,
+            'a': -0.8,
+            'v': 0.02,
+            'z': 1.0,
+            't': 0.0,
+        })
+        self.assertFalse(env._run_continuous_dynamics([]))
+        self.assertIsNone(env.last_dynamics_failure_reason)
+        self.assertAlmostEqual(env.current_state['v'], 0.0, places=10)
+        self.assertAlmostEqual(env.current_state['t'], 0.025, places=8)
+        self.assertAlmostEqual(env.current_state['z'], 1.00025, places=8)
+
+        env.current_state.update({'a': -0.8, 'v': 0.0, 'z': 1.0})
+        self.assertFalse(env._run_continuous_dynamics([]))
+        self.assertEqual(env.current_state['v'], 0.0)
+        self.assertLess(env.current_state['t'], 1e-7)
+
+        env.current_state.update({'a': 0.0, 'v': 0.0, 'z': 1.0})
+        self.assertFalse(env._run_continuous_dynamics([]))
+        self.assertEqual(env.current_state['v'], 0.0)
+        self.assertAlmostEqual(env.current_state['t'], 0.05, places=8)
         env.close()
 
     def test_car1_named_control_and_step_programs_are_extracted(self):
