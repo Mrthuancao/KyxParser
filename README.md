@@ -92,11 +92,34 @@ The policy is saved as `models/ppo_cruise_control.zip`; training and evaluation
 diagnostics are written under `logs/cruise_control/`. The generated Python
 environment is retained at `generated_cruise_control_env.py` for inspection and is
 overwritten on the next run; pass `--generated-env <path>` to choose another location.
+Evaluation displays a step-level progress bar for the PPO policy and the baseline.
 Set the per-episode step limit for both training and evaluation with
 `--max-episode-steps` (default: `200`), for example:
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\train_ppo_cruise_control.py --timesteps 10000 --max-episode-steps 1000
+```
+
+To evaluate the saved policy without training, compare it with the first-legal-action
+baseline on identical episode seeds and record mode-transition steps/times:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\train_ppo_cruise_control.py --eval-only --eval-episodes 10 --seed 11 --max-episode-steps 5000 --out-dir logs\cruise_control\horizon_5000
+```
+
+This writes policy and baseline episode CSVs, including transition events and the
+first step/time where `|v| <= 1` is reached, the number and fraction of steps
+inside the zone, the longest consecutive in-zone run, sampled simulation time
+spent inside the zone, and whether the episode finishes inside it. In-zone
+simulation-time totals include only intervals whose consecutive sampled states
+are both inside the zone.
+
+To compare on a separate fixed seed range from the original `11` evaluation,
+use a new base seed; the evaluator starts at `--seed + 1000`. For example, this
+evaluates seeds `1100` through `1119`:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\train_ppo_cruise_control.py --eval-only --eval-episodes 20 --seed 100 --max-episode-steps 5000 --out-dir logs\cruise_control\unseen_1100_1119
 ```
 
 This trains on the generated simulation and is not evidence that the quantified

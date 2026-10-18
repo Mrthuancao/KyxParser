@@ -72,23 +72,34 @@ Definitions
   };
 
   HP controlFunc ::= {
+    /* ebrakeact: Hold only if time < 2.5 AND velocity > 15 */
     ?mode = ebrakeact(); ?15 <= v & v <= 40 & t = 2.5; mode:=ebrakefull()
     ++ ?mode = ebrakeact(); ?15 <= v & v <= 16 & 0 <= t & t <= 2.5; t:=0; mode:=sbrakeact()
-    ++ ?mode = ebrakeact(); mode:=mode
+    ++ ?mode = ebrakeact(); ?t < 2.5 & v > 15; mode:=mode
+
+    /* ebrakefull: Hold only if velocity > 15 */
     ++ ?mode = ebrakefull(); ?15 <= v & v <= 16 & t = 2.5; t:=0; mode:=sbrakeact()
-    ++ ?mode = ebrakefull(); mode:=mode
+    ++ ?mode = ebrakefull(); ?v > 15; mode:=mode 
+
+    /* sbrakeact: Hold only if time < 1.3 AND velocity > 5 */
     ++ ?mode = sbrakeact(); ?18 <= v & v <= 20 & 0 <= t & t <= 1.3; t:=0; mode:=ebrakeact()
     ++ ?mode = sbrakeact(); ?5 <= v & v <= 20 & t = 1.3; mode:=sbrakefull()
     ++ ?mode = sbrakeact(); ?5 <= v & v <= 11 & 0 <= t & t <= 1.3; x:=0; mode:=normalPI()
-    ++ ?mode = sbrakeact(); mode:=mode
+    ++ ?mode = sbrakeact(); ?t < 1.3 & v > 5; mode:=mode
+
+    /* sbrakefull: Hold only if velocity > 5 */
     ++ ?mode = sbrakefull(); ?18 <= v & v <= 20 & t = 1.3; t:=0; mode:=ebrakeact()
     ++ ?mode = sbrakefull(); ?5 <= v & v <= 11 & t = 1.3; x:=0; mode:=normalPI()
-    ++ ?mode = sbrakefull(); mode:=mode
+    ++ ?mode = sbrakefull(); ?v > 5; mode:=mode
+
+    /* normalPI: Hold only if within velocity bounds (-15, 15) */
     ++ ?mode = normalPI(); ?13 <= v & v <= 15 & -500 <= x & x <= 500; t:=0; mode:=sbrakeact()
     ++ ?mode = normalPI(); ?-15 <= v & v <= -14 & -500 <= x & x <= 500; mode:=accelerate()
-    ++ ?mode = normalPI(); mode:=mode
+    ++ ?mode = normalPI(); ?v > -15 & v < 15; mode:=mode
+
+    /* accelerate: Hold only if velocity < -5 */
     ++ ?mode = accelerate(); ?-6 <= v & v <= -5 & -500 <= x & x <= 500; x:=0; mode:=normalPI()
-    ++ ?mode = accelerate(); mode:=mode
+    ++ ?mode = accelerate(); ?v < -5; mode:=mode
   };
 
   HP continuousDynamics ::= {
