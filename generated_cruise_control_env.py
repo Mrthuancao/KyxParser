@@ -1087,10 +1087,8 @@ class KeYmaeraGymEnv(gym.Env):
             for i, var_name in enumerate(self.action_variable_names):
                 self.current_state[var_name] = action_to_apply[i]
 
-        # Set dL 't' (time elapsed in current control step) to 0 at start of each step
-        # This is implicitly handled by the ODE solver's t_span starting from 0.
-        # The ODE system itself updates 't' from 0 to self.time_step.
-        # self.current_state['t'] will be updated by the ODE solver.
+        # The dL model resets its local clock before each control-cycle flow.
+        self.current_state['t'] = 0.0
         
         # Update dL 'T' (global time remaining) is handled by ODE `T' = -1`
 
@@ -1099,53 +1097,176 @@ class KeYmaeraGymEnv(gym.Env):
         
         t_span = (0, self.time_step) # Integrate over the control time step 'ep'
 
-        # Solve ODEs
-        sol = solve_ivp(self._get_ode_system, t_span, y0,
-                        method=self.ode_solver_method,
-                        max_step=self.ode_solver_step_size,
-                        rtol=self.ode_solver_tolerance,
-                        atol=self.ode_solver_tolerance)
+        ode_sympy_locals = {k: v for k, v in self.sympy_symbols.items()}
+        ode_sympy_locals.update({
+            'sympy': sympy,
+            'And': sympy.And,
+            'Le': sympy.Le,
+            'Ge': sympy.Ge,
+            'Lt': sympy.Lt,
+            'Gt': sympy.Gt,
+            'Float': sympy.Float,
+        })
+        for func_name in self.user_defined_functions:
+            ode_sympy_locals[func_name] = sympy.Function(func_name)
 
-        if sol.status == 0: # Success
+        constraint_sympy_expr = None
+        domain_comparisons = None
+        if self.differential_domain_constraint:
+            constraint_sympy_expr = sympy.sympify(
+                self.differential_domain_constraint,
+                locals=ode_sympy_locals,
+            )
+
+            def extract_domain_comparisons(expression):
+                if isinstance(expression, sympy.core.relational.Relational):
+                    if expression.rel_op in ('<', '<=', '>', '>='):
+                        return [expression]
+                    return None
+                if expression is sympy.true:
+                    return []
+                if isinstance(expression, sympy.And):
+                    comparisons = []
+                    for child in expression.args:
+                        child_comparisons = extract_domain_comparisons(child)
+                        if child_comparisons is None:
+                            return None
+                        comparisons.extend(child_comparisons)
+                    return comparisons
+                return None
+
+            domain_comparisons = extract_domain_comparisons(
+                constraint_sympy_expr
+            )
+            initial_subs = {
+                self.sympy_symbols[name]: value
+                for name, value in self.current_state.items()
+                if name in self.sympy_symbols
+            }
+            if not bool(self._evaluate_sympy_function_calls(
+                constraint_sympy_expr, initial_subs
+            )):
+                print(
+                    "Differential domain constraint is false at the start "
+                    f"of integration: {self.differential_domain_constraint}"
+                )
+                self.last_dynamics_failure_reason = "ode_domain_violation"
+                return True
+
+        events = []
+        event_comparisons = []
+        if domain_comparisons is not None:
+            snap_tolerance = max(1e-9, self.ode_solver_tolerance * 10)
+            event_epsilon = max(1e-12, self.ode_solver_tolerance * 1e-3)
+            for comparison in domain_comparisons:
+                exits_toward_positive = comparison.rel_op in ('<', '<=')
+                inside_sign = -1 if exits_toward_positive else 1
+                initial_boundary_value = float(
+                    self._evaluate_sympy_function_calls(
+                        comparison.lhs, initial_subs
+                    )
+                    - self._evaluate_sympy_function_calls(
+                        comparison.rhs, initial_subs
+                    )
+                )
+                initially_on_boundary = (
+                    abs(initial_boundary_value) <= snap_tolerance
+                )
+
+                def boundary(
+                    _time,
+                    values,
+                    comparison=comparison,
+                    inside_sign=inside_sign,
+                    initially_on_boundary=initially_on_boundary,
+                ):
+                    state = dict(self.current_state)
+                    state.update(zip(self.differential_variables, values))
+                    substitutions = {
+                        self.sympy_symbols[name]: value
+                        for name, value in state.items()
+                        if name in self.sympy_symbols
+                    }
+                    boundary_value = float(
+                        self._evaluate_sympy_function_calls(
+                            comparison.lhs, substitutions
+                        )
+                        - self._evaluate_sympy_function_calls(
+                            comparison.rhs, substitutions
+                        )
+                    )
+                    if (
+                        initially_on_boundary
+                        and abs(boundary_value) <= event_epsilon
+                    ):
+                        return inside_sign * event_epsilon
+                    return boundary_value
+
+                boundary.terminal = True
+                boundary.direction = 1 if exits_toward_positive else -1
+                events.append(boundary)
+                event_comparisons.append(comparison)
+        elif constraint_sympy_expr is not None:
+            self._debug_print(
+                "Evolution-domain event stopping only supports conjunctions "
+                "of inequalities; the final-state domain check remains active."
+            )
+
+        sol = solve_ivp(
+            self._get_ode_system,
+            t_span,
+            y0,
+            method=self.ode_solver_method,
+            max_step=self.ode_solver_step_size,
+            rtol=self.ode_solver_tolerance,
+            atol=self.ode_solver_tolerance,
+            events=events or None,
+        )
+
+        if sol.status >= 0: # Success or a terminal evolution-domain event
             # Update state with the last point from the solver
             for i, var_name in enumerate(self.differential_variables):
                 self.current_state[var_name] = sol.y[i, -1]
-            
-            # Update dL 't' to reflect the end of the control step
-            self.current_state['t'] = sol.t[-1] # Should be close to self.time_step
 
-            # Check differential domain constraint
-            if self.differential_domain_constraint:
-                # The domain constraint is a SymPy expression string, needs SymPy evaluation
-                # Prepare locals for SymPy eval
-                ode_sympy_locals = {k: v for k, v in self.sympy_symbols.items()}
-                ode_sympy_locals['sympy'] = sympy 
-                ode_sympy_locals['And'] = sympy.And # Explicitly add common sympy functions
-                ode_sympy_locals['Le'] = sympy.Le
-                ode_sympy_locals['Ge'] = sympy.Ge
-                ode_sympy_locals['Float'] = sympy.Float
-                for func_name in self.user_defined_functions:
-                    ode_sympy_locals[func_name] = sympy.Function(func_name)
-                
-                # Sympy-fy the constraint string
-                constraint_sympy_expr = sympy.sympify(self.differential_domain_constraint, locals=ode_sympy_locals)
+            for comparison, event_times in zip(event_comparisons, sol.t_events):
+                if not len(event_times):
+                    continue
+                substitutions = {
+                    self.sympy_symbols[name]: value
+                    for name, value in self.current_state.items()
+                    if name in self.sympy_symbols
+                }
+                if (
+                    isinstance(comparison.lhs, sympy.Symbol)
+                    and str(comparison.lhs) in self.differential_variables
+                ):
+                    self.current_state[str(comparison.lhs)] = float(
+                        self._evaluate_sympy_function_calls(
+                            comparison.rhs, substitutions
+                        )
+                    )
+                elif (
+                    isinstance(comparison.rhs, sympy.Symbol)
+                    and str(comparison.rhs) in self.differential_variables
+                ):
+                    self.current_state[str(comparison.rhs)] = float(
+                        self._evaluate_sympy_function_calls(
+                            comparison.lhs, substitutions
+                        )
+                    )
 
-                # Create substitution dictionary for concrete values
-                concrete_subs = {self.sympy_symbols[k]: v for k, v in self.current_state.items() if k in self.sympy_symbols}
+            # The solver time is the elapsed dL time, including early domain stops.
+            self.current_state['t'] = sol.t[-1]
 
-                # Helper to evaluate symbolic function calls within the SymPy expression
-                def evaluate_sympy_function_calls_for_constraint(sympy_expr_node, current_subs):
-                    if isinstance(sympy_expr_node, sympy.Function) and str(sympy_expr_node.func) in self.user_defined_functions:
-                        func_name = str(sympy_expr_node.func)
-                        evaluated_args = [evaluate_sympy_function_calls_for_constraint(arg, current_subs) for arg in sympy_expr_node.args]
-                        # self.user_defined_functions stores the bound methods, so no need to pass 'self' explicitly.
-                        return self.user_defined_functions[func_name](*evaluated_args) 
-                    if hasattr(sympy_expr_node, 'args'):
-                        return sympy_expr_node.func(*[evaluate_sympy_function_calls_for_constraint(arg, current_subs) for arg in sympy_expr_node.args])
-                    return sympy_expr_node.subs(current_subs)
-
-                # Evaluate the constraint
-                constraint_met = self._evaluate_sympy_function_calls(constraint_sympy_expr, concrete_subs)
+            if constraint_sympy_expr is not None:
+                concrete_subs = {
+                    self.sympy_symbols[name]: value
+                    for name, value in self.current_state.items()
+                    if name in self.sympy_symbols
+                }
+                constraint_met = self._evaluate_sympy_function_calls(
+                    constraint_sympy_expr, concrete_subs
+                )
 
                 if not bool(constraint_met): # Convert SymPy boolean to Python bool
                     print(f"Differential domain constraint violated: {self.differential_domain_constraint}")

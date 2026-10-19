@@ -102,6 +102,230 @@ def plot_training_curve(callback: EpisodeStatsCallback, output_path: Path) -> No
     print(f"Saved training curve: {output_path}")
 
 
+def plot_episode_trajectory(
+    result: dict,
+    output_path: Path,
+    policy_name: str = "PPO",
+) -> None:
+    """Plot a rollout's states, controller modes/actions, and per-step reward."""
+    states = result["state_history"]
+    steps = np.arange(len(states))
+    action_steps = np.arange(1, len(result["chosen_actions"]) + 1)
+    reached = result["reached_near_zero_speed"]
+    label = "REACHED |v| <= 1" if reached else "DID NOT REACH |v| <= 1"
+    transitions = {
+        transition["step"]: transition
+        for transition in result["mode_transitions"]
+    }
+
+    fig, axes = plt.subplots(5, 1, figsize=(11, 12), sharex=True)
+    axes[0].plot(steps, [state.get("v", np.nan) for state in states], label="Velocity v")
+    axes[0].axhspan(-1.0, 1.0, color="tab:green", alpha=0.15, label="Near-zero zone")
+    axes[0].axhline(0.0, color="black", linewidth=0.8)
+    axes[0].set_ylabel("Velocity")
+    axes[0].set_title(
+        f"{policy_name}, seed {result['seed']}: {label}; "
+        f"reason={result['termination_reason']}"
+    )
+    axes[0].legend(loc="best")
+
+    axes[1].plot(steps, [state.get("x", np.nan) for state in states], color="tab:blue")
+    axes[1].set_ylabel("Position error x")
+    axes[1].set_title("Position error")
+
+    axes[2].step(
+        steps,
+        [state.get("mode", np.nan) for state in states],
+        where="post",
+        color="tab:purple",
+    )
+    axes[2].set_ylabel("Mode")
+    axes[2].set_yticks(range(6))
+    axes[2].set_title("Controller mode")
+    for transition_step in transitions:
+        axes[2].axvline(transition_step, color="black", alpha=0.18, linewidth=0.8)
+
+    axes[3].step(
+        action_steps,
+        result["chosen_actions"],
+        where="post",
+        color="tab:orange",
+    )
+    axes[3].set_ylabel("Path ID")
+    axes[3].set_title("Selected controlFunc path")
+
+    axes[4].plot(
+        action_steps,
+        result["reward_history"],
+        color="tab:green",
+        label="Step reward",
+    )
+    axes[4].plot(
+        action_steps,
+        np.cumsum(result["reward_history"]),
+        color="tab:red",
+        alpha=0.8,
+        label="Cumulative reward",
+    )
+    axes[4].set_xlabel("Control step")
+    axes[4].set_ylabel("Reward")
+    axes[4].legend(loc="best")
+    axes[4].set_title(
+        f"Steps={result['steps']}, in-zone={result['steps_inside_zone']} "
+        f"({result['fraction_steps_inside_zone']:.1%}), "
+        f"longest run={result['longest_consecutive_inside_steps']} steps/"
+        f"{result['longest_consecutive_inside_simulation_time']:.3f}s, "
+        f"finished inside={result['final_inside_zone']}"
+    )
+
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=160)
+    plt.close(fig)
+    print(f"Saved cruise-control episode plot: {output_path}")
+
+
+def plot_representative_episodes(
+    results: list[dict],
+    output_dir: Path,
+    max_per_category: int = 2,
+) -> None:
+    """Plot up to two PPO episodes per near-zero reached/not-reached category."""
+    reached = [result for result in results if result["reached_near_zero_speed"]]
+    not_reached = [
+        result for result in results if not result["reached_near_zero_speed"]
+    ]
+    categories = (
+        (
+            "success",
+            sorted(
+                reached,
+                key=lambda result: (
+                    result["longest_consecutive_inside_simulation_time"],
+                    result["longest_consecutive_inside_steps"],
+                ),
+                reverse=True,
+            ),
+        ),
+        (
+            "failure",
+            sorted(
+                not_reached,
+                key=lambda result: result["total_reward"],
+            ),
+        ),
+    )
+    for category, episodes in categories:
+        if not episodes:
+            print(f"No PPO episode in category '{category}' to plot.")
+            continue
+        for index, result in enumerate(episodes[:max_per_category], start=1):
+            output_path = output_dir / (
+                "cruise_control_"
+                f"{category}_{index}_seed_{result['seed']}.png"
+            )
+            plot_episode_trajectory(result, output_path)
+
+
+def plot_evaluation_summary(
+    policy_results: list[dict],
+    baseline_results: list[dict],
+    output_path: Path,
+) -> None:
+    """Compare PPO and first-legal baseline on shared seeds and zone metrics."""
+    if not policy_results or len(policy_results) != len(baseline_results):
+        raise ValueError("Policy and baseline evaluations must be non-empty and aligned.")
+    if [result["seed"] for result in policy_results] != [
+        result["seed"] for result in baseline_results
+    ]:
+        raise ValueError("Policy and baseline evaluation seeds must match.")
+
+    indices = np.arange(1, len(policy_results) + 1)
+    width = 0.38
+    colors = {"PPO": "tab:blue", "First-legal baseline": "tab:orange"}
+
+    def grouped_bars(axis, policy_values, baseline_values, title, ylabel):
+        axis.bar(
+            indices - width / 2, policy_values, width,
+            label="PPO", color=colors["PPO"],
+        )
+        axis.bar(
+            indices + width / 2, baseline_values, width,
+            label="First-legal baseline", color=colors["First-legal baseline"],
+        )
+        axis.set_title(title)
+        axis.set_xlabel("Evaluation episode (paired seeds)")
+        axis.set_ylabel(ylabel)
+        axis.legend(fontsize="small")
+
+    fig, axes = plt.subplots(3, 2, figsize=(13, 12))
+    grouped_bars(
+        axes[0, 0],
+        [result["total_reward"] for result in policy_results],
+        [result["total_reward"] for result in baseline_results],
+        "Episode reward",
+        "Reward",
+    )
+    grouped_bars(
+        axes[0, 1],
+        [result["fraction_steps_inside_zone"] for result in policy_results],
+        [result["fraction_steps_inside_zone"] for result in baseline_results],
+        "Fraction of steps with |v| <= 1",
+        "Fraction",
+    )
+    grouped_bars(
+        axes[1, 0],
+        [
+            result["longest_consecutive_inside_simulation_time"]
+            for result in policy_results
+        ],
+        [
+            result["longest_consecutive_inside_simulation_time"]
+            for result in baseline_results
+        ],
+        "Longest consecutive near-zero run",
+        "Simulation time (s)",
+    )
+    grouped_bars(
+        axes[1, 1],
+        [int(result["final_inside_zone"]) for result in policy_results],
+        [int(result["final_inside_zone"]) for result in baseline_results],
+        "Finished inside |v| <= 1",
+        "Inside zone (0/1)",
+    )
+    axes[1, 1].set_ylim(-0.05, 1.15)
+
+    for label, results in (
+        ("PPO", policy_results),
+        ("First-legal baseline", baseline_results),
+    ):
+        path_counts = Counter(
+            action for result in results for action in result["chosen_actions"]
+        )
+        path_ids = sorted(path_counts)
+        axes[2, 0].plot(
+            path_ids,
+            [path_counts[path_id] for path_id in path_ids],
+            marker="o",
+            label=label,
+        )
+    axes[2, 0].set_title("Controller path selections")
+    axes[2, 0].set_xlabel("Path ID")
+    axes[2, 0].set_ylabel("Selections across episodes")
+    axes[2, 0].legend()
+
+    grouped_bars(
+        axes[2, 1],
+        [len(result["mode_transitions"]) for result in policy_results],
+        [len(result["mode_transitions"]) for result in baseline_results],
+        "Mode transitions per episode",
+        "Transitions",
+    )
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=160)
+    plt.close(fig)
+    print(f"Saved cruise-control evaluation summary: {output_path}")
+
+
 def _near_zero_zone_metrics(
     velocity_samples: list[float],
     simulation_times: list[float],
@@ -176,6 +400,7 @@ def evaluate_policy(env, model, episodes: int, seed: int) -> list[dict]:
                 float(info.get("simulation_elapsed_time", 0.0))
             ]
             chosen_actions = []
+            reward_history = []
             mode_transitions = []
             total_reward = 0.0
             terminated = truncated = False
@@ -205,6 +430,7 @@ def evaluate_policy(env, model, episodes: int, seed: int) -> list[dict]:
                 observation, reward, terminated, truncated, info = env.step(action)
                 progress.update(1)
                 total_reward += float(reward)
+                reward_history.append(float(reward))
                 chosen_actions.append(int(info["control_action"]))
                 current_state = dict(info["state"])
                 state_history.append(current_state)
@@ -246,6 +472,9 @@ def evaluate_policy(env, model, episodes: int, seed: int) -> list[dict]:
                 "truncated": truncated,
                 "termination_reason": info.get("termination_reason"),
                 "chosen_actions": chosen_actions,
+                "state_history": state_history,
+                "simulation_time_samples": simulation_time_samples,
+                "reward_history": reward_history,
                 "initial_state": state_history[0],
                 "final_state": state_history[-1],
             })
@@ -279,7 +508,7 @@ def save_evaluation(results: list[dict], output_path: Path) -> None:
             "chosen_actions",
             "initial_state",
             "final_state",
-        ])
+        ], extrasaction="ignore")
         writer.writeheader()
         for result in results:
             row = dict(result)
@@ -415,6 +644,13 @@ def main() -> None:
         )
     finally:
         eval_env.close()
+
+    plot_evaluation_summary(
+        results,
+        baseline_results,
+        args.out_dir / "cruise_control_evaluation_summary.png",
+    )
+    plot_representative_episodes(results, args.out_dir)
 
     rewards = [result["total_reward"] for result in results]
     lengths = [result["steps"] for result in results]

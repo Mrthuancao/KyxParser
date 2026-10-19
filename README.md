@@ -114,6 +114,17 @@ spent inside the zone, and whether the episode finishes inside it. In-zone
 simulation-time totals include only intervals whose consecutive sampled states
 are both inside the zone.
 
+Training also writes a reward/episode-length curve. Each evaluation run writes
+a paired PPO-vs-baseline summary plot for reward, near-zero occupancy, longest
+consecutive near-zero duration, finishing inside the zone, controller paths,
+and mode transitions. Up to two PPO rollout plots are saved for episodes that
+reach `|v| <= 1`, prioritizing the longest sustained in-zone runs, and up to two
+for episodes that never reach the zone. The trajectory plots show velocity and
+the near-zero band, position error, controller mode, selected path, and rewards.
+Here, "success" means only that the rollout reached the near-zero zone at least
+once; use occupancy, consecutive duration, and final-in-zone metrics to judge
+whether the controller stayed there.
+
 To compare on a separate fixed seed range from the original `11` evaluation,
 use a new base seed; the evaluator starts at `--seed + 1000`. For example, this
 evaluates seeds `1100` through `1119`:
@@ -134,16 +145,26 @@ Train and evaluate the five masked discrete acceleration choices in
 .\.venv\Scripts\python.exe scripts\train_ppo_train_safety.py --timesteps 20000 --eval-episodes 20 --out-dir logs\train_safety_controlfunc --model-dir models\train_safety_controlfunc
 ```
 
-Training and evaluation show progress bars. The run saves the policy and plots in
-the specified output directories; the `em` program variable starts at zero to
-satisfy the model's initial condition while retaining its `[0, 1]` range for
-subsequent controller updates. Evaluation prints each episode's termination
-reason and final state, and saves per-episode diagnostics to JSON, including a
-configurable pre-failure trace of stopping margin, legal-action mask, selected
-branch, and state before/after each step. Evaluation disables the diverse-state
-buffer so `--eval-seed` produces reproducible initial-state samples. To inspect
-the saved policy without retraining and capture the same 20-step trace window
-for each invariant failure, run:
+Training and evaluation show progress bars. The run saves the policy and a
+two-panel training reward/episode-length plot in the specified output
+directories; the `em` program variable starts at zero to satisfy the model's
+initial condition while retaining its `[0, 1]` range for subsequent controller
+updates. Evaluation saves a summary plot of reward, episode length, minimum
+stopping margin, flow duration, controller action counts, and cumulative
+safety-pass rate. It also saves up to two full-trajectory plots for each
+safety-passing and safety-failing category, showing position, velocity,
+stopping margin, acceleration, action, and actual ODE flow duration. A
+safety-passing rollout means only that no tracked safety/integration failure
+occurred; reaching the episode limit is not proof of safety. If evaluation has
+no examples of one category, no plot for that category is created.
+
+Evaluation prints each episode's termination reason and final state, and saves
+per-episode diagnostics to JSON, including complete state/action trajectories
+and a configurable pre-failure trace of stopping margin, legal-action mask,
+selected branch, and state before/after each step. Evaluation disables the
+diverse-state buffer so `--eval-seed` produces reproducible initial-state
+samples. To inspect the saved policy without retraining and capture the same
+20-step trace window for each invariant failure, run:
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\train_ppo_train_safety.py --eval-only --eval-episodes 20 --eval-seed 1000 --trace-window-steps 20 --out-dir logs\train_safety_controlfunc\failure_traces_seed1000 --model-dir models\train_safety_controlfunc

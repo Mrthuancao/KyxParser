@@ -1,8 +1,8 @@
 """Train a mask-aware PPO agent on the generated `train_safety` Gym environment.
 
 Pipeline: parse train_safety.kyx -> generate Gym env -> wrap with Monitor -> train
-MaskablePPO -> plot the training reward curve -> evaluate with live progress bars ->
-plot the evaluation trajectory and print metrics.
+MaskablePPO -> plot training and evaluation summaries -> collect evaluation
+trajectories -> save representative safety-pass/failure plots and diagnostics.
 
 Run from project root (d:/Reinforcement learning/kyx_parser) in the .venv:
 
@@ -81,24 +81,212 @@ def moving_average(values, window):
 
 def plot_training_curve(callback: EpisodeStatsCallback, out_path: Path):
     rewards = callback.episode_rewards
+    lengths = callback.episode_lengths
     if not rewards:
         print("No episodes completed during training; skipping training curve plot.")
         return
     window = max(1, min(20, len(rewards) // 5))
-    fig, ax = plt.subplots(figsize=(9, 5))
-    ax.plot(rewards, alpha=0.3, label='Episode reward')
+    fig, axes = plt.subplots(2, 1, figsize=(9, 8), sharex=True)
+
+    axes[0].plot(rewards, alpha=0.3, label='Episode reward')
     ma = moving_average(rewards, window)
     if len(ma) > 0:
         offset = len(rewards) - len(ma)
-        ax.plot(range(offset, len(rewards)), ma, color='tab:red', label=f'Moving average (w={window})')
-    ax.set_xlabel('Episode')
-    ax.set_ylabel('Total episode reward')
-    ax.set_title('PPO training reward per episode')
-    ax.legend()
+        axes[0].plot(
+            range(offset, len(rewards)), ma, color='tab:red',
+            label=f'Moving average (w={window})',
+        )
+    axes[0].set_ylabel('Total episode reward')
+    axes[0].set_title('Training reward per episode')
+    axes[0].legend()
+
+    axes[1].plot(lengths, alpha=0.3, color='tab:purple', label='Episode length')
+    ma_len = moving_average(lengths, window)
+    if len(ma_len) > 0:
+        offset = len(lengths) - len(ma_len)
+        axes[1].plot(
+            range(offset, len(lengths)), ma_len, color='tab:orange',
+            label=f'Moving average (w={window})',
+        )
+    axes[1].set_xlabel('Episode')
+    axes[1].set_ylabel('Episode length (steps)')
+    axes[1].set_title('Training episode length')
+    axes[1].legend()
+
     fig.tight_layout()
     fig.savefig(out_path)
     plt.close(fig)
     print(f"Saved training curve to {out_path}")
+
+
+def plot_safety_episode(episode: dict, out_path: Path):
+    """Plot the state, invariant margin, and actions from one complete rollout."""
+    states = episode['state_history']
+    actions = episode['action_history']
+    state_steps = np.arange(len(states))
+    action_steps = np.arange(1, len(actions) + 1)
+    margins = [_stopping_margin(state) for state in states]
+    safety_label = 'SAFETY FAILURE' if episode['safety_failure'] else 'NO SAFETY FAILURE'
+
+    fig, axes = plt.subplots(6, 1, figsize=(11, 14), sharex=True)
+    axes[0].plot(state_steps, [s.get('z', np.nan) for s in states], label='Position z')
+    axes[0].plot(state_steps, [s.get('m', np.nan) for s in states], label='Authority limit m')
+    axes[0].set_ylabel('Position')
+    axes[0].set_title(
+        f"Seed {episode['seed']}: {safety_label}; "
+        f"reason={episode['termination_reason']}"
+    )
+    axes[0].legend(loc='best')
+
+    axes[1].plot(state_steps, [s.get('v', np.nan) for s in states], label='Velocity v')
+    axes[1].plot(state_steps, [s.get('d', np.nan) for s in states], label='Permitted speed d')
+    axes[1].set_ylabel('Speed')
+    axes[1].legend(loc='best')
+
+    axes[2].plot(state_steps, margins, color='tab:red', label='Stopping margin')
+    axes[2].axhline(0.0, color='black', linestyle='--', linewidth=1, label='Invariant boundary')
+    axes[2].set_ylabel('Margin')
+    axes[2].legend(loc='best')
+
+    axes[3].step(
+        action_steps,
+        [action['acceleration'] for action in actions],
+        where='post',
+        color='tab:orange',
+        label='Acceleration a',
+    )
+    axes[3].set_ylabel('Acceleration')
+    axes[3].legend(loc='best')
+
+    axes[4].step(
+        action_steps,
+        [action['action'] for action in actions],
+        where='post',
+        color='tab:blue',
+        label='Controller action ID',
+    )
+    axes[4].set_xlabel('Control step')
+    axes[4].set_ylabel('Action ID')
+    axes[4].set_yticks(range(5))
+    axes[4].set_title(
+        f"Reward={episode['total_reward']:.2f}, "
+        f"steps={episode['steps']}, "
+        f"final flow duration={actions[-1]['flow_duration']:.3g}s"
+        if actions else
+        f"Reward={episode['total_reward']:.2f}, steps=0"
+    )
+    axes[5].plot(
+        action_steps,
+        [action['flow_duration'] for action in actions],
+        color='tab:cyan',
+        label='Actual ODE flow duration',
+    )
+    axes[5].set_xlabel('Control step')
+    axes[5].set_ylabel('Flow (s)')
+    axes[5].legend(loc='best')
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=160)
+    plt.close(fig)
+    print(f"Saved safety episode plot to {out_path}")
+
+
+def plot_evaluation_summary(episodes: list, out_path: Path):
+    """Summarize evaluation reward, safety margin, episode length, and actions."""
+    if not episodes:
+        print("No evaluation episodes; skipping evaluation summary plot.")
+        return
+
+    indices = np.arange(1, len(episodes) + 1)
+    rewards = [episode['total_reward'] for episode in episodes]
+    lengths = [episode['steps'] for episode in episodes]
+    minimum_margins = [
+        min(_stopping_margin(state) for state in episode['state_history'])
+        for episode in episodes
+    ]
+    safety_failures = [episode['safety_failure'] for episode in episodes]
+    colors = ['tab:red' if failed else 'tab:green' for failed in safety_failures]
+    total_failures = sum(safety_failures)
+
+    action_counts = Counter(
+        action['action']
+        for episode in episodes
+        for action in episode['action_history']
+    )
+    mean_flow_durations = [
+        float(np.mean([
+            action['flow_duration']
+            for action in episode['action_history']
+        ])) if episode['action_history'] else 0.0
+        for episode in episodes
+    ]
+    action_ids = list(range(5))
+    action_labels = [
+        'brake (v<=vdes)', 'coast (v<=vdes)', 'accelerate',
+        'brake (v>vdes)', 'coast (v>vdes)',
+    ]
+
+    fig, axes = plt.subplots(3, 2, figsize=(12, 11))
+    axes[0, 0].bar(indices, rewards, color=colors)
+    axes[0, 0].axhline(np.mean(rewards), color='black', linestyle='--')
+    axes[0, 0].set_title('Evaluation reward (red = safety failure)')
+    axes[0, 0].set_xlabel('Episode')
+    axes[0, 0].set_ylabel('Total reward')
+
+    axes[0, 1].bar(indices, lengths, color=colors)
+    axes[0, 1].set_title('Evaluation episode length')
+    axes[0, 1].set_xlabel('Episode')
+    axes[0, 1].set_ylabel('Steps')
+
+    axes[1, 0].bar(indices, minimum_margins, color=colors)
+    axes[1, 0].axhline(0.0, color='black', linestyle='--', label='Invariant boundary')
+    axes[1, 0].set_title('Minimum stopping margin per episode')
+    axes[1, 0].set_xlabel('Episode')
+    axes[1, 0].set_ylabel('Minimum margin')
+    axes[1, 0].legend()
+
+    axes[1, 1].bar(indices, mean_flow_durations, color=colors)
+    axes[1, 1].set_title('Mean ODE flow duration per control step')
+    axes[1, 1].set_xlabel('Episode')
+    axes[1, 1].set_ylabel('Duration (s)')
+
+    axes[2, 0].bar(action_ids, [action_counts.get(action, 0) for action in action_ids])
+    axes[2, 0].set_title('Controller action counts')
+    axes[2, 0].set_xlabel('Action')
+    axes[2, 0].set_ylabel('Selections')
+    axes[2, 0].set_xticks(action_ids)
+    axes[2, 0].set_xticklabels(action_labels, rotation=25, ha='right')
+
+    cumulative_pass_rate = np.cumsum([not failed for failed in safety_failures]) / indices
+    axes[2, 1].plot(indices, cumulative_pass_rate, marker='o', color='tab:blue')
+    axes[2, 1].set_ylim(-0.05, 1.05)
+    axes[2, 1].set_title('Cumulative safety-pass rate')
+    axes[2, 1].set_xlabel('Episode')
+    axes[2, 1].set_ylabel('Pass rate')
+
+    fig.suptitle(
+        f"Evaluation summary: {total_failures}/{len(episodes)} safety failures",
+        fontsize=14,
+    )
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=160)
+    plt.close(fig)
+    print(f"Saved evaluation summary plot to {out_path}")
+
+
+def plot_representative_episodes(episodes: list, out_dir: Path, model_stem: str):
+    """Save up to two safety-pass and two safety-failure trajectories."""
+    categories = (
+        ('safety_pass', [episode for episode in episodes if not episode['safety_failure']]),
+        ('safety_failure', [episode for episode in episodes if episode['safety_failure']]),
+    )
+    for category, selected in categories:
+        for index, episode in enumerate(selected[:2], start=1):
+            out_path = out_dir / (
+                f"{model_stem}_{category}_{index}_seed_{episode['seed']}.png"
+            )
+            plot_safety_episode(episode, out_path)
+        if not selected:
+            print(f"No {category.replace('_', ' ')} episode available to plot.")
 
 
 def run_eval_episode(env, model, out_path: Path, seed: int = 999):
@@ -207,6 +395,8 @@ def evaluate_policy_metrics(
             step = 0
             info = reset_info
             recent_steps = deque(maxlen=trace_window_steps)
+            state_history = [dict(reset_info.get('state', {}))]
+            action_history = []
             progress.set_description(
                 f"Policy evaluation ({episode_index + 1}/{n_episodes})"
             )
@@ -228,6 +418,16 @@ def evaluate_policy_metrics(
                 total_reward += reward
                 step += 1
                 post_state = dict(info.get('state', {}))
+                state_history.append(post_state)
+                action_history.append({
+                    'step': step,
+                    'action': selected_action,
+                    'branch': _control_branch_description(selected_action),
+                    'acceleration': float(post_state.get('a', np.nan)),
+                    'flow_duration': float(post_state.get('t', np.nan)),
+                    'reward': float(reward),
+                    'legal_action_mask': action_mask.tolist(),
+                })
                 recent_steps.append({
                     'step': step,
                     'pre_state': pre_state,
@@ -263,6 +463,8 @@ def evaluate_policy_metrics(
             safety_failure = termination_reason in {
                 'model_loop_invariant_violation',
                 'model_safety_postcondition_violation',
+                'ode_domain_violation',
+                'ode_solver_failure',
             }
             if safety_failure:
                 safety_violations += 1
@@ -278,6 +480,8 @@ def evaluate_policy_metrics(
                 'ode_failure_reason': info.get('ode_failure_reason'),
                 'final_state': final_state,
                 'safety_failure': safety_failure,
+                'state_history': state_history,
+                'action_history': action_history,
                 'failure_trace': (
                     list(recent_steps) if safety_failure else []
                 ),
@@ -286,7 +490,33 @@ def evaluate_policy_metrics(
     print("\n=== Evaluation metrics over {} episodes ===".format(n_episodes))
     print(f"Mean reward: {np.mean(rewards):.3f} +/- {np.std(rewards):.3f}")
     print(f"Mean episode length: {np.mean(lengths):.1f} +/- {np.std(lengths):.1f}")
-    print(f"Safety predicate/invariant failures: {safety_violations}/{n_episodes}")
+    print(f"Safety/integration failures: {safety_violations}/{n_episodes}")
+    if episode_results:
+        state_histories = [episode['state_history'] for episode in episode_results]
+        episode_margins = [
+            [_stopping_margin(state) for state in history]
+            for history in state_histories
+        ]
+        print(
+            "Minimum stopping margin: "
+            f"{min(min(margins) for margins in episode_margins):.6f}"
+        )
+        flow_durations = [
+            action['flow_duration']
+            for result in episode_results
+            for action in result['action_history']
+        ]
+        if flow_durations:
+            print(
+                "Mean ODE flow duration per action: "
+                f"{np.mean(flow_durations):.6g}s"
+            )
+        action_counts = Counter(
+            action['action']
+            for episode in episode_results
+            for action in episode['action_history']
+        )
+        print(f"Controller action counts: {dict(action_counts)}")
     print(
         "Termination reasons: "
         f"{dict(Counter(str(result['termination_reason']) for result in episode_results))}"
@@ -412,6 +642,16 @@ def main():
         trace_window_steps=args.trace_window_steps,
     )
     eval_env.close()
+    model_stem = args.dl_path.stem.lower()
+    plot_evaluation_summary(
+        evaluation['episodes'],
+        args.out_dir / f"{model_stem}_evaluation_summary.png",
+    )
+    plot_representative_episodes(
+        evaluation['episodes'],
+        args.out_dir,
+        model_stem,
+    )
     diagnostics_path = args.out_dir / 'train_safety_evaluation_episodes.json'
     with diagnostics_path.open('w', encoding='utf-8') as diagnostics_file:
         json.dump(
