@@ -5,10 +5,11 @@ The primary objective of this evaluation is to demonstrate that our proposed par
 ## 5.1 Experimental Setup
 All experiments were conducted using the environment architecture defined by our transpiler. 
 *   **Physics Engine:** Continuous dynamics were simulated using the `scipy.integrate.solve_ivp` solver, governed by the ODEs extracted from the `stepFunc` block.
-*   **Initial State Sampling:** Each episode was initialized using our SMT-seeded strategy. The Z3 solver sampled states from the state space \(S\) that satisfied the `assumptions(...)` predicate.
-*   **Training Algorithm:** We utilized Proximal Policy Optimization (PPO), a standard policy gradient method, with a constant learning rate of \(3 \times 10^{-4}\).
-*   **Reward Mapping:** The reward function was synthesized from the `@safety` and `@progress` annotations within the formal model.
+*   **Initial State Sampling:** Initial states were drawn from a Z3-populated, diverse state buffer subject to the model's `assumptions(...)` predicate.
+*   **Reward Mapping:** For Car 2, reward and termination behavior came from the model's `@safety` and `@progress` annotations. The training script did not add separate reward-shaping terms or an extra ODE-failure penalty.
 *   **MDP Formulation:** The environment was modeled as a Markov Decision Process (MDP), where the state space \(S\) and action space \(A\) are derived directly from the \(\text{d}\mathcal{L}\) program variables and the `controlFunc` choices, respectively.
+
+For the Car 2 waypoint-and-deadline experiment (Test 3), the observation contains the six model variables \((x_r, v_r, a_r, x_g, t, T)\); the training script adds no derived features or normalization. It uses Stable-Baselines3 PPO with `MaskablePPO` by default, masking `controlFunc` branches whose guards are false. Training defaults to 10,000 environment timesteps, the SB3 default constant learning rate of \(3 \times 10^{-4}\), and an entropy coefficient of \(0.01\). Evaluation uses deterministic actions over 20 episodes by default. The training count is timesteps, not episodes.
 
 ## 5.2 Test 1: Validating Safety via the "Safe-Lock" Phenomenon
 Our first experiment utilized a purely safety-oriented model (*Theorem 1: Static Safety*). The objective was to verify if the parser correctly translated the collision avoidance invariant \(\textit{isSafe}\) into a termination signal.
@@ -37,26 +38,12 @@ In the second stage, we conducted a diagnostic stress test to verify the integra
 
 ![Test 1 forced states](test1_forced_states.png)
 
-## 5.4 Test 3: Synthesis of Liveness and Temporal Deadlines
-The final experiment evaluated the parser’s ability to handle complex temporal logic (*Theorem 14: Reach waypoint with deadline*). This model introduced a goal area (\(G_{\Delta}\)) and a global deadline (\(T\)).
+## 5.4 Test 3: Car 2 Waypoint Reachability with a Deadline
+Test 3 uses the Car 2 model for *Theorem 14: Reach waypoint with deadline*. The robot moves along one dimension toward the interval defined by `waypointStartDist(xg)` and `waypointEndDist(xg)`. Its loop invariant constrains velocity, stopping distance, and the remaining deadline \(T\).
 
-### 5.4.1 Emergence of the Trapezoidal Velocity Profile
-As shown in the "Agent State Evolution" (Fig. 5.2), the agent successfully learned a **Trapezoidal Velocity Profile**. This is a classic optimal control shape consisting of three distinct phases:
-1.  **Acceleration Phase:** The agent utilizes the acceleration branch (\(a := A\)) to reach a cruising speed.
-2.  **Coast/Steady Phase:** The agent maintains velocity to maximize distance covered.
-3.  **Deceleration Phase:** The agent switches to the braking branch (\(a := -b\)) at the precise moment required to ensure it stops within the goal area.
+The policy selects among four guarded `controlFunc` branches: brake in the waypoint region, remain stopped there, accelerate when the guard permits, or coast when acceleration is not permitted. In the default training configuration, `MaskablePPO` applies these guards as an action mask. The environment monitors the loop invariant and the `ensure` predicate; the model annotations define the safety penalty and success/failure termination behavior.
 
-The emergence of this profile is significant because the agent was never "told" to follow a trapezoidal curve; it discovered this strategy as the only way to satisfy the safety constraints while meeting the deadline.
-
-![Test 4 states](test4_states.png)
-
-### 5.4.2 Deadline Management
-The agent demonstrated an internalization of the temporal constraint \(T\). The agent effectively managed its "time budget," accelerating enough to meet the deadline but not so much that it violated the braking safety buffer. This proves that the RL agent can navigate the narrow "logical corridor" defined by the loop invariant:
-
-\[ \textit{loopinv} \equiv (x_r \leq \textit{waypointStart} \implies (\text{TimeRemaining} > \text{TimeToReach})) \]
-
-
-![Test 4 training](test4_training.png)
+The training script records episode rewards and lengths, then evaluates the policy deterministically and reports waypoint successes and termination reasons. Success rate is an empirical result for a particular trained model and evaluation run, not a fixed property of the environment. Report it with the checkpoint and evaluation episode count; the default is 20 episodes. Use the corresponding training and trajectory plots to support any claim about a learned velocity profile or deadline behavior rather than presenting a particular profile as guaranteed.
 
 
 ## 5.5 Quantitative Summary
@@ -65,9 +52,9 @@ The agent demonstrated an internalization of the temporal constraint \(T\). The 
 | :--- | :--- | :--- | :--- | :--- |
 | **Test 1** | Static (Stay Still) | Absolute | None | 100% (Trivial) |
 | **Test 2** | Aggressive (Forced Accel) | Failed | High | 0% (Safety Violation) |
-| **Test 3** | **Optimal (Trapezoidal)** | **Verified** | **Timed Success** | **68%** |
+| **Test 3** | Guard-masked PPO over Car 2 controller branches | Invariant monitored at runtime | Waypoint success measured per evaluation run | Run-specific (20 episodes by default) |
 
-**Note on Success Rates:** Unlike standard RL where success is often 100%, our environment enforces "Hard Safety." A single-step violation of the formal invariant results in immediate episode truncation. A 68% success rate indicates the agent has learned to navigate the extreme edges of the proven safe state space.
+**Note on Success Rates:** Success is measured by evaluating the trained policy against the model's `ensure` predicate. Report the result for the exact checkpoint and evaluation run; a runtime success rate is not itself a formal verification result.
 
 ## 5.6 Conclusion of Evaluation
-The evaluation confirms that our parser system successfully unifies formal safety with RL performance. By mapping the KeYmaera X AST to a Gymnasium MDP, we enabled the agent to learn a control policy that remains within the safety envelopes proven in the formal model. The emergence of the trapezoidal velocity profile serves as a "proof-of-concept" that formal logic can act as a high-fidelity guide for complex, time-sensitive RL behavior.
+These experiments assess the generated Gymnasium environment's ability to expose model dynamics, controller choices, rewards, and runtime checks to an RL policy. In Test 3, the policy is evaluated for waypoint success under the model's deadline and invariant conditions. These empirical results demonstrate runtime integration of the formal model; they do not establish a formal safety proof or guarantee a particular learned trajectory.

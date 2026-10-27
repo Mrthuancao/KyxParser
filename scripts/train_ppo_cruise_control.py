@@ -189,7 +189,7 @@ def plot_representative_episodes(
     output_dir: Path,
     max_per_category: int = 2,
 ) -> None:
-    """Plot up to two PPO episodes per near-zero reached/not-reached category."""
+    """Plot representative PPO episodes for each near-zero reachability category."""
     reached = [result for result in results if result["reached_near_zero_speed"]]
     not_reached = [
         result for result in results if not result["reached_near_zero_speed"]
@@ -538,6 +538,12 @@ def main() -> None:
         help="Skip training and evaluate the saved policy against the first-legal baseline.",
     )
     parser.add_argument(
+        "--plots-per-category",
+        type=int,
+        default=2,
+        help="Maximum representative PPO episodes to plot per reachability category.",
+    )
+    parser.add_argument(
         "--max-episode-steps",
         type=int,
         default=200,
@@ -557,6 +563,8 @@ def main() -> None:
         parser.error("--timesteps must be at least 1")
     if args.eval_episodes < 1:
         parser.error("--eval-episodes must be at least 1")
+    if args.plots_per_category < 1:
+        parser.error("--plots-per-category must be at least 1")
     if args.max_episode_steps < 1:
         parser.error("--max-episode-steps must be at least 1")
     if not args.model.is_file():
@@ -650,7 +658,9 @@ def main() -> None:
         baseline_results,
         args.out_dir / "cruise_control_evaluation_summary.png",
     )
-    plot_representative_episodes(results, args.out_dir)
+    plot_representative_episodes(
+        results, args.out_dir, max_per_category=args.plots_per_category
+    )
 
     rewards = [result["total_reward"] for result in results]
     lengths = [result["steps"] for result in results]
