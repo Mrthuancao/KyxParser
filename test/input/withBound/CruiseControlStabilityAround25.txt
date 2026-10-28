@@ -125,9 +125,13 @@ Definitions
 End.
 
 ProgramVariables
+  // @var: bound=[-500:500], plot=line, def="position error"
   Real x;
+  // @var: bound=[0:2.5], plot=line, def="elapsed time in the active braking phase"
   Real t;
+  // @var: bound=[5:65], plot=line, def="cruise-control velocity"
   Real v;
+  // @var: bound=[0:5], plot=hist, def="active controller mode"
   Real mode;
 End.
 

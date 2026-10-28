@@ -158,6 +158,34 @@ evaluates seeds `1100` through `1119`:
 This trains on the generated simulation and is not evidence that the quantified
 stability theorem is proved.
 
+### Training the Cruise-Control Model Centered at 25
+
+The separate `CruiseControlStabilityAround25.txt` model uses
+`nearTargetSpeed()`, equivalent to `abs(v - 25) <= 1`. Train and evaluate PPO
+with:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\train_ppo_cruise_control_around25.py --timesteps 10000 --eval-episodes 20
+```
+
+By default, the trainer evaluates the `[24, 26]` target band and lets the
+generated environment sample initial states from the modal's `@var` bounds
+(including `v` in `[5, 65]`). It does not override initial velocity, position,
+or mode sampling. The target band corresponds to the model's
+`nearTargetSpeed()` predicate. The trainer stores its policy, generated
+environment, CSVs, and plots separately under `models/cruise_control_around25/`,
+`generated_cruise_control_around25_env.py`, and `logs/cruise_control_around25/`.
+Use `--eval-only` to evaluate the saved policy; `--target-speed-min` and
+`--target-speed-max` adjust the evaluation target band only.
+
+The pipeline plots training reward/episode length, paired PPO versus first-legal
+baseline metrics, representative rollouts, and the annotated `cruiseSafe`
+invariant rate. The default target band is derived from `nearTargetSpeed`; the
+safety invariant is reported independently. The modal theorem's quantified
+premise is not a simulation proof. The trainer prints legal-choice counts
+observed over sample resets and warns when the sampled resets offer no
+meaningful controller choice for PPO to learn.
+
 ### Training the Test 1 Static-Safety Controller
 
 Train and evaluate a masked PPO policy on the planar robot model in
