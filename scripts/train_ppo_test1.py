@@ -15,13 +15,16 @@ import argparse
 import csv
 import importlib.util
 import json
+import math
 import sys
 from collections import Counter
 from pathlib import Path
+from types import MethodType
 
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.patches import Circle
 import numpy as np
 from sb3_contrib import MaskablePPO
 from stable_baselines3.common.callbacks import BaseCallback
@@ -36,6 +39,13 @@ if str(AST2) not in sys.path:
     sys.path.insert(0, str(AST2))
 
 from generator_core import generate_gym_environment_file  # pyright: ignore[reportMissingImports]
+from ast_config import Test  # pyright: ignore[reportMissingImports]
+
+# Zero-based ID of Test 1's third controlFunc alternative (a := A).
+ACCELERATION_PATH_ID = 2
+BASELINE_RADIUS = 512.0
+BASELINE_ARC_LENGTH = 70.0
+BASELINE_COLLISION_RADIUS = 1.0
 
 
 class EpisodeStatsCallback(BaseCallback):
@@ -98,6 +108,19 @@ def _sample_dx(env, sampled_direction: dict[str, float]) -> float:
 
 
 def _predicate(env, name: str, state: dict) -> bool:
+    if name == "isWellformedDir":
+        norm_squared = state["dx"] ** 2 + state["dy"] ** 2
+        return math.isclose(norm_squared, 1.0, rel_tol=0.0, abs_tol=1e-6)
+    if name == "loopinv":
+        return all(
+            _predicate(env, predicate_name, state)
+            for predicate_name in (
+                "isPhysicallyValid",
+                "isWellformedDir",
+                "isSafe",
+                "isEfficient",
+            )
+        )
     function = env.unwrapped.user_defined_functions.get(name)
     if function is None:
         raise RuntimeError(f"Generated Test 1 environment has no '{name}' predicate")
@@ -117,6 +140,134 @@ def _predicate(env, name: str, state: dict) -> bool:
         raise RuntimeError(
             f"Cannot evaluate Test 1 predicate '{name}': state is missing {exc}"
         ) from exc
+
+
+def _remaining_safety_distance(env, state: dict) -> float:
+    stop_dist = env.unwrapped.user_defined_functions.get("stopDist")
+    if stop_dist is None:
+        raise RuntimeError("Generated Test 1 environment has no 'stopDist' function")
+    axis_clearance = max(
+        abs(state["x"] - state["xo"]),
+        abs(state["y"] - state["yo"]),
+    )
+    return float(axis_clearance - stop_dist(state["v"]))
+
+
+def _configure_comparison_initial_state_sampling(env) -> tuple[float, float]:
+    raw_env = env.unwrapped
+    start_x, start_y = 10.0, 50.0
+    theta = BASELINE_ARC_LENGTH / BASELINE_RADIUS
+    obstacle_x = start_x + BASELINE_RADIUS * math.sin(theta)
+    obstacle_y = start_y + BASELINE_RADIUS * (1.0 - math.cos(theta))
+    raw_env.initial_state_samplers.update({
+        "x": lambda: start_x,
+        "y": lambda: start_y,
+        "v": lambda: 0.0,
+        "a": lambda: 0.0,
+        "dx": lambda: 1.0,
+        "dy": lambda: 0.0,
+        "w": lambda: 0.0,
+        "r": lambda: BASELINE_RADIUS,
+        "xo": lambda: obstacle_x,
+        "yo": lambda: obstacle_y,
+        "t": lambda: 0.0,
+    })
+    return obstacle_x, obstacle_y
+
+
+def _configure_forced_acceleration_baseline(
+    env, obstacle: tuple[float, float]
+) -> None:
+    raw_env = env.unwrapped
+    obstacle_x, obstacle_y = obstacle
+    raw_env.config["termination_condition_body"] = "False"
+
+    def sample_nondeterministic_assignment(var_name: str) -> float:
+        if var_name == "r":
+            return BASELINE_RADIUS
+        if var_name == "w":
+            return _curvature_rate_for_velocity(
+                float(raw_env.current_state["v"]), BASELINE_RADIUS
+            )
+        if var_name == "xo":
+            return obstacle_x
+        if var_name == "yo":
+            return obstacle_y
+        raise ValueError(
+            f"Unexpected Test 1 baseline nondeterministic variable: {var_name}"
+        )
+
+    raw_env._nondeterministic_assignment_handler = (
+        sample_nondeterministic_assignment
+    )
+    execute_hp_node = raw_env._execute_hp_node
+
+    def execute_without_safety_selection_guard(
+        self, hp_node, choice_path=(), choice_cursor=None
+    ):
+        if (
+            isinstance(hp_node, Test)
+            and _ast_contains_function_call(
+                hp_node.condition, "admissibleSeparation"
+            )
+        ):
+            return {"terminated": False, "reward_delta": 0.0, "info": ""}
+        return execute_hp_node(hp_node, choice_path, choice_cursor)
+
+    raw_env._execute_hp_node = MethodType(
+        execute_without_safety_selection_guard, raw_env
+    )
+
+
+def _ast_contains_function_call(node, function_name: str) -> bool:
+    if type(node).__name__ == "FunctionCall":
+        if getattr(node, "name", None) == function_name:
+            return True
+    if isinstance(node, (list, tuple)):
+        return any(_ast_contains_function_call(child, function_name) for child in node)
+    if hasattr(node, "__dict__"):
+        return any(
+            _ast_contains_function_call(child, function_name)
+            for child in vars(node).values()
+        )
+    return False
+
+
+def _curvature_rate_for_velocity(velocity: float, radius: float) -> float:
+    quotient = velocity / radius
+    candidates = (
+        quotient,
+        math.nextafter(quotient, math.inf),
+        math.nextafter(quotient, -math.inf),
+    )
+    for candidate in candidates:
+        if radius * candidate == velocity:
+            return candidate
+    raise ArithmeticError(
+        f"Could not represent w satisfying r*w=v for v={velocity}, r={radius}."
+    )
+
+
+def _segment_distance_to_obstacle(
+    start: dict, end: dict, obstacle: tuple[float, float]
+) -> float:
+    start_xy = np.array([start["x"], start["y"]], dtype=float)
+    end_xy = np.array([end["x"], end["y"]], dtype=float)
+    obstacle_xy = np.asarray(obstacle, dtype=float)
+    segment = end_xy - start_xy
+    segment_length_squared = float(np.dot(segment, segment))
+    if segment_length_squared == 0.0:
+        closest = start_xy
+    else:
+        fraction = float(
+            np.clip(
+                np.dot(obstacle_xy - start_xy, segment) / segment_length_squared,
+                0.0,
+                1.0,
+            )
+        )
+        closest = start_xy + fraction * segment
+    return float(np.linalg.norm(obstacle_xy - closest))
 
 
 def plot_training_curve(callback: EpisodeStatsCallback, output_path: Path) -> None:
@@ -149,7 +300,14 @@ def plot_training_curve(callback: EpisodeStatsCallback, output_path: Path) -> No
     print(f"Saved training curve: {output_path}")
 
 
-def collect_episodes(env, model, count: int, seed: int) -> list[dict]:
+def collect_episodes(
+    env,
+    model,
+    count: int,
+    seed: int,
+    forced_action: int | None = None,
+    collision_obstacle: tuple[float, float] | None = None,
+) -> list[dict]:
     episodes = []
     max_steps = int(env.unwrapped.max_episode_steps)
     for episode_index in range(count):
@@ -159,26 +317,39 @@ def collect_episodes(env, model, count: int, seed: int) -> list[dict]:
         actions: list[dict] = []
         terminated = truncated = False
         total_reward = 0.0
+        collision_detected = False
 
         while not (terminated or truncated):
-            mask = env.unwrapped.action_masks()
-            if not mask.any():
-                raise RuntimeError(
-                    "Test 1 returned an empty legal-action mask during evaluation."
+            if forced_action is None:
+                mask = env.unwrapped.action_masks()
+                if not mask.any():
+                    raise RuntimeError(
+                        "Test 1 returned an empty legal-action mask during evaluation."
+                    )
+                action, _ = model.predict(
+                    observation, deterministic=True, action_masks=mask
                 )
-            action, _ = model.predict(
-                observation, deterministic=True, action_masks=mask
-            )
+            else:
+                action = int(forced_action)
             observation, reward, terminated, truncated, info = env.step(action)
+            next_state = dict(info["state"])
             path_id = info.get("control_action")
             actions.append({
                 "path_id": path_id,
                 "policy_action": int(np.asarray(action).reshape(-1)[0]),
                 "control_flow_info": info.get("control_flow_info"),
             })
-            states.append(dict(info["state"]))
+            states.append(next_state)
             rewards.append(float(reward))
             total_reward += float(reward)
+            if (
+                collision_obstacle is not None
+                and _segment_distance_to_obstacle(
+                    states[-2], next_state, collision_obstacle
+                ) <= BASELINE_COLLISION_RADIUS
+            ):
+                collision_detected = True
+                terminated = True
             if len(actions) > max_steps:
                 raise RuntimeError(
                     "Test 1 exceeded max_episode_steps without terminating or truncating."
@@ -187,9 +358,16 @@ def collect_episodes(env, model, count: int, seed: int) -> list[dict]:
         invariant_values = [
             _predicate(env, "loopinv", state) for state in states
         ]
+        safety_distance_history = [
+            _remaining_safety_distance(env, state) for state in states
+        ]
         initial_ensure = _predicate(env, "ensure", states[0])
         success = any(_predicate(env, "ensure", state) for state in states[1:])
-        termination_reason = info.get("termination_reason")
+        termination_reason = (
+            "baseline_collision"
+            if collision_detected
+            else info.get("termination_reason")
+        )
         if termination_reason is None:
             termination_reason = (
                 "time_limit_truncation" if truncated else "stopped_without_reason"
@@ -198,12 +376,14 @@ def collect_episodes(env, model, count: int, seed: int) -> list[dict]:
             "episode": episode_index + 1,
             "seed": seed + episode_index,
             "state_history": states,
+            "remaining_safety_distance_history": safety_distance_history,
             "reward_history": rewards,
             "chosen_actions": actions,
             "success": success,
             "initial_ensure": initial_ensure,
             "initial_invariant": invariant_values[0],
             "invariant_violated": not all(invariant_values),
+            "collision_detected": collision_detected,
             "total_reward": total_reward,
             "steps": len(actions),
             "terminated": terminated,
@@ -218,7 +398,7 @@ def plot_episode(episode: dict, output_path: Path) -> None:
     states = episode["state_history"]
     steps = np.arange(len(states))
     actions = episode["chosen_actions"]
-    fig, axes = plt.subplots(5, 1, figsize=(10, 13), sharex=True)
+    fig, axes = plt.subplots(6, 1, figsize=(10, 15), sharex=True)
 
     axes[0].plot(
         [state["x"] for state in states],
@@ -230,6 +410,14 @@ def plot_episode(episode: dict, output_path: Path) -> None:
         [states[0]["xo"]], [states[0]["yo"]],
         marker="x", s=70, color="tab:red", label="Obstacle",
     )
+    axes[0].add_patch(Circle(
+        (states[0]["xo"], states[0]["yo"]),
+        BASELINE_COLLISION_RADIUS,
+        fill=False,
+        color="tab:red",
+        linestyle=":",
+        label="Baseline collision radius",
+    ))
     axes[0].set_xlabel("x")
     axes[0].set_ylabel("y")
     axes[0].set_title("Planar robot path")
@@ -240,27 +428,42 @@ def plot_episode(episode: dict, output_path: Path) -> None:
     axes[1].set_ylabel("Velocity / acceleration")
     axes[1].legend()
 
-    axes[2].plot(steps, [state["dx"] for state in states], label="dx")
-    axes[2].plot(steps, [state["dy"] for state in states], label="dy")
-    axes[2].set_ylabel("Direction")
+    axes[2].plot(
+        steps,
+        episode["remaining_safety_distance_history"],
+        color="tab:red",
+        label="Remaining safety distance",
+    )
+    axes[2].axhline(
+        0.0, color="black", linestyle="--", linewidth=1,
+        label="Safety boundary",
+    )
+    axes[2].set_ylabel("Distance margin")
+    axes[2].set_title("max(|x-xo|, |y-yo|) - stopDist(v)")
     axes[2].legend()
 
-    axes[3].plot(steps, [state["w"] for state in states], label="w")
-    axes[3].plot(steps, [state["r"] for state in states], label="r")
-    axes[3].set_ylabel("Turn rate / radius")
+    axes[3].plot(steps, [state["dx"] for state in states], label="dx")
+    axes[3].plot(steps, [state["dy"] for state in states], label="dy")
+    axes[3].set_ylabel("Direction")
     axes[3].legend()
 
-    axes[4].step(
+    axes[4].plot(steps, [state["w"] for state in states], label="w")
+    axes[4].plot(steps, [state["r"] for state in states], label="r")
+    axes[4].set_ylabel("Turn rate / radius")
+    axes[4].legend()
+
+    axes[5].step(
         np.arange(1, len(actions) + 1),
         [action["path_id"] for action in actions],
         where="post",
     )
-    axes[4].set_xlabel("Control step")
-    axes[4].set_ylabel("Path ID")
-    axes[4].set_title("Selected controlFunc branch")
+    axes[5].set_xlabel("Control step")
+    axes[5].set_ylabel("Path ID")
+    axes[5].set_title("Selected controlFunc branch")
     fig.suptitle(
         f"Episode {episode['episode']}: post-action ensure={episode['success']}, "
         f"loopinv violation={episode['invariant_violated']}, "
+        f"collision={episode['collision_detected']}, "
         f"reason={episode['termination_reason']}"
     )
     fig.tight_layout()
@@ -335,14 +538,22 @@ def save_evaluation(episodes: list[dict], output_dir: Path) -> None:
     csv_path = output_dir / "test1_evaluation.csv"
     fields = (
         "episode", "seed", "initial_ensure", "success", "initial_invariant",
-        "invariant_violated", "termination_reason", "terminated",
+        "invariant_violated", "collision_detected",
+        "minimum_remaining_safety_distance", "termination_reason", "terminated",
         "truncated", "steps", "total_reward", "chosen_actions", "final_state",
     )
     with csv_path.open("w", newline="", encoding="utf-8") as csv_file:
         writer = csv.DictWriter(csv_file, fieldnames=fields)
         writer.writeheader()
         for episode in episodes:
-            row = {key: episode[key] for key in fields}
+            row = {
+                key: episode[key]
+                for key in fields
+                if key != "minimum_remaining_safety_distance"
+            }
+            row["minimum_remaining_safety_distance"] = min(
+                episode["remaining_safety_distance_history"]
+            )
             row["chosen_actions"] = json.dumps(row["chosen_actions"])
             row["final_state"] = json.dumps(row["final_state"], sort_keys=True)
             writer.writerow(row)
@@ -360,6 +571,88 @@ def save_evaluation(episodes: list[dict], output_dir: Path) -> None:
     )
     print(f"Controller path counts: {dict(action_counts)}")
     print(f"Termination reasons: {dict(reasons)}")
+
+
+def save_policy_comparison(
+    policy_episodes: list[dict],
+    baseline_episodes: list[dict],
+    output_dir: Path,
+) -> None:
+    if not policy_episodes or not baseline_episodes:
+        raise ValueError("Policy comparison requires episodes for both policies.")
+
+    groups = (
+        ("PPO", policy_episodes),
+        ("Always acceleration (path 2)", baseline_episodes),
+    )
+    metrics = (
+        ("loop invariant held", lambda e: not e["invariant_violated"]),
+        ("post-action ensure", lambda e: e["success"]),
+        ("obstacle collision", lambda e: e["collision_detected"]),
+    )
+    fig, axes = plt.subplots(1, 3, figsize=(14, 5))
+    for axis, (metric_name, metric) in zip(axes, metrics):
+        rates = [
+            np.mean([metric(episode) for episode in episodes])
+            for _, episodes in groups
+        ]
+        axis.bar([name for name, _ in groups], rates, color=["tab:blue", "tab:red"])
+        axis.set_ylim(0, 1.05)
+        axis.set_ylabel("Episode rate")
+        axis.set_title(metric_name)
+        axis.tick_params(axis="x", labelrotation=15)
+    fig.suptitle("Test 1: PPO vs. forced-acceleration baseline")
+    fig.tight_layout()
+    plot_path = output_dir / "test1_policy_vs_acceleration_baseline.png"
+    fig.savefig(plot_path, dpi=160)
+    plt.close(fig)
+    print(f"Saved PPO/baseline comparison plot: {plot_path}")
+
+    csv_path = output_dir / "test1_policy_vs_acceleration_baseline.csv"
+    fields = (
+        "policy", "episode", "seed", "success", "invariant_violated",
+        "collision_detected", "minimum_remaining_safety_distance",
+        "steps", "total_reward", "termination_reason", "chosen_actions",
+        "final_state",
+    )
+    with csv_path.open("w", newline="", encoding="utf-8") as csv_file:
+        writer = csv.DictWriter(csv_file, fieldnames=fields)
+        writer.writeheader()
+        for policy_name, episodes in groups:
+            for episode in episodes:
+                writer.writerow({
+                    "policy": policy_name,
+                    "episode": episode["episode"],
+                    "seed": episode["seed"],
+                    "success": episode["success"],
+                    "invariant_violated": episode["invariant_violated"],
+                    "collision_detected": episode["collision_detected"],
+                    "minimum_remaining_safety_distance": min(
+                        episode["remaining_safety_distance_history"]
+                    ),
+                    "steps": episode["steps"],
+                    "total_reward": episode["total_reward"],
+                    "termination_reason": episode["termination_reason"],
+                    "chosen_actions": json.dumps(episode["chosen_actions"]),
+                    "final_state": json.dumps(episode["final_state"], sort_keys=True),
+                })
+    print(f"Saved PPO/baseline comparison data: {csv_path}")
+
+    for policy_name, episodes in groups:
+        invariant_failures = sum(
+            episode["invariant_violated"] for episode in episodes
+        )
+        collisions = sum(episode["collision_detected"] for episode in episodes)
+        termination_reasons = Counter(
+            episode["termination_reason"] for episode in episodes
+        )
+        print(
+            f"{policy_name}: loop invariant violated in "
+            f"{invariant_failures}/{len(episodes)} episodes; "
+            f"obstacle collisions={collisions}/{len(episodes)}; "
+            f"mean steps={np.mean([episode['steps'] for episode in episodes]):.1f}; "
+            f"termination reasons={dict(termination_reasons)}"
+        )
 
 
 def main() -> None:
@@ -459,22 +752,52 @@ def main() -> None:
 
     eval_env = make_env()
     try:
+        obstacle = _configure_comparison_initial_state_sampling(eval_env)
         episodes = collect_episodes(
             eval_env, model, args.eval_episodes, args.seed + 1000
+        )
+        action_count = int(eval_env.unwrapped.action_space.n)
+        if ACCELERATION_PATH_ID >= action_count:
+            raise RuntimeError(
+                f"Test 1 has {action_count} controller paths, but the "
+                f"acceleration baseline expects path {ACCELERATION_PATH_ID}."
+            )
+        _configure_forced_acceleration_baseline(eval_env, obstacle)
+        acceleration_baseline_episodes = collect_episodes(
+            eval_env,
+            None,
+            args.eval_episodes,
+            args.seed + 1000,
+            forced_action=ACCELERATION_PATH_ID,
+            collision_obstacle=obstacle,
         )
     finally:
         eval_env.close()
 
-    for category, selected in (
-        ("success", [episode for episode in episodes if episode["success"]]),
-        ("failure", [episode for episode in episodes if not episode["success"]]),
+    for policy_name, policy_episodes in (
+        ("ppo", episodes),
+        ("acceleration_baseline", acceleration_baseline_episodes),
     ):
-        for index, episode in enumerate(selected[:5], start=1):
-            plot_episode(
-                episode,
-                args.out_dir / f"test1_{category}_{index}_seed_{episode['seed']}.png",
-            )
+        for category, selected in (
+            (
+                "invariant_pass",
+                [e for e in policy_episodes if not e["invariant_violated"]],
+            ),
+            (
+                "invariant_violation",
+                [e for e in policy_episodes if e["invariant_violated"]],
+            ),
+        ):
+            for index, episode in enumerate(selected[:5], start=1):
+                plot_episode(
+                    episode,
+                    args.out_dir
+                    / f"test1_{policy_name}_{category}_{index}_seed_{episode['seed']}.png",
+                )
     save_evaluation(episodes, args.out_dir)
+    save_policy_comparison(
+        episodes, acceleration_baseline_episodes, args.out_dir
+    )
 
 
 if __name__ == "__main__":

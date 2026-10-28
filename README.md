@@ -206,18 +206,31 @@ The trainer samples initial states satisfying Test 1's exact premise
 unmodified variable-bound samplers almost never satisfy its equality
 constraints. The model's `initialState`/`assumptions` signatures now explicitly
 include `r`, which is referenced by the initial-state predicate. Evaluation
-reports the post-action `ensure` predicate and checks `loopinv` over every
-recorded state. In Test 1, the initial premise already implies `ensure`
-(non-coincidence with the obstacle), so the ensure rate is not a useful
-standalone measure of learned safety. The loop-invariant rate and termination
-reasons are more informative; neither constitutes a formal proof.
+uses the same deterministic test scenario for both policies: the robot starts
+from rest, facing an obstacle placed 70 distance units ahead along its
+constant-radius path. Repeated evaluation episodes reuse this scenario, so
+their rates are repeatability checks, not independent randomized trials. In
+Test 1, `ensure` only checks that robot and obstacle
+positions differ, so it is not a useful standalone measure of learned safety.
+Evaluation also checks `loopinv` and reports termination reasons; these
+simulation metrics are not a formal proof.
 
-With the current sampler, the action mask exposes the brake and remain-stopped
-branches. The new-safe-curve branch is typically masked because its controller
-requires the exact equality `r*w=v` after nondeterministic values are sampled;
-at initial `v=0`, an independent continuous sample for `w` almost never equals
-zero. This is a limitation of the current simulation of that branch, not an
-assertion that the branch is formally infeasible.
+The comparison baseline repeatedly requests controller path 2, sets `r=512`
+and `w=v/r`, and keeps the obstacle fixed. To make this an intentionally
+unsafe baseline that can reach the obstacle, it bypasses the controller's
+`admissibleSeparation` guard and disables model-goal/invariant termination for
+that baseline only. It stops when the trajectory segment comes within one
+distance unit of the point obstacle; this finite collision radius is an
+evaluation convention, not a radius declared by the modal. The baseline still
+uses the ODE integration and other controller guards. The output includes a
+PPO-versus-baseline plot and CSV plus representative trajectory plots.
+
+Test 1 episode plots include the remaining stopping-distance safety margin
+`max(|x-xo|, |y-yo|) - stopDist(v)`; values at or below zero violate the
+distance disjunction in `isSafe`. This stopping margin is distinct from actual
+point-obstacle contact and from other parts of `loopinv`, such as `r != 0`.
+Direction normalization is evaluated with a small numerical tolerance in the
+episode metrics because the ODE solver uses floating-point integration.
 
 ### Training the ETCS Safety Controller
 
