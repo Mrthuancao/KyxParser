@@ -70,7 +70,7 @@ Definitions
   // This predicate defines the goal of avoiding the obstacle.
   // If the condition is true (robot is not at the obstacle), it's a success and the episode terminates.
   // If the condition is false (robot is at the obstacle), it's a failure and the episode terminates.
-  // @progress: reward=500, penalty=-1000, on_success=terminate:status=success, on_failure=terminate:status=failure
+  // @progress: reward=500, penalty=-1000, on_success=continue:status=None, on_failure=terminate:status=failure
   Bool ensure(Real x, Real y, Real xo, Real yo) <-> (
     (x - xo)^2 + (y - yo)^2 > 0
   );

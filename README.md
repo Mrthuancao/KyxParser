@@ -215,22 +215,26 @@ positions differ, so it is not a useful standalone measure of learned safety.
 Evaluation also checks `loopinv` and reports termination reasons; these
 simulation metrics are not a formal proof.
 
-The comparison baseline repeatedly requests controller path 2, sets `r=512`
-and `w=v/r`, and keeps the obstacle fixed. To make this an intentionally
-unsafe baseline that can reach the obstacle, it bypasses the controller's
-`admissibleSeparation` guard and disables model-goal/invariant termination for
-that baseline only. It stops when the trajectory segment comes within one
-distance unit of the point obstacle; this finite collision radius is an
-evaluation convention, not a radius declared by the modal. The baseline still
-uses the ODE integration and other controller guards. The output includes a
-PPO-versus-baseline plot and CSV plus representative trajectory plots.
+The comparison baseline repeatedly requests controller path 2 and supplies
+`r=512`, `w=v/r`, and the fixed obstacle coordinates through the simulator's
+nondeterministic-assignment hook. The obstacle is placed 70 distance units
+along the resulting planned arc. Unlike the prior externally stopped
+experiment, this baseline does not override the generated termination
+condition, bypass the controller's `admissibleSeparation` guard, or apply a
+custom collision radius. Termination reasons therefore come from generated
+environment behavior (for example, a failed controller test, a safety
+postcondition, or a loop invariant), or from the episode time limit. A
+`generated_safety_termination` result specifically means the environment
+reported `model_loop_invariant_violation` or
+`model_safety_postcondition_violation`; a failed controller guard is reported
+separately. The output includes a PPO-versus-baseline plot and CSV plus
+representative trajectory plots.
 
 Test 1 episode plots include the remaining stopping-distance safety margin
 `max(|x-xo|, |y-yo|) - stopDist(v)`; values at or below zero violate the
-distance disjunction in `isSafe`. This stopping margin is distinct from actual
-point-obstacle contact and from other parts of `loopinv`, such as `r != 0`.
-Direction normalization is evaluated with a small numerical tolerance in the
-episode metrics because the ODE solver uses floating-point integration.
+distance disjunction in `isSafe`. Direction normalization is evaluated with a
+small numerical tolerance in the episode metrics because the ODE solver uses
+floating-point integration.
 
 ### Training the ETCS Safety Controller
 

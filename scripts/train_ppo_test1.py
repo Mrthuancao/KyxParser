@@ -19,17 +19,16 @@ import math
 import sys
 from collections import Counter
 from pathlib import Path
-from types import MethodType
 
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from matplotlib.patches import Circle
 import numpy as np
 from sb3_contrib import MaskablePPO
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv
+from tqdm.auto import tqdm
 
 ROOT = Path(__file__).resolve().parents[1]
 AST2 = ROOT / "AST_parser_2"
@@ -39,13 +38,11 @@ if str(AST2) not in sys.path:
     sys.path.insert(0, str(AST2))
 
 from generator_core import generate_gym_environment_file  # pyright: ignore[reportMissingImports]
-from ast_config import Test  # pyright: ignore[reportMissingImports]
 
 # Zero-based ID of Test 1's third controlFunc alternative (a := A).
 ACCELERATION_PATH_ID = 2
 BASELINE_RADIUS = 512.0
 BASELINE_ARC_LENGTH = 70.0
-BASELINE_COLLISION_RADIUS = 1.0
 
 
 class EpisodeStatsCallback(BaseCallback):
@@ -180,7 +177,6 @@ def _configure_forced_acceleration_baseline(
 ) -> None:
     raw_env = env.unwrapped
     obstacle_x, obstacle_y = obstacle
-    raw_env.config["termination_condition_body"] = "False"
 
     def sample_nondeterministic_assignment(var_name: str) -> float:
         if var_name == "r":
@@ -200,37 +196,6 @@ def _configure_forced_acceleration_baseline(
     raw_env._nondeterministic_assignment_handler = (
         sample_nondeterministic_assignment
     )
-    execute_hp_node = raw_env._execute_hp_node
-
-    def execute_without_safety_selection_guard(
-        self, hp_node, choice_path=(), choice_cursor=None
-    ):
-        if (
-            isinstance(hp_node, Test)
-            and _ast_contains_function_call(
-                hp_node.condition, "admissibleSeparation"
-            )
-        ):
-            return {"terminated": False, "reward_delta": 0.0, "info": ""}
-        return execute_hp_node(hp_node, choice_path, choice_cursor)
-
-    raw_env._execute_hp_node = MethodType(
-        execute_without_safety_selection_guard, raw_env
-    )
-
-
-def _ast_contains_function_call(node, function_name: str) -> bool:
-    if type(node).__name__ == "FunctionCall":
-        if getattr(node, "name", None) == function_name:
-            return True
-    if isinstance(node, (list, tuple)):
-        return any(_ast_contains_function_call(child, function_name) for child in node)
-    if hasattr(node, "__dict__"):
-        return any(
-            _ast_contains_function_call(child, function_name)
-            for child in vars(node).values()
-        )
-    return False
 
 
 def _curvature_rate_for_velocity(velocity: float, radius: float) -> float:
@@ -246,28 +211,6 @@ def _curvature_rate_for_velocity(velocity: float, radius: float) -> float:
     raise ArithmeticError(
         f"Could not represent w satisfying r*w=v for v={velocity}, r={radius}."
     )
-
-
-def _segment_distance_to_obstacle(
-    start: dict, end: dict, obstacle: tuple[float, float]
-) -> float:
-    start_xy = np.array([start["x"], start["y"]], dtype=float)
-    end_xy = np.array([end["x"], end["y"]], dtype=float)
-    obstacle_xy = np.asarray(obstacle, dtype=float)
-    segment = end_xy - start_xy
-    segment_length_squared = float(np.dot(segment, segment))
-    if segment_length_squared == 0.0:
-        closest = start_xy
-    else:
-        fraction = float(
-            np.clip(
-                np.dot(obstacle_xy - start_xy, segment) / segment_length_squared,
-                0.0,
-                1.0,
-            )
-        )
-        closest = start_xy + fraction * segment
-    return float(np.linalg.norm(obstacle_xy - closest))
 
 
 def plot_training_curve(callback: EpisodeStatsCallback, output_path: Path) -> None:
@@ -306,91 +249,121 @@ def collect_episodes(
     count: int,
     seed: int,
     forced_action: int | None = None,
-    collision_obstacle: tuple[float, float] | None = None,
 ) -> list[dict]:
     episodes = []
     max_steps = int(env.unwrapped.max_episode_steps)
-    for episode_index in range(count):
-        observation, info = env.reset(seed=seed + episode_index)
-        states = [dict(info["state"])]
-        rewards: list[float] = []
-        actions: list[dict] = []
-        terminated = truncated = False
-        total_reward = 0.0
-        collision_detected = False
-
-        while not (terminated or truncated):
-            if forced_action is None:
-                mask = env.unwrapped.action_masks()
-                if not mask.any():
-                    raise RuntimeError(
-                        "Test 1 returned an empty legal-action mask during evaluation."
-                    )
-                action, _ = model.predict(
-                    observation, deterministic=True, action_masks=mask
-                )
-            else:
-                action = int(forced_action)
-            observation, reward, terminated, truncated, info = env.step(action)
-            next_state = dict(info["state"])
-            path_id = info.get("control_action")
-            actions.append({
-                "path_id": path_id,
-                "policy_action": int(np.asarray(action).reshape(-1)[0]),
-                "control_flow_info": info.get("control_flow_info"),
-            })
-            states.append(next_state)
-            rewards.append(float(reward))
-            total_reward += float(reward)
-            if (
-                collision_obstacle is not None
-                and _segment_distance_to_obstacle(
-                    states[-2], next_state, collision_obstacle
-                ) <= BASELINE_COLLISION_RADIUS
-            ):
-                collision_detected = True
-                terminated = True
-            if len(actions) > max_steps:
-                raise RuntimeError(
-                    "Test 1 exceeded max_episode_steps without terminating or truncating."
-                )
-
-        invariant_values = [
-            _predicate(env, "loopinv", state) for state in states
-        ]
-        safety_distance_history = [
-            _remaining_safety_distance(env, state) for state in states
-        ]
-        initial_ensure = _predicate(env, "ensure", states[0])
-        success = any(_predicate(env, "ensure", state) for state in states[1:])
-        termination_reason = (
-            "baseline_collision"
-            if collision_detected
-            else info.get("termination_reason")
-        )
-        if termination_reason is None:
-            termination_reason = (
-                "time_limit_truncation" if truncated else "stopped_without_reason"
+    description = (
+        "PPO evaluation" if forced_action is None
+        else "Acceleration baseline"
+    )
+    with tqdm(
+        total=count,
+        desc=description,
+        unit="episode",
+        dynamic_ncols=True,
+    ) as episode_progress:
+        for episode_index in range(count):
+            observation, info = env.reset(seed=seed + episode_index)
+            states = [dict(info["state"])]
+            rewards: list[float] = []
+            actions: list[dict] = []
+            terminated = truncated = False
+            total_reward = 0.0
+            episode_steps = 0
+            step_progress = tqdm(
+                total=max_steps,
+                desc=f"Episode {episode_index + 1}/{count}",
+                unit="step",
+                dynamic_ncols=True,
+                leave=False,
+                position=1,
+                disable=forced_action is None,
             )
-        episodes.append({
-            "episode": episode_index + 1,
-            "seed": seed + episode_index,
-            "state_history": states,
-            "remaining_safety_distance_history": safety_distance_history,
-            "reward_history": rewards,
-            "chosen_actions": actions,
-            "success": success,
-            "initial_ensure": initial_ensure,
-            "initial_invariant": invariant_values[0],
-            "invariant_violated": not all(invariant_values),
-            "collision_detected": collision_detected,
-            "total_reward": total_reward,
-            "steps": len(actions),
-            "terminated": terminated,
-            "truncated": truncated,
-            "termination_reason": termination_reason,
-            "final_state": states[-1],
-        })
+            try:
+                while not (terminated or truncated):
+                    if forced_action is None:
+                        mask = env.unwrapped.action_masks()
+                        if not mask.any():
+                            raise RuntimeError(
+                                "Test 1 returned an empty legal-action mask "
+                                "during evaluation."
+                            )
+                        action, _ = model.predict(
+                            observation,
+                            deterministic=True,
+                            action_masks=mask,
+                        )
+                    else:
+                        action = int(forced_action)
+                    observation, reward, terminated, truncated, info = env.step(action)
+                    next_state = dict(info["state"])
+                    path_id = info.get("control_action")
+                    actions.append({
+                        "path_id": path_id,
+                        "policy_action": int(np.asarray(action).reshape(-1)[0]),
+                        "control_flow_info": info.get("control_flow_info"),
+                    })
+                    states.append(next_state)
+                    rewards.append(float(reward))
+                    total_reward += float(reward)
+                    episode_steps += 1
+                    step_progress.update(1)
+                    step_progress.set_postfix(
+                        terminated=terminated,
+                        truncated=truncated,
+                        reason=info.get("termination_reason") or "running",
+                    )
+                    if episode_steps > max_steps:
+                        raise RuntimeError(
+                            "Test 1 exceeded max_episode_steps without "
+                            "terminating or truncating."
+                        )
+            finally:
+                step_progress.close()
+
+            invariant_values = [
+                _predicate(env, "loopinv", state) for state in states
+            ]
+            safety_distance_history = [
+                _remaining_safety_distance(env, state) for state in states
+            ]
+            initial_ensure = _predicate(env, "ensure", states[0])
+            success = any(
+                _predicate(env, "ensure", state) for state in states[1:]
+            )
+            termination_reason = info.get("termination_reason")
+            if termination_reason is None:
+                termination_reason = (
+                    "time_limit_truncation"
+                    if truncated else "stopped_without_reason"
+                )
+            episodes.append({
+                "episode": episode_index + 1,
+                "seed": seed + episode_index,
+                "state_history": states,
+                "remaining_safety_distance_history": safety_distance_history,
+                "reward_history": rewards,
+                "chosen_actions": actions,
+                "success": success,
+                "initial_ensure": initial_ensure,
+                "initial_invariant": invariant_values[0],
+                "invariant_violated": not all(invariant_values),
+                "generated_safety_termination": termination_reason in {
+                    "model_loop_invariant_violation",
+                    "model_safety_postcondition_violation",
+                },
+                "total_reward": total_reward,
+                "steps": len(actions),
+                "terminated": terminated,
+                "truncated": truncated,
+                "termination_reason": termination_reason,
+                "final_state": states[-1],
+            })
+            episode_progress.update(1)
+            episode_progress.set_postfix(
+                steps=len(actions),
+                reason=termination_reason,
+            )
     return episodes
 
 
@@ -410,14 +383,6 @@ def plot_episode(episode: dict, output_path: Path) -> None:
         [states[0]["xo"]], [states[0]["yo"]],
         marker="x", s=70, color="tab:red", label="Obstacle",
     )
-    axes[0].add_patch(Circle(
-        (states[0]["xo"], states[0]["yo"]),
-        BASELINE_COLLISION_RADIUS,
-        fill=False,
-        color="tab:red",
-        linestyle=":",
-        label="Baseline collision radius",
-    ))
     axes[0].set_xlabel("x")
     axes[0].set_ylabel("y")
     axes[0].set_title("Planar robot path")
@@ -463,7 +428,8 @@ def plot_episode(episode: dict, output_path: Path) -> None:
     fig.suptitle(
         f"Episode {episode['episode']}: post-action ensure={episode['success']}, "
         f"loopinv violation={episode['invariant_violated']}, "
-        f"collision={episode['collision_detected']}, "
+        f"generated safety termination="
+        f"{episode['generated_safety_termination']}, "
         f"reason={episode['termination_reason']}"
     )
     fig.tight_layout()
@@ -538,7 +504,7 @@ def save_evaluation(episodes: list[dict], output_dir: Path) -> None:
     csv_path = output_dir / "test1_evaluation.csv"
     fields = (
         "episode", "seed", "initial_ensure", "success", "initial_invariant",
-        "invariant_violated", "collision_detected",
+        "invariant_violated", "generated_safety_termination",
         "minimum_remaining_safety_distance", "termination_reason", "terminated",
         "truncated", "steps", "total_reward", "chosen_actions", "final_state",
     )
@@ -588,7 +554,10 @@ def save_policy_comparison(
     metrics = (
         ("loop invariant held", lambda e: not e["invariant_violated"]),
         ("post-action ensure", lambda e: e["success"]),
-        ("obstacle collision", lambda e: e["collision_detected"]),
+        (
+            "generated safety termination",
+            lambda e: e["generated_safety_termination"],
+        ),
     )
     fig, axes = plt.subplots(1, 3, figsize=(14, 5))
     for axis, (metric_name, metric) in zip(axes, metrics):
@@ -611,7 +580,8 @@ def save_policy_comparison(
     csv_path = output_dir / "test1_policy_vs_acceleration_baseline.csv"
     fields = (
         "policy", "episode", "seed", "success", "invariant_violated",
-        "collision_detected", "minimum_remaining_safety_distance",
+        "generated_safety_termination",
+        "minimum_remaining_safety_distance",
         "steps", "total_reward", "termination_reason", "chosen_actions",
         "final_state",
     )
@@ -626,7 +596,9 @@ def save_policy_comparison(
                     "seed": episode["seed"],
                     "success": episode["success"],
                     "invariant_violated": episode["invariant_violated"],
-                    "collision_detected": episode["collision_detected"],
+                    "generated_safety_termination": (
+                        episode["generated_safety_termination"]
+                    ),
                     "minimum_remaining_safety_distance": min(
                         episode["remaining_safety_distance_history"]
                     ),
@@ -642,14 +614,17 @@ def save_policy_comparison(
         invariant_failures = sum(
             episode["invariant_violated"] for episode in episodes
         )
-        collisions = sum(episode["collision_detected"] for episode in episodes)
+        safety_terminations = sum(
+            episode["generated_safety_termination"] for episode in episodes
+        )
         termination_reasons = Counter(
             episode["termination_reason"] for episode in episodes
         )
         print(
             f"{policy_name}: loop invariant violated in "
             f"{invariant_failures}/{len(episodes)} episodes; "
-            f"obstacle collisions={collisions}/{len(episodes)}; "
+            f"generated safety terminations="
+            f"{safety_terminations}/{len(episodes)}; "
             f"mean steps={np.mean([episode['steps'] for episode in episodes]):.1f}; "
             f"termination reasons={dict(termination_reasons)}"
         )
@@ -769,7 +744,6 @@ def main() -> None:
             args.eval_episodes,
             args.seed + 1000,
             forced_action=ACCELERATION_PATH_ID,
-            collision_obstacle=obstacle,
         )
     finally:
         eval_env.close()
