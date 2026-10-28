@@ -39,6 +39,23 @@ if str(AST2) not in sys.path:
 
 from generator_core import generate_gym_environment_file  # pyright: ignore[reportMissingImports]
 
+DEFAULT_TARGET_SPEED_MIN = -25.0
+DEFAULT_TARGET_SPEED_MAX = 25.0
+
+
+def _in_target_band(
+    velocity: float,
+    target_speed_min: float,
+    target_speed_max: float,
+) -> bool:
+    return target_speed_min <= velocity <= target_speed_max
+
+
+def _target_band_label(target_speed_min: float, target_speed_max: float) -> str:
+    if target_speed_min == -target_speed_max:
+        return f"|v| <= {target_speed_max:g}"
+    return f"v in [{target_speed_min:g}, {target_speed_max:g}]"
+
 
 class EpisodeStatsCallback(BaseCallback):
     """Collect episode reward and length from the Monitor wrapper."""
@@ -105,14 +122,21 @@ def plot_training_curve(callback: EpisodeStatsCallback, output_path: Path) -> No
 def plot_episode_trajectory(
     result: dict,
     output_path: Path,
+    target_speed_min: float,
+    target_speed_max: float,
     policy_name: str = "PPO",
 ) -> None:
     """Plot a rollout's states, controller modes/actions, and per-step reward."""
     states = result["state_history"]
     steps = np.arange(len(states))
     action_steps = np.arange(1, len(result["chosen_actions"]) + 1)
-    reached = result["reached_near_zero_speed"]
-    label = "REACHED |v| <= 1" if reached else "DID NOT REACH |v| <= 1"
+    reached = result["reached_target_band"]
+    band_label = _target_band_label(target_speed_min, target_speed_max)
+    label = (
+        f"REACHED {band_label}"
+        if reached
+        else f"DID NOT REACH {band_label}"
+    )
     transitions = {
         transition["step"]: transition
         for transition in result["mode_transitions"]
@@ -120,7 +144,13 @@ def plot_episode_trajectory(
 
     fig, axes = plt.subplots(5, 1, figsize=(11, 12), sharex=True)
     axes[0].plot(steps, [state.get("v", np.nan) for state in states], label="Velocity v")
-    axes[0].axhspan(-1.0, 1.0, color="tab:green", alpha=0.15, label="Near-zero zone")
+    axes[0].axhspan(
+        target_speed_min,
+        target_speed_max,
+        color="tab:green",
+        alpha=0.15,
+        label=f"Target band ({band_label})",
+    )
     axes[0].axhline(0.0, color="black", linewidth=0.8)
     axes[0].set_ylabel("Velocity")
     axes[0].set_title(
@@ -171,11 +201,11 @@ def plot_episode_trajectory(
     axes[4].set_ylabel("Reward")
     axes[4].legend(loc="best")
     axes[4].set_title(
-        f"Steps={result['steps']}, in-zone={result['steps_inside_zone']} "
+        f"Steps={result['steps']}, in-band={result['steps_inside_zone']} "
         f"({result['fraction_steps_inside_zone']:.1%}), "
         f"longest run={result['longest_consecutive_inside_steps']} steps/"
         f"{result['longest_consecutive_inside_simulation_time']:.3f}s, "
-        f"finished inside={result['final_inside_zone']}"
+        f"finished in-band={result['final_inside_zone']}"
     )
 
     fig.tight_layout()
@@ -187,12 +217,14 @@ def plot_episode_trajectory(
 def plot_representative_episodes(
     results: list[dict],
     output_dir: Path,
+    target_speed_min: float,
+    target_speed_max: float,
     max_per_category: int = 2,
 ) -> None:
-    """Plot representative PPO episodes for each near-zero reachability category."""
-    reached = [result for result in results if result["reached_near_zero_speed"]]
+    """Plot representative PPO episodes by target-band reachability."""
+    reached = [result for result in results if result["reached_target_band"]]
     not_reached = [
-        result for result in results if not result["reached_near_zero_speed"]
+        result for result in results if not result["reached_target_band"]
     ]
     categories = (
         (
@@ -223,13 +255,17 @@ def plot_representative_episodes(
                 "cruise_control_"
                 f"{category}_{index}_seed_{result['seed']}.png"
             )
-            plot_episode_trajectory(result, output_path)
+            plot_episode_trajectory(
+                result, output_path, target_speed_min, target_speed_max
+            )
 
 
 def plot_evaluation_summary(
     policy_results: list[dict],
     baseline_results: list[dict],
     output_path: Path,
+    target_speed_min: float,
+    target_speed_max: float,
 ) -> None:
     """Compare PPO and first-legal baseline on shared seeds and zone metrics."""
     if not policy_results or len(policy_results) != len(baseline_results):
@@ -269,7 +305,7 @@ def plot_evaluation_summary(
         axes[0, 1],
         [result["fraction_steps_inside_zone"] for result in policy_results],
         [result["fraction_steps_inside_zone"] for result in baseline_results],
-        "Fraction of steps with |v| <= 1",
+        f"Fraction of steps in {_target_band_label(target_speed_min, target_speed_max)}",
         "Fraction",
     )
     grouped_bars(
@@ -282,14 +318,14 @@ def plot_evaluation_summary(
             result["longest_consecutive_inside_simulation_time"]
             for result in baseline_results
         ],
-        "Longest consecutive near-zero run",
+        "Longest consecutive target-band run",
         "Simulation time (s)",
     )
     grouped_bars(
         axes[1, 1],
         [int(result["final_inside_zone"]) for result in policy_results],
         [int(result["final_inside_zone"]) for result in baseline_results],
-        "Finished inside |v| <= 1",
+        f"Finished inside {_target_band_label(target_speed_min, target_speed_max)}",
         "Inside zone (0/1)",
     )
     axes[1, 1].set_ylim(-0.05, 1.15)
@@ -326,11 +362,13 @@ def plot_evaluation_summary(
     print(f"Saved cruise-control evaluation summary: {output_path}")
 
 
-def _near_zero_zone_metrics(
+def _target_band_metrics(
     velocity_samples: list[float],
     simulation_times: list[float],
+    target_speed_min: float,
+    target_speed_max: float,
 ) -> dict[str, float | int | bool]:
-    """Measure in-zone step occupancy and sampled consecutive simulation time."""
+    """Measure target-band occupancy and sampled consecutive time."""
     if len(velocity_samples) != len(simulation_times) or not velocity_samples:
         raise ValueError("Velocity and simulation-time samples must be non-empty and aligned.")
 
@@ -340,10 +378,14 @@ def _near_zero_zone_metrics(
     longest_consecutive_inside_simulation_time = 0.0
     consecutive_inside_steps = 0
     consecutive_inside_simulation_time = 0.0
-    previous_inside = abs(velocity_samples[0]) <= 1.0
+    previous_inside = _in_target_band(
+        velocity_samples[0], target_speed_min, target_speed_max
+    )
 
     for index in range(1, len(velocity_samples)):
-        inside = abs(velocity_samples[index]) <= 1.0
+        inside = _in_target_band(
+            velocity_samples[index], target_speed_min, target_speed_max
+        )
         if inside:
             steps_inside_zone += 1
             consecutive_inside_steps = (
@@ -378,11 +420,22 @@ def _near_zero_zone_metrics(
         "longest_consecutive_inside_simulation_time": (
             longest_consecutive_inside_simulation_time
         ),
-        "final_inside_zone": abs(velocity_samples[-1]) <= 1.0,
+        "final_inside_zone": (
+            _in_target_band(
+                velocity_samples[-1], target_speed_min, target_speed_max
+            )
+        ),
     }
 
 
-def evaluate_policy(env, model, episodes: int, seed: int) -> list[dict]:
+def evaluate_policy(
+    env,
+    model,
+    episodes: int,
+    seed: int,
+    target_speed_min: float,
+    target_speed_max: float,
+) -> list[dict]:
     results = []
     policy_name = "First-legal baseline" if model is None else "PPO policy"
     max_episode_steps = int(env.unwrapped.max_episode_steps)
@@ -404,11 +457,13 @@ def evaluate_policy(env, model, episodes: int, seed: int) -> list[dict]:
             mode_transitions = []
             total_reward = 0.0
             terminated = truncated = False
-            reached_near_zero_speed = abs(float(info["state"]["v"])) <= 1.0
-            goal_step = 0 if reached_near_zero_speed else None
-            goal_simulation_time = (
+            reached_target_band = _in_target_band(
+                float(info["state"]["v"]), target_speed_min, target_speed_max
+            )
+            target_step = 0 if reached_target_band else None
+            target_simulation_time = (
                 float(info.get("simulation_elapsed_time", 0.0))
-                if reached_near_zero_speed else None
+                if reached_target_band else None
             )
             progress.set_description(
                 f"{policy_name} evaluation ({episode_index + 1}/{episodes})"
@@ -448,24 +503,29 @@ def evaluate_policy(env, model, episodes: int, seed: int) -> list[dict]:
                         "to_mode": float(current_state["mode"]),
                         "path_id": int(info["control_action"]),
                     })
-                if goal_step is None and abs(float(current_state["v"])) <= 1.0:
-                    reached_near_zero_speed = True
-                    goal_step = len(chosen_actions)
-                    goal_simulation_time = float(
+                if target_step is None and _in_target_band(
+                    float(current_state["v"]), target_speed_min, target_speed_max
+                ):
+                    reached_target_band = True
+                    target_step = len(chosen_actions)
+                    target_simulation_time = float(
                         info.get("simulation_elapsed_time", 0.0)
                     )
 
-            zone_metrics = _near_zero_zone_metrics(
-                velocity_samples, simulation_time_samples
+            zone_metrics = _target_band_metrics(
+                velocity_samples,
+                simulation_time_samples,
+                target_speed_min,
+                target_speed_max,
             )
             results.append({
                 "episode": episode_index + 1,
                 "seed": seed + episode_index,
                 "total_reward": total_reward,
                 "steps": len(chosen_actions),
-                "reached_near_zero_speed": reached_near_zero_speed,
-                "goal_step": goal_step,
-                "goal_simulation_time": goal_simulation_time,
+                "reached_target_band": reached_target_band,
+                "target_step": target_step,
+                "target_simulation_time": target_simulation_time,
                 **zone_metrics,
                 "mode_transitions": mode_transitions,
                 "terminated": terminated,
@@ -480,7 +540,7 @@ def evaluate_policy(env, model, episodes: int, seed: int) -> list[dict]:
             })
             progress.set_postfix(
                 episode_reward=f"{total_reward:.1f}",
-                near_zero=reached_near_zero_speed,
+                target_band=reached_target_band,
             )
     return results
 
@@ -492,9 +552,9 @@ def save_evaluation(results: list[dict], output_path: Path) -> None:
             "seed",
             "total_reward",
             "steps",
-            "reached_near_zero_speed",
-            "goal_step",
-            "goal_simulation_time",
+            "reached_target_band",
+            "target_step",
+            "target_simulation_time",
             "steps_inside_zone",
             "fraction_steps_inside_zone",
             "inside_zone_simulation_time",
@@ -533,6 +593,18 @@ def main() -> None:
     parser.add_argument("--timesteps", type=int, default=10000)
     parser.add_argument("--eval-episodes", type=int, default=10)
     parser.add_argument(
+        "--target-speed-min",
+        type=float,
+        default=DEFAULT_TARGET_SPEED_MIN,
+        help="Inclusive lower velocity bound for target-band evaluation.",
+    )
+    parser.add_argument(
+        "--target-speed-max",
+        type=float,
+        default=DEFAULT_TARGET_SPEED_MAX,
+        help="Inclusive upper velocity bound for target-band evaluation.",
+    )
+    parser.add_argument(
         "--eval-only",
         action="store_true",
         help="Skip training and evaluate the saved policy against the first-legal baseline.",
@@ -567,6 +639,8 @@ def main() -> None:
         parser.error("--plots-per-category must be at least 1")
     if args.max_episode_steps < 1:
         parser.error("--max-episode-steps must be at least 1")
+    if args.target_speed_min > args.target_speed_max:
+        parser.error("--target-speed-min must not exceed --target-speed-max")
     if not args.model.is_file():
         raise FileNotFoundError(f"Cruise Control model not found: {args.model}")
 
@@ -640,10 +714,20 @@ def main() -> None:
     eval_env = make_env()
     try:
         results = evaluate_policy(
-            eval_env, model, args.eval_episodes, args.seed + 1000
+            eval_env,
+            model,
+            args.eval_episodes,
+            args.seed + 1000,
+            args.target_speed_min,
+            args.target_speed_max,
         )
         baseline_results = evaluate_policy(
-            eval_env, None, args.eval_episodes, args.seed + 1000
+            eval_env,
+            None,
+            args.eval_episodes,
+            args.seed + 1000,
+            args.target_speed_min,
+            args.target_speed_max,
         )
         save_evaluation(results, evaluation_path)
         save_evaluation(
@@ -657,14 +741,20 @@ def main() -> None:
         results,
         baseline_results,
         args.out_dir / "cruise_control_evaluation_summary.png",
+        args.target_speed_min,
+        args.target_speed_max,
     )
     plot_representative_episodes(
-        results, args.out_dir, max_per_category=args.plots_per_category
+        results,
+        args.out_dir,
+        args.target_speed_min,
+        args.target_speed_max,
+        max_per_category=args.plots_per_category,
     )
 
     rewards = [result["total_reward"] for result in results]
     lengths = [result["steps"] for result in results]
-    successes = sum(result["reached_near_zero_speed"] for result in results)
+    successes = sum(result["reached_target_band"] for result in results)
     action_counts = Counter(
         action for result in results for action in result["chosen_actions"]
     )
@@ -677,7 +767,8 @@ def main() -> None:
     )
     print(f"Mean evaluation length: {np.mean(lengths):.1f} steps")
     print(
-        f"Reached |v| <= 1: {successes}/{len(results)} "
+        f"Reached {_target_band_label(args.target_speed_min, args.target_speed_max)}: "
+        f"{successes}/{len(results)} "
         f"({100.0 * successes / len(results):.1f}%)"
     )
     for label, evaluation_results in (
@@ -685,7 +776,7 @@ def main() -> None:
         ("First-legal baseline", baseline_results),
     ):
         print(
-            f"{label} near-zero occupancy: "
+            f"{label} target-band occupancy: "
             f"{np.mean([r['steps_inside_zone'] for r in evaluation_results]):.1f} "
             f"steps/episode "
             f"({100.0 * np.mean([r['fraction_steps_inside_zone'] for r in evaluation_results]):.2f}%); "
@@ -708,7 +799,7 @@ def main() -> None:
         print(
             f"Episode {result['episode']}: reward={result['total_reward']:.3f}, "
             f"steps={result['steps']}, final_v={result['final_state']['v']:.4f}, "
-            f"goal_step={result['goal_step']}, "
+            f"target_step={result['target_step']}, "
             f"inside_steps={result['steps_inside_zone']}, "
             f"longest_inside={result['longest_consecutive_inside_steps']} steps/"
             f"{result['longest_consecutive_inside_simulation_time']:.3f}s, "

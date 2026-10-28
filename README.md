@@ -108,21 +108,45 @@ baseline on identical episode seeds and record mode-transition steps/times:
 ```
 
 This writes policy and baseline episode CSVs, including transition events and the
-first step/time where `|v| <= 1` is reached, the number and fraction of steps
+first step/time where `|v| <= 25` is reached, the number and fraction of steps
 inside the zone, the longest consecutive in-zone run, sampled simulation time
 spent inside the zone, and whether the episode finishes inside it. In-zone
 simulation-time totals include only intervals whose consecutive sampled states
 are both inside the zone.
 
+The evaluation band can be changed with `--target-speed-min` and
+`--target-speed-max`. For the fixed-tolerance cruise-control model, train a
+separate policy targeting positive velocities in `[25, 30]` while keeping its
+artifacts separate from the default run:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\train_ppo_cruise_control.py `
+  --model test\input\withBound\CruiseControlStabilityFixedTolerance.txt `
+  --target-speed-min 25 --target-speed-max 30 --timesteps 10000 `
+  --out-dir logs\cruise_control_fixed_tolerance `
+  --model-dir models\cruise_control_fixed_tolerance `
+  --generated-env generated_cruise_control_fixed_tolerance_env.py
+```
+
+This model’s `targetSpeedBand` annotation supplies the reward for the `[25, 30]`
+target, with shaping toward its midpoint. The fixed `eps=30` and `del=25`
+values describe one instance of the modal specification; they do not themselves
+define the PPO reward or prove the property. Quantified-simulation generation
+retains the modal formula as verification metadata, so success here means
+empirical target-band occupancy in the generated simulator, not proof of the
+fixed-tolerance claim. The quantified antecedent `v^2 < del^2` is not used to
+filter simulator reset states; resets follow the configured initialization and
+variable bounds.
+
 Training also writes a reward/episode-length curve. Each evaluation run writes
-a paired PPO-vs-baseline summary plot for reward, near-zero occupancy, longest
-consecutive near-zero duration, finishing inside the zone, controller paths,
+a paired PPO-vs-baseline summary plot for reward, target-band occupancy, longest
+consecutive in-band duration, finishing inside the band, controller paths,
 and mode transitions. Up to two PPO rollout plots are saved for episodes that
-reach `|v| <= 1`, prioritizing the longest sustained in-zone runs, and up to two
+reach `|v| <= 25`, prioritizing the longest sustained in-zone runs, and up to two
 for episodes that never reach the zone. The trajectory plots show velocity and
-the near-zero band, position error, controller mode, selected path, and rewards.
-Here, "success" means only that the rollout reached the near-zero zone at least
-once; use occupancy, consecutive duration, and final-in-zone metrics to judge
+the target band, position error, controller mode, selected path, and rewards.
+Here, "success" means only that the rollout reached the target band at least
+once; use occupancy, consecutive duration, and final-in-band metrics to judge
 whether the controller stayed there.
 
 To compare on a separate fixed seed range from the original `11` evaluation,

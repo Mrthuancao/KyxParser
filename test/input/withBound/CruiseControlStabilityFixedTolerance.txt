@@ -1,0 +1,149 @@
+Theorem "Automatic cruise controller: stability"
+/*
+ * Generated from hybrid automaton
+ * subgraph CruiseController
+ * ebrakeact("v' = -t-2.5, x' = 0, t' = 1
+ *       & 15 <= v & v <= 40
+ *       & 0 <= t & t <= 2.5")
+ * ebrakefull("v' = -5, x' = 0, t' = 0
+ *       & 15 <= v & v <= 40
+ *       & t = 2.5")
+ * sbrakeact("v' = -t-1.2, x' = 0, t' = 0.5
+ *       & 5 <= v & v <= 20
+ *       & 0 <= t & t <= 1.3")
+ * sbrakefull("v' = -2.5, x' = 0, t' = 0
+ *       & 5 <= v & v <= 20
+ *       & t = 1.3")
+ * normalPI("v' = -0.001*x-0.052*v, x' = v, t' = 0
+ *       & -15 <= v & v <= 15
+ *       & -500 <= x & x <= 500")
+ * accelerate("v' = 1.5, x' = 0, t' = 0
+ *       & -20 <= v & v <= -5 ")
+ *
+ * ebrakeact -->|"?(15 <= v & v <= 40 & t = 2.5);"| ebrakefull
+ * ebrakeact -->|"?(15 <= v & v <= 16 & 0 <= t & t <= 2.5); t:=0;"| sbrakeact
+ *
+ * ebrakefull -->|"?(15 <= v & v <= 16 & t = 2.5); t:=0;"| sbrakeact
+ *
+ * sbrakeact -->|"?(18 <= v & v <= 20 & 0 <= t & t <= 1.3); t:=0;"| ebrakeact
+ * sbrakeact -->|"?(5 <= v & v <= 20 & t = 1.3);"| sbrakefull
+ * sbrakeact -->|"?(5 <= v & v <= 11 & 0 <= t & t <= 1.3); x:=0;"| normalPI
+ *
+ * sbrakefull -->|"?(18 <= v & v <= 20 & t = 1.3); t:=0;"| ebrakeact
+ * sbrakefull -->|"?(5 <= v & v <= 11 & t = 1.3); x:=0;"| normalPI
+ *
+ * normalPI -->|"?(13 <= v & v <= 15 & -500 <= x & x <= 500); t:=0;"| sbrakeact
+ * normalPI -->|"?(-15 <= v & v <= -14 & -500 <= x & x <= 500);"| accelerate
+ *
+ * accelerate -->|"?(-6 <= v & v <= -5 & -500 <= x & x <= 500); x:=0;"| normalPI
+ *
+ * end
+ *
+ * Init("t:=0; x:=0;") --> CruiseController
+ */
+
+Definitions
+  Real accelerate = 0;
+  Real ebrakeact = 1;
+  Real ebrakefull = 2;
+  Real normalPI = 3;
+  Real sbrakeact = 4;
+  Real sbrakefull = 5;
+
+  // Fixed-tolerance instance (not the universally quantified stability theorem).
+  // @const: bound=30.0; def="target velocity tolerance"
+  Real eps;
+  // @const: bound=25.0; def="initial velocity tolerance"
+  Real del;
+
+  // @safety: penalty=-100, on_failure=truncate:status=failure, on_success=continue:status=none
+  Bool cruiseSafe() <-> -500 <= x & x <= 500 & -20 <= v & v <= 40 & 0 <= t & t <= 2.5 & 0 <= mode & mode <= 5;
+
+  // @progress: reward=10, shape={-abs(v - 27.5)}, on_success=continue:status=none, on_failure=continue:status=none
+  Bool targetSpeedBand() <-> 25 <= v & v <= 30;
+
+  HP initializeMode ::= {
+    mode:=ebrakeact()
+    ++ mode:=ebrakefull()
+    ++ mode:=sbrakeact()
+    ++ mode:=sbrakefull()
+    ++ mode:=normalPI()
+    ++ mode:=accelerate()
+  };
+
+  HP initialize ::= {
+    initializeMode;
+    t:=0;
+    x:=0
+  };
+
+  HP controlFunc ::= {
+    /* ebrakeact: Hold only if time < 2.5 AND velocity > 15 */
+    ?mode = ebrakeact(); ?15 <= v & v <= 40 & t = 2.5; mode:=ebrakefull()
+    ++ ?mode = ebrakeact(); ?15 <= v & v <= 16 & 0 <= t & t <= 2.5; t:=0; mode:=sbrakeact()
+    ++ ?mode = ebrakeact(); ?t < 2.5 & v > 15; mode:=mode
+
+    /* ebrakefull: Hold only if velocity > 15 */
+    ++ ?mode = ebrakefull(); ?15 <= v & v <= 16 & t = 2.5; t:=0; mode:=sbrakeact()
+    ++ ?mode = ebrakefull(); ?v > 15; mode:=mode 
+
+    /* sbrakeact: Hold only if time < 1.3 AND velocity > 5 */
+    ++ ?mode = sbrakeact(); ?18 <= v & v <= 20 & 0 <= t & t <= 1.3; t:=0; mode:=ebrakeact()
+    ++ ?mode = sbrakeact(); ?5 <= v & v <= 20 & t = 1.3; mode:=sbrakefull()
+    ++ ?mode = sbrakeact(); ?5 <= v & v <= 11 & 0 <= t & t <= 1.3; x:=0; mode:=normalPI()
+    ++ ?mode = sbrakeact(); ?t < 1.3 & v > 5; mode:=mode
+
+    /* sbrakefull: Hold only if velocity > 5 */
+    ++ ?mode = sbrakefull(); ?18 <= v & v <= 20 & t = 1.3; t:=0; mode:=ebrakeact()
+    ++ ?mode = sbrakefull(); ?5 <= v & v <= 11 & t = 1.3; x:=0; mode:=normalPI()
+    ++ ?mode = sbrakefull(); ?v > 5; mode:=mode
+
+    /* normalPI: Hold only if within velocity bounds (-15, 15) */
+    ++ ?mode = normalPI(); ?13 <= v & v <= 15 & -500 <= x & x <= 500; t:=0; mode:=sbrakeact()
+    ++ ?mode = normalPI(); ?-15 <= v & v <= -14 & -500 <= x & x <= 500; mode:=accelerate()
+    ++ ?mode = normalPI(); ?v > -15 & v < 15; mode:=mode
+
+    /* accelerate: Hold only if velocity < -5 */
+    ++ ?mode = accelerate(); ?-6 <= v & v <= -5 & -500 <= x & x <= 500; x:=0; mode:=normalPI()
+    ++ ?mode = accelerate(); ?v < -5; mode:=mode
+  };
+
+  HP continuousDynamics ::= {
+    ?mode = ebrakeact(); {v'=-t - 2.5, x'=0, t'=1 & 15 <= v & v <= 40 & 0 <= t & t <= 2.5}
+    ++ ?mode = ebrakefull(); {v'=-5, x'=0, t'=0 & 15 <= v & v <= 40 & t = 2.5}
+    ++ ?mode = sbrakeact(); {v'=-t - 1.2, x'=0, t'=0.5 & 5 <= v & v <= 20 & 0 <= t & t <= 1.3}
+    ++ ?mode = sbrakefull(); {v'=-2.5, x'=0, t'=0 & 5 <= v & v <= 20 & t = 1.3}
+    ++ ?mode = normalPI(); {v'=-0.001*x - 0.052*v, x'=v, t'=0 & -15 <= v & v <= 15 & -500 <= x & x <= 500}
+    ++ ?mode = accelerate(); {v'=1.5, x'=0, t'=0 & -20 <= v & v <= -5}
+  };
+
+  HP transitionAndFlow ::= {
+    controlFunc;
+    continuousDynamics
+  };
+
+  HP cruiseLoop ::= { transitionAndFlow; }*;
+
+  HP cruiseControl ::= {
+    initialize;
+    cruiseLoop
+  };
+End.
+
+ProgramVariables
+  // @var: bound=[-500:500], plot=line, def="position error"
+  Real x;
+  // @var: bound=[0:2.5], plot=line, def="elapsed time in the active braking phase"
+  Real t;
+  // @var: bound=[-30:24], plot=line, def="cruise-control velocity"
+  Real v;
+  // @var: bound=[0:5], plot=hist, def="active controller mode"
+  Real mode;
+End.
+
+Problem
+  forall(v).(
+    v^2 < del^2 ->
+    [cruiseControl] v^2 < eps^2
+  )
+End.
