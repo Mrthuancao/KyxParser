@@ -1,4 +1,5 @@
 import json
+import keyword
 import textwrap
 from typing import List, Dict, Any, Optional
 import math
@@ -93,6 +94,8 @@ class GymnasiumEnvironmentGenerator:
                 func_def = self.func_definition_map[var_name]
                 if not func_def.args and not func_def.annotations.get('const'):
                     return f"self._{var_name}_impl()"
+            if keyword.iskeyword(var_name):
+                return f"self.current_state[{var_name!r}]"
             return var_name
         elif isinstance(term, BinaryTermOp):
             left_str = self._term_to_string_python(term.left)

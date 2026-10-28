@@ -115,39 +115,37 @@ simulation-time totals include only intervals whose consecutive sampled states
 are both inside the zone.
 
 The evaluation band can be changed with `--target-speed-min` and
-`--target-speed-max`. For the fixed-tolerance cruise-control model, train a
-separate policy targeting positive velocities in `[25, 30]` while keeping its
-artifacts separate from the default run:
+`--target-speed-max`. The dedicated fixed-tolerance entry point uses isolated
+artifacts and defaults to `eps=30`, `del=25`, target band `[25, 30]`,
+initial velocity in `[25, 29.9]`, and an `|v| <= 30` safety limit:
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\train_ppo_cruise_control.py `
-  --model test\input\withBound\CruiseControlStabilityFixedTolerance.txt `
-  --target-speed-min 25 --target-speed-max 30 --timesteps 10000 `
-  --out-dir logs\cruise_control_fixed_tolerance `
-  --model-dir models\cruise_control_fixed_tolerance `
-  --generated-env generated_cruise_control_fixed_tolerance_env.py
+.\.venv\Scripts\python.exe scripts\train_ppo_cruise_control_fixed_tol.py --timesteps 10000 --eval-episodes 20
 ```
 
-This model’s `targetSpeedBand` annotation supplies the reward for the `[25, 30]`
-target, with shaping toward its midpoint. The fixed `eps=30` and `del=25`
-values describe one instance of the modal specification; they do not themselves
-define the PPO reward or prove the property. Quantified-simulation generation
-retains the modal formula as verification metadata, so success here means
-empirical target-band occupancy in the generated simulator, not proof of the
-fixed-tolerance claim. The quantified antecedent `v^2 < del^2` is not used to
-filter simulator reset states; resets follow the configured initialization and
-variable bounds.
+For this experiment only, the fixed-tolerance model has an added `holdSpeed`
+mode with zero acceleration inside `[del, eps]`, and the `ebrakeact` controller
+can transition into it. This changes the simulated plant/controller relative
+to the original cruise-control model; the result evaluates learned behavior on
+the modified simulator and is not evidence that the original or fixed-tolerance
+modal theorem is proved. `targetSpeedBand` rewards proximity to `del`, and
+`holdingTargetSpeed` adds a per-step bonus while the controller is in the
+hold mode inside the target band. `epsilonSafe` tracks episodes exceeding the
+absolute speed limit. The bounded initial-speed override intentionally starts
+episodes in the target range; it does not test the theorem's quantified
+initialization premise.
 
 Training also writes a reward/episode-length curve. Each evaluation run writes
 a paired PPO-vs-baseline summary plot for reward, target-band occupancy, longest
 consecutive in-band duration, finishing inside the band, controller paths,
-and mode transitions. Up to two PPO rollout plots are saved for episodes that
-reach `|v| <= 25`, prioritizing the longest sustained in-zone runs, and up to two
-for episodes that never reach the zone. The trajectory plots show velocity and
-the target band, position error, controller mode, selected path, and rewards.
-Here, "success" means only that the rollout reached the target band at least
-once; use occupancy, consecutive duration, and final-in-band metrics to judge
-whether the controller stayed there.
+mode transitions, and (for the dedicated fixed-tolerance trainer) epsilon
+violations. Up to two PPO rollout plots are saved for episodes that reach the
+configured target band, prioritizing the longest sustained in-zone runs, and
+up to two for episodes that never reach it. Trajectory plots show velocity and
+the target band, position error, controller mode, selected path, rewards, and
+the optional epsilon limit. Reaching the band at least once is not equivalent
+to holding it; use occupancy, consecutive duration, final-in-band, and safety
+metrics to assess the policy.
 
 To compare on a separate fixed seed range from the original `11` evaluation,
 use a new base seed; the evaluator starts at `--seed + 1000`. For example, this
@@ -159,6 +157,39 @@ evaluates seeds `1100` through `1119`:
 
 This trains on the generated simulation and is not evidence that the quantified
 stability theorem is proved.
+
+### Training the Test 1 Static-Safety Controller
+
+Train and evaluate a masked PPO policy on the planar robot model in
+`test/input/withBound/test1.txt`:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\train_ppo_test1.py --timesteps 10000 --eval-episodes 20
+```
+
+The script saves the policy under `models/test1/`, the generated environment
+under `generated_test1_ppo_env.py`, and training/evaluation plots and an
+episode-level CSV under `logs/test1/`. Use `--eval-only` to evaluate the saved
+policy without training; `--seed`, `--max-episode-steps`, `--model-dir`, and
+`--out-dir` control reproducibility, episode length, and artifact locations.
+
+The trainer samples initial states satisfying Test 1's exact premise
+(`v=0`, unit direction, distinct robot/obstacle positions, and `r!=0`); the
+unmodified variable-bound samplers almost never satisfy its equality
+constraints. The model's `initialState`/`assumptions` signatures now explicitly
+include `r`, which is referenced by the initial-state predicate. Evaluation
+reports the post-action `ensure` predicate and checks `loopinv` over every
+recorded state. In Test 1, the initial premise already implies `ensure`
+(non-coincidence with the obstacle), so the ensure rate is not a useful
+standalone measure of learned safety. The loop-invariant rate and termination
+reasons are more informative; neither constitutes a formal proof.
+
+With the current sampler, the action mask exposes the brake and remain-stopped
+branches. The new-safe-curve branch is typically masked because its controller
+requires the exact equality `r*w=v` after nondeterministic values are sampled;
+at initial `v=0`, an independent continuous sample for `w` almost never equals
+zero. This is a limitation of the current simulation of that branch, not an
+assertion that the branch is formally infeasible.
 
 ### Training the ETCS Safety Controller
 

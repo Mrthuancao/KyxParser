@@ -49,6 +49,7 @@ Definitions
   Real normalPI = 3;
   Real sbrakeact = 4;
   Real sbrakefull = 5;
+  Real holdSpeed = 6;
 
   // Fixed-tolerance instance (not the universally quantified stability theorem).
   // @const: bound=30.0; def="target velocity tolerance"
@@ -56,11 +57,17 @@ Definitions
   // @const: bound=25.0; def="initial velocity tolerance"
   Real del;
 
-  // @safety: penalty=-100, on_failure=truncate:status=failure, on_success=continue:status=none
-  Bool cruiseSafe() <-> -500 <= x & x <= 500 & -20 <= v & v <= 40 & 0 <= t & t <= 2.5 & 0 <= mode & mode <= 5;
+  // @safety: penalty=-1000, on_failure=truncate:status=failure, on_success=continue:status=none
+  Bool epsilonSafe() <-> -eps <= v & v <= eps;
 
-  // @progress: reward=10, shape={-abs(v - 27.5)}, on_success=continue:status=none, on_failure=continue:status=none
-  Bool targetSpeedBand() <-> 25 <= v & v <= 30;
+  // @safety: penalty=-100, on_failure=truncate:status=failure, on_success=continue:status=none
+  Bool cruiseSafe() <-> -500 <= x & x <= 500 & -20 <= v & v <= 40 & 0 <= t & t <= 2.5 & 0 <= mode & mode <= 6;
+
+  // @progress: reward=10, shape={-abs(v - del)}, on_success=continue:status=none, on_failure=continue:status=none
+  Bool targetSpeedBand() <-> del <= v & v <= eps;
+
+  // @progress: reward=25, shape={0}, on_success=continue:status=none, on_failure=continue:status=none
+  Bool holdingTargetSpeed() <-> mode = holdSpeed & del <= v & v <= eps;
 
   HP initializeMode ::= {
     mode:=ebrakeact()
@@ -78,7 +85,9 @@ Definitions
   };
 
   HP controlFunc ::= {
-    /* ebrakeact: Hold only if time < 2.5 AND velocity > 15 */
+    /* Switch to hold mode when speed is inside the fixed target band. */
+    ?mode = ebrakeact(); ?del <= v & v <= eps; mode:=holdSpeed()
+    ++
     ?mode = ebrakeact(); ?15 <= v & v <= 40 & t = 2.5; mode:=ebrakefull()
     ++ ?mode = ebrakeact(); ?15 <= v & v <= 16 & 0 <= t & t <= 2.5; t:=0; mode:=sbrakeact()
     ++ ?mode = ebrakeact(); ?t < 2.5 & v > 15; mode:=mode
@@ -106,6 +115,9 @@ Definitions
     /* accelerate: Hold only if velocity < -5 */
     ++ ?mode = accelerate(); ?-6 <= v & v <= -5 & -500 <= x & x <= 500; x:=0; mode:=normalPI()
     ++ ?mode = accelerate(); ?v < -5; mode:=mode
+
+    /* holdSpeed: Maintain velocity inside the fixed-tolerance target band */
+    ++ ?mode = holdSpeed(); ?del <= v & v <= eps; mode:=mode
   };
 
   HP continuousDynamics ::= {
@@ -115,6 +127,7 @@ Definitions
     ++ ?mode = sbrakefull(); {v'=-2.5, x'=0, t'=0 & 5 <= v & v <= 20 & t = 1.3}
     ++ ?mode = normalPI(); {v'=-0.001*x - 0.052*v, x'=v, t'=0 & -15 <= v & v <= 15 & -500 <= x & x <= 500}
     ++ ?mode = accelerate(); {v'=1.5, x'=0, t'=0 & -20 <= v & v <= -5}
+    ++ ?mode = holdSpeed(); {v'=0, x'=0, t'=0 & del <= v & v <= eps}
   };
 
   HP transitionAndFlow ::= {
@@ -135,9 +148,9 @@ ProgramVariables
   Real x;
   // @var: bound=[0:2.5], plot=line, def="elapsed time in the active braking phase"
   Real t;
-  // @var: bound=[-30:24], plot=line, def="cruise-control velocity"
+  // @var: bound=[-30:30], plot=line, def="cruise-control velocity"
   Real v;
-  // @var: bound=[0:5], plot=hist, def="active controller mode"
+  // @var: bound=[0:6], plot=hist, def="active controller mode"
   Real mode;
 End.
 

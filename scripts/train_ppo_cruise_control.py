@@ -124,6 +124,7 @@ def plot_episode_trajectory(
     output_path: Path,
     target_speed_min: float,
     target_speed_max: float,
+    epsilon_limit: float | None = None,
     policy_name: str = "PPO",
 ) -> None:
     """Plot a rollout's states, controller modes/actions, and per-step reward."""
@@ -151,6 +152,19 @@ def plot_episode_trajectory(
         alpha=0.15,
         label=f"Target band ({band_label})",
     )
+    if epsilon_limit is not None:
+        axes[0].axhline(
+            epsilon_limit,
+            color="tab:red",
+            linestyle="--",
+            label=f"Safety limit +{epsilon_limit:g}",
+        )
+        axes[0].axhline(
+            -epsilon_limit,
+            color="tab:red",
+            linestyle="--",
+            label=f"Safety limit -{epsilon_limit:g}",
+        )
     axes[0].axhline(0.0, color="black", linewidth=0.8)
     axes[0].set_ylabel("Velocity")
     axes[0].set_title(
@@ -219,6 +233,7 @@ def plot_representative_episodes(
     output_dir: Path,
     target_speed_min: float,
     target_speed_max: float,
+    epsilon_limit: float | None = None,
     max_per_category: int = 2,
 ) -> None:
     """Plot representative PPO episodes by target-band reachability."""
@@ -256,7 +271,11 @@ def plot_representative_episodes(
                 f"{category}_{index}_seed_{result['seed']}.png"
             )
             plot_episode_trajectory(
-                result, output_path, target_speed_min, target_speed_max
+                result,
+                output_path,
+                target_speed_min,
+                target_speed_max,
+                epsilon_limit,
             )
 
 
@@ -266,6 +285,7 @@ def plot_evaluation_summary(
     output_path: Path,
     target_speed_min: float,
     target_speed_max: float,
+    epsilon_limit: float | None = None,
 ) -> None:
     """Compare PPO and first-legal baseline on shared seeds and zone metrics."""
     if not policy_results or len(policy_results) != len(baseline_results):
@@ -293,7 +313,7 @@ def plot_evaluation_summary(
         axis.set_ylabel(ylabel)
         axis.legend(fontsize="small")
 
-    fig, axes = plt.subplots(3, 2, figsize=(13, 12))
+    fig, axes = plt.subplots(4, 2, figsize=(13, 16))
     grouped_bars(
         axes[0, 0],
         [result["total_reward"] for result in policy_results],
@@ -330,6 +350,24 @@ def plot_evaluation_summary(
     )
     axes[1, 1].set_ylim(-0.05, 1.15)
 
+    if epsilon_limit is not None:
+        grouped_bars(
+            axes[2, 0],
+            [
+                int(result["epsilon_violated"])
+                for result in policy_results
+            ],
+            [
+                int(result["epsilon_violated"])
+                for result in baseline_results
+            ],
+            f"Episodes exceeding |v| > {epsilon_limit:g}",
+            "Violation (0/1)",
+        )
+        axes[2, 0].set_ylim(-0.05, 1.15)
+    else:
+        axes[2, 0].set_visible(False)
+
     for label, results in (
         ("PPO", policy_results),
         ("First-legal baseline", baseline_results),
@@ -338,24 +376,25 @@ def plot_evaluation_summary(
             action for result in results for action in result["chosen_actions"]
         )
         path_ids = sorted(path_counts)
-        axes[2, 0].plot(
+        axes[2, 1].plot(
             path_ids,
             [path_counts[path_id] for path_id in path_ids],
             marker="o",
             label=label,
         )
-    axes[2, 0].set_title("Controller path selections")
-    axes[2, 0].set_xlabel("Path ID")
-    axes[2, 0].set_ylabel("Selections across episodes")
-    axes[2, 0].legend()
+    axes[2, 1].set_title("Controller path selections")
+    axes[2, 1].set_xlabel("Path ID")
+    axes[2, 1].set_ylabel("Selections across episodes")
+    axes[2, 1].legend()
 
     grouped_bars(
-        axes[2, 1],
+        axes[3, 0],
         [len(result["mode_transitions"]) for result in policy_results],
         [len(result["mode_transitions"]) for result in baseline_results],
         "Mode transitions per episode",
         "Transitions",
     )
+    axes[3, 1].set_visible(False)
     fig.tight_layout()
     fig.savefig(output_path, dpi=160)
     plt.close(fig)
@@ -435,6 +474,7 @@ def evaluate_policy(
     seed: int,
     target_speed_min: float,
     target_speed_max: float,
+    epsilon_limit: float | None = None,
 ) -> list[dict]:
     results = []
     policy_name = "First-legal baseline" if model is None else "PPO policy"
@@ -518,6 +558,7 @@ def evaluate_policy(
                 target_speed_min,
                 target_speed_max,
             )
+            max_abs_velocity = max(abs(value) for value in velocity_samples)
             results.append({
                 "episode": episode_index + 1,
                 "seed": seed + episode_index,
@@ -526,6 +567,11 @@ def evaluate_policy(
                 "reached_target_band": reached_target_band,
                 "target_step": target_step,
                 "target_simulation_time": target_simulation_time,
+                "max_abs_velocity": max_abs_velocity,
+                "epsilon_violated": (
+                    any(abs(value) > epsilon_limit for value in velocity_samples)
+                    if epsilon_limit is not None else False
+                ),
                 **zone_metrics,
                 "mode_transitions": mode_transitions,
                 "terminated": terminated,
@@ -555,6 +601,8 @@ def save_evaluation(results: list[dict], output_path: Path) -> None:
             "reached_target_band",
             "target_step",
             "target_simulation_time",
+            "max_abs_velocity",
+            "epsilon_violated",
             "steps_inside_zone",
             "fraction_steps_inside_zone",
             "inside_zone_simulation_time",
@@ -583,26 +631,51 @@ def save_evaluation(results: list[dict], output_path: Path) -> None:
     print(f"Saved evaluation episodes: {output_path}")
 
 
-def main() -> None:
+def main(fixed_tolerance: bool = False) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
+    fixed_model_path = (
+        ROOT / "test" / "input" / "withBound"
+        / "CruiseControlStabilityFixedTolerance.txt"
+    )
     parser.add_argument(
         "--model",
         type=Path,
-        default=ROOT / "test" / "input" / "withBound" / "CruiseControlStability.txt",
+        default=(
+            fixed_model_path if fixed_tolerance else
+            ROOT / "test" / "input" / "withBound" / "CruiseControlStability.txt"
+        ),
     )
     parser.add_argument("--timesteps", type=int, default=10000)
     parser.add_argument("--eval-episodes", type=int, default=10)
     parser.add_argument(
         "--target-speed-min",
         type=float,
-        default=DEFAULT_TARGET_SPEED_MIN,
+        default=25.0 if fixed_tolerance else DEFAULT_TARGET_SPEED_MIN,
         help="Inclusive lower velocity bound for target-band evaluation.",
     )
     parser.add_argument(
         "--target-speed-max",
         type=float,
-        default=DEFAULT_TARGET_SPEED_MAX,
+        default=30.0 if fixed_tolerance else DEFAULT_TARGET_SPEED_MAX,
         help="Inclusive upper velocity bound for target-band evaluation.",
+    )
+    parser.add_argument(
+        "--initial-velocity-min",
+        type=float,
+        default=25.0 if fixed_tolerance else None,
+        help="Override the sampled initial velocity lower bound.",
+    )
+    parser.add_argument(
+        "--initial-velocity-max",
+        type=float,
+        default=29.9 if fixed_tolerance else None,
+        help="Override the sampled initial velocity upper bound.",
+    )
+    parser.add_argument(
+        "--epsilon-limit",
+        type=float,
+        default=30.0 if fixed_tolerance else None,
+        help="Optional absolute-velocity limit to report in plots and evaluation.",
     )
     parser.add_argument(
         "--eval-only",
@@ -622,12 +695,29 @@ def main() -> None:
         help="Maximum simulator steps per training and evaluation episode.",
     )
     parser.add_argument("--seed", type=int, default=11)
-    parser.add_argument("--out-dir", type=Path, default=ROOT / "logs" / "cruise_control")
-    parser.add_argument("--model-dir", type=Path, default=ROOT / "models")
+    parser.add_argument(
+        "--out-dir",
+        type=Path,
+        default=(
+            ROOT / "logs" / "cruise_control_fixed_tolerance"
+            if fixed_tolerance else ROOT / "logs" / "cruise_control"
+        ),
+    )
+    parser.add_argument(
+        "--model-dir",
+        type=Path,
+        default=(
+            ROOT / "models" / "cruise_control_fixed_tolerance"
+            if fixed_tolerance else ROOT / "models"
+        ),
+    )
     parser.add_argument(
         "--generated-env",
         type=Path,
-        default=ROOT / "generated_cruise_control_env.py",
+        default=(
+            ROOT / "generated_cruise_control_fixed_tolerance_env.py"
+            if fixed_tolerance else ROOT / "generated_cruise_control_env.py"
+        ),
         help="Persistent path for the generated Gym environment module.",
     )
     args = parser.parse_args()
@@ -641,6 +731,17 @@ def main() -> None:
         parser.error("--max-episode-steps must be at least 1")
     if args.target_speed_min > args.target_speed_max:
         parser.error("--target-speed-min must not exceed --target-speed-max")
+    if (args.initial_velocity_min is None) != (args.initial_velocity_max is None):
+        parser.error(
+            "--initial-velocity-min and --initial-velocity-max must be supplied together"
+        )
+    if (
+        args.initial_velocity_min is not None
+        and args.initial_velocity_min > args.initial_velocity_max
+    ):
+        parser.error("--initial-velocity-min must not exceed --initial-velocity-max")
+    if args.epsilon_limit is not None and args.epsilon_limit <= 0:
+        parser.error("--epsilon-limit must be positive")
     if not args.model.is_file():
         raise FileNotFoundError(f"Cruise Control model not found: {args.model}")
 
@@ -655,12 +756,20 @@ def main() -> None:
     print(f"Saved generated environment: {args.generated_env}")
 
     def make_env():
+        config_override = {
+            "max_episode_steps": args.max_episode_steps,
+            "initial_state_buffer_config": {"enabled": False},
+        }
+        if args.initial_velocity_min is not None:
+            config_override["initial_state_sampling_config"] = {
+                "v": {
+                    "min": str(args.initial_velocity_min),
+                    "max": str(args.initial_velocity_max),
+                }
+            }
         env = env_class(
             render_mode=None,
-            config_override={
-                "max_episode_steps": args.max_episode_steps,
-                "initial_state_buffer_config": {"enabled": False},
-            },
+            config_override=config_override,
         )
         return Monitor(env)
 
@@ -720,6 +829,7 @@ def main() -> None:
             args.seed + 1000,
             args.target_speed_min,
             args.target_speed_max,
+            args.epsilon_limit,
         )
         baseline_results = evaluate_policy(
             eval_env,
@@ -728,6 +838,7 @@ def main() -> None:
             args.seed + 1000,
             args.target_speed_min,
             args.target_speed_max,
+            args.epsilon_limit,
         )
         save_evaluation(results, evaluation_path)
         save_evaluation(
@@ -743,12 +854,14 @@ def main() -> None:
         args.out_dir / "cruise_control_evaluation_summary.png",
         args.target_speed_min,
         args.target_speed_max,
+        args.epsilon_limit,
     )
     plot_representative_episodes(
         results,
         args.out_dir,
         args.target_speed_min,
         args.target_speed_max,
+        args.epsilon_limit,
         max_per_category=args.plots_per_category,
     )
 
@@ -789,6 +902,12 @@ def main() -> None:
             f"finished inside="
             f"{sum(r['final_inside_zone'] for r in evaluation_results)}/{len(evaluation_results)}"
         )
+    if args.epsilon_limit is not None:
+        violations = sum(result["epsilon_violated"] for result in results)
+        print(
+            f"PPO episodes exceeding |v| > {args.epsilon_limit:g}: "
+            f"{violations}/{len(results)}"
+        )
     print(f"Selected controller paths: {dict(sorted(action_counts.items()))}")
     for result in results:
         transitions = [
@@ -804,6 +923,7 @@ def main() -> None:
             f"longest_inside={result['longest_consecutive_inside_steps']} steps/"
             f"{result['longest_consecutive_inside_simulation_time']:.3f}s, "
             f"final_inside={result['final_inside_zone']}, "
+            f"max_abs_v={result['max_abs_velocity']:.4f}, "
             f"terminated={result['terminated']}, truncated={result['truncated']}, "
             f"reason={result['termination_reason']}, "
             f"mode_transitions={transitions}"
