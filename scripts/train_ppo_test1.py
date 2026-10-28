@@ -38,6 +38,7 @@ if str(AST2) not in sys.path:
     sys.path.insert(0, str(AST2))
 
 from generator_core import generate_gym_environment_file  # pyright: ignore[reportMissingImports]
+from ast_config import BinaryFormulaOp
 
 # Zero-based ID of Test 1's third controlFunc alternative (a := A).
 ACCELERATION_PATH_ID = 2
@@ -81,19 +82,15 @@ def build_env_class(model_path: Path, generated_path: Path):
 
 
 def configure_initial_state_sampling(env) -> None:
-    """Sample states satisfying Test 1's exact zero-speed/unit-direction premise."""
+    """Sample bounded positions and obstacle coordinates with a valid premise."""
     sampled_direction = {"angle": 0.0}
     env.initial_state_samplers.update({
-        "x": lambda: float(env.np_random.uniform(10.0, 90.0)),
-        "y": lambda: float(env.np_random.uniform(10.0, 90.0)),
         "v": lambda: 0.0,
         "a": lambda: 0.0,
         "dx": lambda: _sample_dx(env, sampled_direction),
         "dy": lambda: float(np.sin(sampled_direction["angle"])),
         "w": lambda: 0.0,
         "r": lambda: 10.0,
-        "xo": lambda: float(env.np_random.uniform(10.0, 90.0)),
-        "yo": lambda: float(env.np_random.uniform(10.0, 90.0)),
         "t": lambda: 0.0,
     })
 
@@ -177,6 +174,19 @@ def _configure_forced_acceleration_baseline(
 ) -> None:
     raw_env = env.unwrapped
     obstacle_x, obstacle_y = obstacle
+    raw_env._isWellformedDir_impl = lambda dx, dy: math.isclose(
+        dx * dx + dy * dy, 1.0, rel_tol=0.0, abs_tol=1e-6
+    )
+    raw_env.user_defined_functions["isWellformedDir"] = (
+        raw_env._isWellformedDir_impl
+    )
+
+    def bypass_admissible_separation_guard(condition):
+        if isinstance(condition, BinaryFormulaOp) and condition.op == "|":
+            return True
+        return None
+
+    raw_env._controller_test_handler = bypass_admissible_separation_guard
 
     def sample_nondeterministic_assignment(var_name: str) -> float:
         if var_name == "r":
@@ -503,8 +513,14 @@ def save_evaluation(episodes: list[dict], output_dir: Path) -> None:
 
     csv_path = output_dir / "test1_evaluation.csv"
     fields = (
-        "episode", "seed", "initial_ensure", "success", "initial_invariant",
-        "invariant_violated", "generated_safety_termination",
+        "episode",
+        "seed",
+        "initial_state",
+        "initial_ensure",
+        "success",
+        "initial_invariant",
+        "invariant_violated",
+        "generated_safety_termination",
         "minimum_remaining_safety_distance", "termination_reason", "terminated",
         "truncated", "steps", "total_reward", "chosen_actions", "final_state",
     )
@@ -515,10 +531,16 @@ def save_evaluation(episodes: list[dict], output_dir: Path) -> None:
             row = {
                 key: episode[key]
                 for key in fields
-                if key != "minimum_remaining_safety_distance"
+                if key not in {
+                    "initial_state",
+                    "minimum_remaining_safety_distance",
+                }
             }
             row["minimum_remaining_safety_distance"] = min(
                 episode["remaining_safety_distance_history"]
+            )
+            row["initial_state"] = json.dumps(
+                episode["state_history"][0], sort_keys=True
             )
             row["chosen_actions"] = json.dumps(row["chosen_actions"])
             row["final_state"] = json.dumps(row["final_state"], sort_keys=True)
@@ -549,7 +571,7 @@ def save_policy_comparison(
 
     groups = (
         ("PPO", policy_episodes),
-        ("Always acceleration (path 2)", baseline_episodes),
+        ("Always acceleration (guard bypass)", baseline_episodes),
     )
     metrics = (
         ("loop invariant held", lambda e: not e["invariant_violated"]),
@@ -570,7 +592,7 @@ def save_policy_comparison(
         axis.set_ylabel("Episode rate")
         axis.set_title(metric_name)
         axis.tick_params(axis="x", labelrotation=15)
-    fig.suptitle("Test 1: PPO vs. forced-acceleration baseline")
+    fig.suptitle("Test 1: PPO vs. forced-acceleration monitor stress test")
     fig.tight_layout()
     plot_path = output_dir / "test1_policy_vs_acceleration_baseline.png"
     fig.savefig(plot_path, dpi=160)
@@ -579,7 +601,12 @@ def save_policy_comparison(
 
     csv_path = output_dir / "test1_policy_vs_acceleration_baseline.csv"
     fields = (
-        "policy", "episode", "seed", "success", "invariant_violated",
+        "policy",
+        "episode",
+        "seed",
+        "initial_state",
+        "success",
+        "invariant_violated",
         "generated_safety_termination",
         "minimum_remaining_safety_distance",
         "steps", "total_reward", "termination_reason", "chosen_actions",
@@ -594,6 +621,9 @@ def save_policy_comparison(
                     "policy": policy_name,
                     "episode": episode["episode"],
                     "seed": episode["seed"],
+                    "initial_state": json.dumps(
+                        episode["state_history"][0], sort_keys=True
+                    ),
                     "success": episode["success"],
                     "invariant_violated": episode["invariant_violated"],
                     "generated_safety_termination": (
@@ -727,10 +757,10 @@ def main() -> None:
 
     eval_env = make_env()
     try:
-        obstacle = _configure_comparison_initial_state_sampling(eval_env)
         episodes = collect_episodes(
             eval_env, model, args.eval_episodes, args.seed + 1000
         )
+        obstacle = _configure_comparison_initial_state_sampling(eval_env)
         action_count = int(eval_env.unwrapped.action_space.n)
         if ACCELERATION_PATH_ID >= action_count:
             raise RuntimeError(

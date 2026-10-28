@@ -202,28 +202,34 @@ policy without training; `--seed`, `--max-episode-steps`, `--model-dir`, and
 `--out-dir` control reproducibility, episode length, and artifact locations.
 
 The trainer samples initial states satisfying Test 1's exact premise
-(`v=0`, unit direction, distinct robot/obstacle positions, and `r!=0`); the
-unmodified variable-bound samplers almost never satisfy its equality
-constraints. The model's `initialState`/`assumptions` signatures now explicitly
-include `r`, which is referenced by the initial-state predicate. Evaluation
-uses the same deterministic test scenario for both policies: the robot starts
-from rest, facing an obstacle placed 70 distance units ahead along its
-constant-radius path. Repeated evaluation episodes reuse this scenario, so
-their rates are repeatability checks, not independent randomized trials. In
-Test 1, `ensure` only checks that robot and obstacle
-positions differ, so it is not a useful standalone measure of learned safety.
-Evaluation also checks `loopinv` and reports termination reasons; these
-simulation metrics are not a formal proof.
+(`v=0`, unit direction, distinct robot/obstacle positions, and `r!=0`).
+Robot and obstacle coordinates use the model's declared variable-bound
+samplers, so each seeded evaluation episode gets a repeatable but different
+bounded scenario. The model's `initialState`/`assumptions` signatures now
+explicitly include `r`, which is referenced by the initial-state predicate.
+The forced-acceleration monitor stress test uses a separate fixed scenario:
+the robot starts from rest, facing an obstacle placed 70 distance units ahead
+along its constant-radius path. It bypasses the acceleration branch's
+admissible-separation test so that unsafe acceleration can exercise the
+generated invariant monitor, and applies a `1e-6` numerical tolerance to
+direction normalization to avoid false invariant failures from ODE floating
+point drift. It still uses the generated modal termination condition. The
+monitor should end the episode when the stopping-distance condition is
+violated, before the robot physically reaches the obstacle; this is a safety
+stress test, not a goal-reaching baseline. These overrides mean the trajectory
+does not follow the controller's normal guarded semantics. The PPO and
+baseline episodes are not state-matched comparisons. In Test 1, `ensure` only
+checks that robot and obstacle positions differ, so it is not a useful
+standalone measure of learned safety. Evaluation also checks `loopinv` and
+reports termination reasons; these simulation metrics are not a formal proof.
+Initial states are included in the evaluation CSV files to make the sampled
+scenarios inspectable.
 
 The comparison baseline repeatedly requests controller path 2 and supplies
 `r=512`, `w=v/r`, and the fixed obstacle coordinates through the simulator's
-nondeterministic-assignment hook. The obstacle is placed 70 distance units
-along the resulting planned arc. Unlike the prior externally stopped
-experiment, this baseline does not override the generated termination
-condition, bypass the controller's `admissibleSeparation` guard, or apply a
-custom collision radius. Termination reasons therefore come from generated
-environment behavior (for example, a failed controller test, a safety
-postcondition, or a loop invariant), or from the episode time limit. A
+nondeterministic-assignment hook. Termination reasons therefore come from
+generated environment behavior (for example, a safety postcondition or loop
+invariant), or from the episode time limit. A
 `generated_safety_termination` result specifically means the environment
 reported `model_loop_invariant_violation` or
 `model_safety_postcondition_violation`; a failed controller guard is reported
