@@ -187,6 +187,15 @@ The script saves up to 10 target-band-reaching and 10 not-reaching PPO episode
 plots, depending on how many episodes fall into each category. The separate
 output directory preserves prior evaluation artifacts.
 
+To evaluate from lower initial speeds while leaving the saved policy and
+training distribution unchanged, provide both evaluation-only velocity
+bounds. For example, this samples initial velocity uniformly from `[5, 15]`
+within the model's declared `[5, 65]` bound:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\train_ppo_cruise_control_around25.py --eval-only --eval-episodes 50 --plots-per-category 10 --eval-initial-velocity-min 5 --eval-initial-velocity-max 15 --out-dir logs\cruise_control_around25\eval_low_velocity
+```
+
 The pipeline plots training reward/episode length, paired PPO versus first-legal
 baseline metrics, representative rollouts, and the annotated `cruiseSafe`
 invariant rate. The default target band is derived from `nearTargetSpeed`; the

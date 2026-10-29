@@ -68,6 +68,46 @@ def _add_safety_metrics(env, results: list[dict]) -> None:
         )
 
 
+def _configure_evaluation_velocity_sampling(
+    env, minimum: float | None, maximum: float | None
+) -> None:
+    if minimum is None and maximum is None:
+        return
+    if minimum is None or maximum is None:
+        raise ValueError(
+            "Both evaluation velocity bounds must be provided together."
+        )
+
+    raw_env = env.unwrapped
+    velocity_sampling = raw_env.config.get(
+        "initial_state_sampling_config", {}
+    ).get("v")
+    if not velocity_sampling or not {"min", "max"}.issubset(velocity_sampling):
+        raise ValueError(
+            "The generated environment has no bounded initial velocity sampler."
+        )
+    declared_minimum = float(
+        raw_env._evaluate_expression(velocity_sampling["min"], {})
+    )
+    declared_maximum = float(
+        raw_env._evaluate_expression(velocity_sampling["max"], {})
+    )
+    if minimum > maximum:
+        raise ValueError(
+            "Evaluation initial velocity minimum must not exceed its maximum."
+        )
+    if minimum < declared_minimum or maximum > declared_maximum:
+        raise ValueError(
+            "Evaluation initial velocity range "
+            f"[{minimum}, {maximum}] must be within the model bounds "
+            f"[{declared_minimum}, {declared_maximum}]."
+        )
+
+    raw_env.initial_state_samplers["v"] = lambda: float(
+        raw_env.np_random.uniform(minimum, maximum)
+    )
+
+
 def _save_safety_report(
     policy_results: list[dict],
     baseline_results: list[dict],
@@ -170,6 +210,16 @@ def main() -> None:
     parser.add_argument("--target-speed-min", type=float, default=24.0)
     parser.add_argument("--target-speed-max", type=float, default=26.0)
     parser.add_argument("--plots-per-category", type=int, default=10)
+    parser.add_argument(
+        "--eval-initial-velocity-min",
+        type=float,
+        help="Override the lower initial-velocity sampling bound for evaluation only.",
+    )
+    parser.add_argument(
+        "--eval-initial-velocity-max",
+        type=float,
+        help="Override the upper initial-velocity sampling bound for evaluation only.",
+    )
     parser.add_argument(
         "--out-dir",
         type=Path,
@@ -276,6 +326,11 @@ def main() -> None:
 
     eval_env = make_env()
     try:
+        _configure_evaluation_velocity_sampling(
+            eval_env,
+            args.eval_initial_velocity_min,
+            args.eval_initial_velocity_max,
+        )
         policy_results = evaluate_policy(
             eval_env,
             model,
