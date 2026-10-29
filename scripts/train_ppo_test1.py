@@ -381,60 +381,71 @@ def plot_episode(episode: dict, output_path: Path) -> None:
     states = episode["state_history"]
     steps = np.arange(len(states))
     actions = episode["chosen_actions"]
-    fig, axes = plt.subplots(6, 1, figsize=(10, 15), sharex=True)
-
-    axes[0].plot(
+    trajectory_path = output_path.with_name(
+        f"{output_path.stem}_trajectory{output_path.suffix}"
+    )
+    trajectory_fig, trajectory_axis = plt.subplots(figsize=(7, 7))
+    trajectory_axis.plot(
         [state["x"] for state in states],
         [state["y"] for state in states],
         marker=".",
         label="Robot trajectory",
     )
-    axes[0].scatter(
+    trajectory_axis.scatter(
         [states[0]["xo"]], [states[0]["yo"]],
         marker="x", s=70, color="tab:red", label="Obstacle",
     )
-    axes[0].set_xlabel("x")
-    axes[0].set_ylabel("y")
-    axes[0].set_title("Planar robot path")
+    trajectory_axis.set_xlabel("x")
+    trajectory_axis.set_ylabel("y")
+    trajectory_axis.set_title(
+        f"Episode {episode['episode']}: planar robot path"
+    )
+    trajectory_axis.set_aspect("equal", adjustable="datalim")
+    trajectory_axis.legend()
+    trajectory_fig.tight_layout()
+    trajectory_fig.savefig(trajectory_path, dpi=160)
+    plt.close(trajectory_fig)
+    print(f"Saved Test 1 trajectory plot: {trajectory_path}")
+
+    fig, axes = plt.subplots(5, 1, figsize=(10, 13), sharex=True)
+
+    axes[0].plot(steps, [state["v"] for state in states], label="v")
+    axes[0].plot(steps, [state["a"] for state in states], label="a")
+    axes[0].set_ylabel("Velocity / acceleration")
     axes[0].legend()
 
-    axes[1].plot(steps, [state["v"] for state in states], label="v")
-    axes[1].plot(steps, [state["a"] for state in states], label="a")
-    axes[1].set_ylabel("Velocity / acceleration")
-    axes[1].legend()
-
-    axes[2].plot(
+    axes[1].plot(
         steps,
         episode["remaining_safety_distance_history"],
         color="tab:red",
         label="Remaining safety distance",
     )
-    axes[2].axhline(
+    axes[1].axhline(
         0.0, color="black", linestyle="--", linewidth=1,
         label="Safety boundary",
     )
-    axes[2].set_ylabel("Distance margin")
-    axes[2].set_title("max(|x-xo|, |y-yo|) - stopDist(v)")
+    axes[1].set_ylabel("Distance margin")
+    axes[1].set_title("max(|x-xo|, |y-yo|) - stopDist(v)")
+    axes[1].legend()
+
+    axes[2].plot(steps, [state["dx"] for state in states], label="dx")
+    axes[2].plot(steps, [state["dy"] for state in states], label="dy")
+    axes[2].set_ylabel("Direction")
     axes[2].legend()
 
-    axes[3].plot(steps, [state["dx"] for state in states], label="dx")
-    axes[3].plot(steps, [state["dy"] for state in states], label="dy")
-    axes[3].set_ylabel("Direction")
+    axes[3].plot(steps, [state["w"] for state in states], label="w")
+    axes[3].plot(steps, [state["r"] for state in states], label="r")
+    axes[3].set_ylabel("Turn rate / radius")
     axes[3].legend()
 
-    axes[4].plot(steps, [state["w"] for state in states], label="w")
-    axes[4].plot(steps, [state["r"] for state in states], label="r")
-    axes[4].set_ylabel("Turn rate / radius")
-    axes[4].legend()
-
-    axes[5].step(
+    axes[4].step(
         np.arange(1, len(actions) + 1),
         [action["path_id"] for action in actions],
         where="post",
     )
-    axes[5].set_xlabel("Control step")
-    axes[5].set_ylabel("Path ID")
-    axes[5].set_title("Selected controlFunc branch")
+    axes[4].set_xlabel("Control step")
+    axes[4].set_ylabel("Path ID")
+    axes[4].set_title("Selected controlFunc branch")
     fig.suptitle(
         f"Episode {episode['episode']}: post-action ensure={episode['success']}, "
         f"loopinv violation={episode['invariant_violated']}, "
@@ -443,9 +454,12 @@ def plot_episode(episode: dict, output_path: Path) -> None:
         f"reason={episode['termination_reason']}"
     )
     fig.tight_layout()
-    fig.savefig(output_path, dpi=160)
+    signals_path = output_path.with_name(
+        f"{output_path.stem}_signals{output_path.suffix}"
+    )
+    fig.savefig(signals_path, dpi=160)
     plt.close(fig)
-    print(f"Saved Test 1 episode plot: {output_path}")
+    print(f"Saved Test 1 state plot: {signals_path}")
 
 
 def save_evaluation(episodes: list[dict], output_dir: Path) -> None:

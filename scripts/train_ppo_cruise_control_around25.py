@@ -169,7 +169,7 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=11)
     parser.add_argument("--target-speed-min", type=float, default=24.0)
     parser.add_argument("--target-speed-max", type=float, default=26.0)
-    parser.add_argument("--plots-per-category", type=int, default=2)
+    parser.add_argument("--plots-per-category", type=int, default=10)
     parser.add_argument(
         "--out-dir",
         type=Path,

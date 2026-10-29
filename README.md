@@ -176,7 +176,16 @@ or mode sampling. The target band corresponds to the model's
 environment, CSVs, and plots separately under `models/cruise_control_around25/`,
 `generated_cruise_control_around25_env.py`, and `logs/cruise_control_around25/`.
 Use `--eval-only` to evaluate the saved policy; `--target-speed-min` and
-`--target-speed-max` adjust the evaluation target band only.
+`--target-speed-max` adjust the evaluation target band only. To generate up to
+10 representative PPO plots for each category without retraining, run:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\train_ppo_cruise_control_around25.py --eval-only --eval-episodes 50 --plots-per-category 10 --out-dir logs\cruise_control_around25\eval_50_plots10
+```
+
+The script saves up to 10 target-band-reaching and 10 not-reaching PPO episode
+plots, depending on how many episodes fall into each category. The separate
+output directory preserves prior evaluation artifacts.
 
 The pipeline plots training reward/episode length, paired PPO versus first-legal
 baseline metrics, representative rollouts, and the annotated `cruiseSafe`
@@ -240,7 +249,10 @@ Test 1 episode plots include the remaining stopping-distance safety margin
 `max(|x-xo|, |y-yo|) - stopDist(v)`; values at or below zero violate the
 distance disjunction in `isSafe`. Direction normalization is evaluated with a
 small numerical tolerance in the episode metrics because the ODE solver uses
-floating-point integration.
+floating-point integration. Each representative episode is saved as two
+figures: a square, equal-scale planar trajectory with the obstacle, and a
+separate control-step plot for velocity/acceleration, safety margin, direction,
+turn rate/radius, and selected controller branch.
 
 ### Training the ETCS Safety Controller
 

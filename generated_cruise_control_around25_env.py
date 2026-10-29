@@ -1383,7 +1383,16 @@ class KeYmaeraGymEnv(gym.Env):
             return self._execute_hp_node(branch, choice_path, choice_cursor)
         
         elif isinstance(hp_node, Test):
-            condition_met = self._evaluate_expression(hp_node.condition, self.current_state)
+            test_handler = getattr(self, '_controller_test_handler', None)
+            if test_handler is None:
+                condition_met = self._evaluate_expression(hp_node.condition, self.current_state)
+            else:
+                test_override = test_handler(hp_node.condition)
+                condition_met = (
+                    bool(test_override)
+                    if test_override is not None
+                    else self._evaluate_expression(hp_node.condition, self.current_state)
+                )
             if not condition_met:
                 self._debug_print(f"DEBUG: Test condition '{hp_node.condition._repr_indented(0)}' failed. Terminating.")
                 status["terminated"] = True
