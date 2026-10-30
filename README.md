@@ -60,10 +60,10 @@ The policy and training curve are saved under `models/paper/test1/` and `logs/pa
 Input: [`car2.txt`](test/input/withBound/car2.txt). The script uses the model's initial-state buffer and controller choices to train a policy to reach the waypoint.
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\train_ppo_car2.py --timesteps 10000 --eval-episodes 20 --out-dir logs\paper\car2 --model-dir models\paper\car2
+.\.venv\Scripts\python.exe scripts\train_ppo_car2.py --timesteps 10000 --eval-episodes 20
 ```
 
-The policy is saved under `models/paper/car2/`; the training curve, up to five successful and five failed rollouts, validation plot, and per-episode CSV are saved under `logs/paper/car2/`. The generated environment defaults to `generated_car2_env.py`. This script currently has no seed or evaluate-only option.
+The policy is saved under `models/car2/`; the training curve, up to five successful and five failed rollouts, validation plot, and per-episode CSV are saved under `logs/car2/`. The generated environment defaults to `generated_car2_env.py`. This script currently has no seed or evaluate-only option.
 
 ### Test 3 — Cruise control around 25
 

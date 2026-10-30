@@ -322,8 +322,8 @@ def main():
     parser.add_argument('--env-name', type=str, default='KeYmaeraCar2')
     parser.add_argument('--timesteps', type=int, default=10000)
     parser.add_argument('--eval-episodes', type=int, default=20)
-    parser.add_argument('--out-dir', type=Path, default=proj_root / 'logs' / 'plots')
-    parser.add_argument('--model-dir', type=Path, default=proj_root / 'models')
+    parser.add_argument('--out-dir', type=Path, default=proj_root / 'logs' / 'car2')
+    parser.add_argument('--model-dir', type=Path, default=proj_root / 'models' / 'car2')
     parser.add_argument('--invalid-action-mode', choices=['mask', 'penalize', 'repair'], default='mask',
                         help="mask: MaskablePPO only samples legal controller choices; "
                              "penalize: illegal choice ends the episode with a penalty; "
