@@ -1,6 +1,6 @@
 """End-to-end test: parse `train_safety.kyx` -> generate Gym env -> smoke test -> longer episode
 
-Run from project root (d:/Reinforcement learning/kyx_parser) in the .venv:
+Run from project root (kyx_parser) in the .venv:
 
 python scripts/end_to_end_train_safety_test.py
 

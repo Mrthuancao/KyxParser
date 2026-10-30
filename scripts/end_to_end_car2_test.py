@@ -1,6 +1,6 @@
 """End-to-end test: parse `car2.txt` -> generate Gym env -> smoke test -> longer episode
 
-Run from project root (d:/Reinforcement learning/kyx_parser) in the .venv:
+Run from project root (kyx_parser) in the .venv:
 
 python scripts/end_to_end_car2_test.py
 

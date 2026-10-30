@@ -9,7 +9,7 @@ Pipeline: parse car2.txt -> generate Gym env -> wrap with Monitor -> train PPO
 episodes and plot a sample of successful/failed trajectories -> run N validation episodes and plot 
 per-episode success/failure -> print metrics.
 
-Run from project root (d:/Reinforcement learning/kyx_parser) in the .venv:
+Run from project root (kyx_parser) in the .venv:
 
 python scripts/train_ppo_car2.py
 python scripts/train_ppo_car2.py --timesteps 50000

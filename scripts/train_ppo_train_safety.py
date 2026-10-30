@@ -4,7 +4,7 @@ Pipeline: parse train_safety.kyx -> generate Gym env -> wrap with Monitor -> tra
 MaskablePPO -> plot training and evaluation summaries -> collect evaluation
 trajectories -> save representative safety-pass/failure plots and diagnostics.
 
-Run from project root (d:/Reinforcement learning/kyx_parser) in the .venv:
+Run from project root (kyx_parser) in the .venv:
 
 python scripts/train_ppo_train_safety.py
 python scripts/train_ppo_train_safety.py --timesteps 50000
