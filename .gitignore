@@ -6,6 +6,18 @@ __pycache__/       # Ignore Python bytecode cache directories (already present)
 AST_parser/__pycache__/ # Ignore bytecode cache for the AST_parser directory
 .vscode/           # Ignore VS Code specific settings (often user-specific)
 
+# Generated experiment outputs. Curated paper artifacts are retained in the
+# three experiment directories; new runs use logs/paper and models/paper.
+/logs/*
+!/logs/test1/
+!/logs/car2/
+!/logs/cruise_control_around25/
+/models/*
+!/models/test1/
+!/models/car2/
+!/models/cruise_control_around25/
+/tmp_generated_envs/
+
 # Python-specific generated files
 *.pyc              # Ignore Python bytecode files (already present)
 *.pyo              # Ignore optimized Python bytecode files

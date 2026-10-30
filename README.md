@@ -20,6 +20,7 @@ test/input/withBound/
 models/                          # Saved PPO checkpoints
 logs/                            # Generated plots, CSVs, and run diagnostics
 requirements.txt                 # Pinned Python dependencies
+LICENSE                          # MIT license for project-authored code
 README.md                        # Setup and experiment instructions
 ```
 
@@ -28,7 +29,7 @@ Generated environment modules are written to the repository root by default (or 
 ## 3. Prerequisites & Installation
 
 - **Hardware:** No robot hardware is required; the experiments run in simulation.
-- **Software:** Python 3.11 or newer. Python 3.13.1 was used with the pinned dependencies.
+- **Software:** Python 3.13.1 was tested. Other Python versions have not been validated.
 - **Install (PowerShell):**
 
 ```powershell
@@ -39,7 +40,7 @@ py -3.13 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-Run commands below from the repository root. The pinned PyTorch package uses the default PyPI build; install a hardware-specific PyTorch build if needed.
+Run commands below from the repository root. `requirements.txt` pins direct dependencies; pip resolves their transitive dependencies during installation. The MIT license covers project-authored code; third-party dependencies and materials remain subject to their own terms. The pinned PyTorch package uses the default PyPI build; install a hardware-specific PyTorch build if needed.
 
 ## 4. How to Recreate the Experiments
 
@@ -60,10 +61,10 @@ The policy and training curve are saved under `models/paper/test1/` and `logs/pa
 Input: [`car2.txt`](test/input/withBound/car2.txt). The script uses the model's initial-state buffer and controller choices to train a policy to reach the waypoint.
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\train_ppo_car2.py --timesteps 10000 --eval-episodes 20
+.\.venv\Scripts\python.exe scripts\train_ppo_car2.py --timesteps 10000 --eval-episodes 20 --out-dir logs\paper\car2 --model-dir models\paper\car2
 ```
 
-The policy is saved under `models/car2/`; the training curve, up to five successful and five failed rollouts, validation plot, and per-episode CSV are saved under `logs/car2/`. The generated environment defaults to `generated_car2_env.py`. This script currently has no seed or evaluate-only option.
+The policy is saved under `models/paper/car2/`; the training curve, up to five successful and five failed rollouts, validation plot, and per-episode CSV are saved under `logs/paper/car2/`. The generated environment defaults to `generated_car2_env.py`. This script currently has no seed or evaluate-only option.
 
 ### Test 3 — Cruise control around 25
 
