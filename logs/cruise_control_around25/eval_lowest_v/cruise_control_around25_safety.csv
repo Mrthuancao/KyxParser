@@ -1,0 +1,3 @@
+policy,episode,seed,target_band_reached,fraction_steps_in_target_band,longest_consecutive_target_band_seconds,finished_in_target_band,cruise_safe_throughout,cruise_safe_failure_samples,termination_reason
+PPO,1,1032,True,0.359,17.93999999999643,True,True,0,
+First-legal baseline,1,1032,True,0.342,17.0899999999966,True,True,0,
