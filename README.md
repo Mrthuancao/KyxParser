@@ -28,7 +28,6 @@ Generated environment modules are written to the repository root by default (or 
 
 ## 3. Prerequisites & Installation
 
-- **Hardware:** No robot hardware is required; the experiments run in simulation.
 - **Software:** Python 3.13.1 was tested. Other Python versions have not been validated.
 - **Install (PowerShell):**
 
