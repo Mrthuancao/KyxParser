@@ -115,13 +115,12 @@ The policy is saved under `models/paper/train_safety/` using the input filename 
 
 ## 5. Containerized thesis runs
 
-The Docker image packages the checked-out source and the pinned direct Python dependencies. Build it from the thesis branch at a recorded commit so the image contains the same source revision used for the experiment. The image uses the tested Python 3.13.1 base and installs the CPU-only PyTorch 2.9.1 wheel; this avoids downloading CUDA libraries that are not used in the container. The standard local installation instructions above still use the PyTorch package resolved from PyPI.
+The Docker image packages the checked-out source and the pinned direct Python dependencies. Build it from a recorded commit so the image contains the same source revision used for the experiment. Use a clean worktree to ensure the image matches that commit. The image uses the tested Python 3.13.1 base and installs the CPU-only PyTorch 2.9.1 wheel; this avoids downloading CUDA libraries that are not used in the container. The standard local installation instructions above still use the PyTorch package resolved from PyPI.
 
-From PowerShell, check out the thesis revision and build the image:
+From PowerShell, build the image from the checked-out revision:
 
 ```powershell
-git switch thesis
-git pull --ff-only origin thesis
+git status --short
 $commit = (git rev-parse HEAD).Trim()
 docker build --build-arg VCS_REF=$commit -t kyxparser-thesis:$commit .
 docker image inspect --format='{{.Id}}' "kyxparser-thesis:$commit"
