@@ -113,7 +113,7 @@ Input: [`train_safety.kyx`](test/input/withBound/train_safety.kyx). The script g
 
 The policy is saved under `models/paper/train_safety/` using the input filename stem. The output directory contains the evaluation summary, representative episode plots, a training curve (when training episodes complete), and per-episode diagnostics in JSON. The generated environment is written to the repository root. To evaluate the saved policy without retraining, repeat the command with `--eval-only` and the same `--model-dir`; use a different `--out-dir` to preserve previous results.
 
-## 5. Containerized thesis runs
+## 5. Containerized Execution Environment
 
 The Docker image packages the checked-out source and the pinned direct Python dependencies. Build it from a recorded commit so the image contains the same source revision used for the experiment. Use a clean worktree to ensure the image matches that commit. The image uses the tested Python 3.13.1 base and installs the CPU-only PyTorch 2.9.1 wheel; this avoids downloading CUDA libraries that are not used in the container. The standard local installation instructions above still use the PyTorch package resolved from PyPI.
 
