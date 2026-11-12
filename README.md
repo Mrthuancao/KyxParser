@@ -13,10 +13,16 @@ scripts/
   train_ppo_car2.py              # Car 2 waypoint-reaching experiment
   train_ppo_cruise_control_around25.py  # Cruise control around v=25
   train_ppo_cruise_control.py    # Shared cruise-control evaluation/training utilities
+  train_ppo_car1.py              # Car 1 passive-safety experiment
+  train_ppo_train_essential.py   # Train-approach essential-property experiment
+  train_ppo_train_safety.py      # Train-safety experiment
 test/input/withBound/
   test1.txt                      # Test 1 dL model
   car2.txt                       # Test 2 dL model
   CruiseControlStabilityAround25.txt  # Test 3 dL model
+  car1.txt                       # Car 1 passive-safety model
+  train_essential_fixed_authority.kyx  # Train-approach model
+  train_safety.kyx               # Train-safety model
 models/                          # Saved PPO checkpoints
 logs/                            # Generated plots, CSVs, and run diagnostics
 requirements.txt                 # Pinned Python dependencies
@@ -77,12 +83,74 @@ The policy is saved under `models/paper/cruise_control_around25/`; training and 
 
 To re-evaluate that saved policy without training, run the same command with `--eval-only` and the same model directory. Use a new `--out-dir` to retain the original plots and CSVs. To evaluate lower initial velocities, provide both `--eval-initial-velocity-min` and `--eval-initial-velocity-max`; this changes evaluation sampling only.
 
-## 5. Data & Plotting
+### Test 4 — Car 1 passive safety
 
-The three commands above generate the figures used for the experiments; there is no separate plotting script. The plot files are saved in each experiment's `--out-dir`:
+Input: [`car1.txt`](test/input/withBound/car1.txt), a passive-safety model with nested controller choices and continuous dynamics. The training wrapper exposes a path choice plus discretized acceleration and curve-radius parameters. This experiment is a partially validated design: the learned policy may favor the stationary braking path, so safe episodes alone do not demonstrate useful motion or progress.
+
+```powershell
+.\.venv\Scripts\python.exe scripts\train_ppo_car1.py --timesteps 10000 --eval-episodes 20 --seed 11 --out-dir logs\paper\car1 --model-dir models\paper\car1
+```
+
+The script saves `ppo_car1.zip` under `models/paper/car1/`, and the training curve and validation plot under `logs/paper/car1/`. The generated environment is written to the repository root as `generated_car1_env.py`. This script trains and evaluates in one run; it does not currently provide an evaluate-only option.
+
+### Test 5 — Train approach (essential property)
+
+Input: [`train_essential_fixed_authority.kyx`](test/input/withBound/train_essential_fixed_authority.kyx). The controller selects between guarded braking and acceleration choices. Evaluation reports both masked and unmasked policy behavior, so the results show whether performance depends on action masking.
+
+```powershell
+.\.venv\Scripts\python.exe scripts\train_ppo_train_essential.py --timesteps 10000 --eval-episodes 20 --max-episode-steps 200 --plot-episodes 5 --out-dir logs\paper\train_essential --model-dir models\paper\train_essential
+```
+
+The checkpoint is saved as `ppo_train_essential_fixed_authority_masked.zip` under `models/paper/train_essential/`. The output directory contains the training curve, masked/unmasked validation summary, and representative episode plots. The generated environment is saved under the model directory. This script currently does not expose a seed or evaluate-only option.
+
+### Test 6 — Train safety
+
+Input: [`train_safety.kyx`](test/input/withBound/train_safety.kyx). The script generates a Gymnasium environment, trains a mask-aware PPO policy, and evaluates safety outcomes over the requested number of episodes.
+
+```powershell
+.\.venv\Scripts\python.exe scripts\train_ppo_train_safety.py --timesteps 20000 --eval-episodes 20 --eval-seed 1000 --out-dir logs\paper\train_safety --model-dir models\paper\train_safety
+```
+
+The policy is saved under `models/paper/train_safety/` using the input filename stem. The output directory contains the evaluation summary, representative episode plots, a training curve (when training episodes complete), and per-episode diagnostics in JSON. The generated environment is written to the repository root. To evaluate the saved policy without retraining, repeat the command with `--eval-only` and the same `--model-dir`; use a different `--out-dir` to preserve previous results.
+
+## 5. Containerized thesis runs
+
+The Docker image packages the checked-out source and the pinned direct Python dependencies. Build it from the thesis branch at a recorded commit so the image contains the same source revision used for the experiment. The image uses the tested Python 3.13.1 base and installs the CPU-only PyTorch 2.9.1 wheel; this avoids downloading CUDA libraries that are not used in the container. The standard local installation instructions above still use the PyTorch package resolved from PyPI.
+
+From PowerShell, check out the thesis revision and build the image:
+
+```powershell
+git switch thesis
+git pull --ff-only origin thesis
+$commit = (git rev-parse HEAD).Trim()
+docker build --build-arg VCS_REF=$commit -t kyxparser-thesis:$commit .
+docker image inspect --format='{{.Id}}' "kyxparser-thesis:$commit"
+```
+
+Record the printed commit and image ID with the experiment results. For example, run Train Safety while mounting host folders for its outputs:
+
+```powershell
+New-Item -ItemType Directory -Force logs\paper\train_safety, models\paper\train_safety
+docker run --rm `
+  --mount "type=bind,source=$($PWD.Path)\logs\paper\train_safety,target=/outputs" `
+  --mount "type=bind,source=$($PWD.Path)\models\paper\train_safety,target=/models" `
+  "kyxparser-thesis:$commit" `
+  scripts/train_ppo_train_safety.py --timesteps 20000 --eval-episodes 20 --eval-seed 1000 --out-dir /outputs --model-dir /models
+```
+
+Use the corresponding script and arguments from Section 4 to run another experiment; set its `--out-dir` and `--model-dir` to mounted container paths to retain plots, diagnostics, and checkpoints on the host. The generated environment is a derived file and may be regenerated by the script.
+
+For reproducibility, record the Git commit, Docker image ID, full command and arguments, input model, and random seeds where the script exposes them. A container fixes the software environment, but does not guarantee bit-for-bit identical PPO results: some scripts do not expose a training seed, and solver, numerical-library, and hardware behavior may also affect outcomes. The pinned `requirements.txt` pins direct dependencies, but pip still resolves transitive dependencies during image builds; exact long-term rebuilds may therefore require archiving the built image or adding a fully locked, hash-pinned dependency file.
+
+## 6. Data & Plotting
+
+The experiment commands above generate their figures; there is no separate plotting script. The plot files are saved in each experiment's `--out-dir`:
 
 - **Test 1:** PPO and forced-acceleration-baseline episode rollouts, including square trajectory plots and separate control-signal plots, plus the PPO/baseline comparison.
 - **Test 2:** PPO training reward/episode-length curve, waypoint-reaching episode rollouts, and validation plot.
 - **Test 3:** PPO training curve, representative PPO episode rollouts, and the PPO-versus-baseline evaluation summary and safety plot.
+- **Car 1:** PPO training curve and validation plot.
+- **Train approach:** training curve, masked/unmasked validation summary, and representative episodes for both evaluation modes.
+- **Train safety:** evaluation summary, representative episode plots, and per-episode termination diagnostics.
 
-The corresponding episode-level CSVs and diagnostics are saved alongside the figures. Use a distinct `--out-dir` for each run to avoid overwriting prior results. To reproduce a trained-policy evaluation, keep the checkpoint, input model, and relevant evaluation options the same. Test 1 and Test 3 accept a seed; Test 2 does not currently expose one.
+Episode-level CSVs or diagnostics are saved alongside the figures where supported. Use a distinct `--out-dir` for each run to avoid overwriting prior results. To reproduce a trained-policy evaluation, keep the checkpoint, input model, and relevant evaluation options the same. Test 1, Test 3, and Car 1 expose a training seed; Test 2, Train approach, and Train safety do not expose a training seed (Train safety does expose an evaluation seed).
